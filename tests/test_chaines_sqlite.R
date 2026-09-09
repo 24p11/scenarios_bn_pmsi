@@ -117,6 +117,21 @@ gen_annee <- function(an){
   DBI::dbWriteTable(conn, "PRD_VUE_MCOBL_20" %+% an %+% ".rgp", as.data.frame(rgp), overwrite = TRUE)
 }
 for(an_ in ANS_HISTORIQUE) gen_annee(an_)
+
+# Fixtures contrôlées (écart B1-10 : une ligne par séjour, unité prioritaire), millésime 26
+IDENT_B110 <- c(hc_sc = 2699001, hc_uhcd = 2699002, uhcd_seul = 2699003, ger_sc = 2699004)
+fixe_b110 <- tibble::tibble(
+  anonyme = 999001:999004, ident = unname(IDENT_B110), dp = "J449", dr = NA_character_, age = 70, sexe = "1",
+  provenance = "8", modesortie = "8", destination = "1", duree = 5, rumdudp = 1L, nbda = 2L, ghm2 = "04M053",
+  passage_urg = "0", nbrum = c(2L, 2L, 1L, 2L), raac = "0")
+um_b110 <- tibble::tibble(
+  ident = c(rep(IDENT_B110[["hc_sc"]], 2), rep(IDENT_B110[["hc_uhcd"]], 2), IDENT_B110[["uhcd_seul"]], rep(IDENT_B110[["ger_sc"]], 2)),
+  rum = c(1L, 2L, 1L, 2L, 1L, 1L, 2L), finessgeo = "750100042", type_hospum_1 = "C",
+  type_rum_1 = c("10", "01A", "10", "07A", "07A", "27", "01A"))
+diag_b110 <- tibble::tibble(ident = rep(unname(IDENT_B110), each = 2), rum = 1L, diag = rep(c("I10", "E785"), 4), typ_diag = 5L)
+DBI::dbAppendTable(conn, "PRD_VUE_MCOBL_2026.fixe", as.data.frame(fixe_b110))
+DBI::dbAppendTable(conn, "PRD_VUE_MCOBL_2026.um", as.data.frame(um_b110))
+DBI::dbAppendTable(conn, "PRD_VUE_MCOBL_2026.diag", as.data.frame(diag_b110))
 DBI::dbWriteTable(conn, "nomgen.finessgeo", data.frame(finessgeo = c("750100042","750100075","920100013"), categ_pmsi = c("CHR/U","CHR/U","CH")), overwrite = TRUE)
 DBI::dbWriteTable(conn, "prd_vue_nompmsi.mco_diag_niveau",
                   data.frame(code = pool_das, v2021 = sample(1:4, length(pool_das), TRUE), v2023 = sample(1:4, length(pool_das), TRUE), v2025 = sample(1:4, length(pool_das), TRUE)), overwrite = TRUE)
@@ -137,14 +152,28 @@ ok("colonnes attendues (dont cage2, raac, type_unite, prep_sc, diabete, hta)",
          "diabete","hta","diag2","mdp","rumdudp","nbda","duree","type_unite","prep_sc","raac") %in% names(pd)))
 ok("GHM 90 exclus", !any(substr(pd$ghm2, 1, 2) == "90"))
 ok("diabete/hta renseignés (N ou valeur)", all(pd$diabete %in% c("N","E10","E11i","E11ni")) && all(pd$hta %in% c("N","I10")))
-ok("§5.9a : une seule ligne par (ident, type_unite)", !any(duplicated(pd[, c("ident","type_unite")])))
-ok("§5.9a : une seule ligne par (anonyme, ghm2, type_unite)", !any(duplicated(pd[, c("anonyme","ghm2","type_unite")])))
+ok("B1-10 : un ident = exactement une ligne dans prep_data", !any(duplicated(pd$ident)))
+ok("§5.9a : une seule ligne par (anonyme, ghm2)", !any(duplicated(pd[, c("anonyme","ghm2")])))
+b110 <- pd |> dplyr::filter(ident %in% IDENT_B110) |> dplyr::arrange(ident)
+ok("B1-10 : les 4 séjours fixtures sont présents, une ligne chacun", identical(b110$ident, unname(IDENT_B110)))
+ok("B1-10 : séjour HC + SC (2 RUM) -> type_unite SC, prep_sc 1",
+   b110$type_unite[b110$ident == IDENT_B110[["hc_sc"]]] == "SC" && b110$prep_sc[b110$ident == IDENT_B110[["hc_sc"]]] == 1)
+ok("B1-10 : séjour HC + UHCD (nbrum 2) -> type_unite HC, survit au filtre UHCD",
+   b110$type_unite[b110$ident == IDENT_B110[["hc_uhcd"]]] == "HC" && b110$prep_sc[b110$ident == IDENT_B110[["hc_uhcd"]]] == 0)
+ok("B1-10 : séjour UHCD seul (nbrum 1) -> type_unite UHCD",
+   b110$type_unite[b110$ident == IDENT_B110[["uhcd_seul"]]] == "UHCD")
+ok("B1-10 : séjour GERIATRIE + SC -> type_unite SC",
+   b110$type_unite[b110$ident == IDENT_B110[["ger_sc"]]] == "SC")
+ok("B1-10 : prep_sc = max par séjour (tout séjour passé en SC a prep_sc 1)",
+   { um26 <- DBI::dbGetQuery(conn, 'SELECT DISTINCT ident FROM "PRD_VUE_MCOBL_2026.um" WHERE type_rum_1 IN (\'01A\',\'01B\',\'13A\',\'13B\',\'03A\',\'03B\',\'06\')')$ident
+     all(pd$prep_sc[pd$ident %in% um26] == 1) && all(pd$prep_sc[!pd$ident %in% um26] == 0) })
 ok("règle cage2 : mineur > 14 ans en GHM C -> ge_18",
    { p <- pd |> dplyr::filter(age == "lt_18", substr(ghm2,3,3) == "C", cage == "[15-18[")
      nrow(p) == 0 || all(p$cage2 == "ge_18") })
 ok("diag2 = DR quand DP en Z", all(pd$diag2[pd$mdp != "DP"] == "C189"))
 pd20 <- pRatihque::atihble(conn, "prep_data_20") |> dplyr::collect(); pd17 <- pRatihque::atihble(conn, "prep_data_17") |> dplyr::collect()
 ok("millésimes 17 et 20 : mêmes colonnes, raac NA", identical(names(pd20), names(pd)) && identical(names(pd17), names(pd)) && all(is.na(pd20$raac)))
+ok("B1-10 : une ligne par ident dans les millésimes 17 et 20", !any(duplicated(pd20$ident)) && !any(duplicated(pd17$ident)))
 
 # ---------------------------------------------- section 3 : tables de référence --
 cat("\n# tables de référence\n")
@@ -214,6 +243,13 @@ ok("catalogue brut : pivots + diagnostic_associes + n", all(c(PIVOTS_LONGS, "dia
 ok("graine : au plus K_GRAINE_LONGS DAS, sans diabète/I10", all(lengths(split_das(df_catalogue_brut$diagnostic_associes)) <= K_GRAINE_LONGS) &&
      !any(unlist(split_das(df_catalogue_brut$diagnostic_associes)) %in% c(code_did, code_dnid, code_dnid_ins, "I10")))
 ok("catalogue : nbda dans 1:NBDA_MAX, durée dans DUREE_LONGS", all(df_catalogue_brut$nbda %in% 1:NBDA_MAX))
+ok("B1-10 : catalogue longs = un séjour compté une seule fois (somme des n = nb de séjours éligibles)",
+   { n_sej <- 0
+     for(an_ in ANS_HISTORIQUE) for(te in TYPES_ETBS_LONGS){
+       n_sej <- n_sej + pRatihque::atihble(conn, "prep_data_" %+% an_) |>
+         dplyr::filter(categ_pmsi %in% te, nbda %in% 1:NBDA_MAX, duree %in% DUREE_LONGS) |>
+         dplyr::distinct(ident) |> dplyr::collect() |> nrow() }
+     sum(df_catalogue_brut$n) == n_sej })
 df_catalogue_longs <- df_catalogue_brut |>  dplyr::inner_join(df_catalogue_brut |>
                                                                 dplyr::summarise(nb=sum(n),
                                                                                  .by =dplyr::all_of(PIVOTS_LONGS_SEUIL) )  ) |>

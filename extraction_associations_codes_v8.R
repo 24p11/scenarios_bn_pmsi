@@ -80,6 +80,13 @@ TYPEAUT_UHCD <- c("07A", "07B")
 TYPEAUT_SC   <- c("01A", "01B", "13A", "13B", "03A", "03B")
 TYPEAUT_USI  <- c("02E", "02A")             # non utilisé (repris de v7.2)
 
+# Priorité des unités pour réduire prep_data à UNE ligne par séjour (écart B1-10, Q5 résolue).
+# Documente l'ordre codé en littéral dans le case_when de prep_data (chaîne dbplyr).
+# UHCD impérativement dernier : sinon un séjour multi-RUM passé par l'UHCD serait réduit à sa
+# ligne UHCD puis supprimé par le filtre (nbrum == 1 & type_unite == "UHCD") | type_unite != "UHCD".
+PRIORITE_TYPE_UNITE <- c("SC" = 1L, "SC-NEONAT" = 2L, "NEONAT" = 3L, "GERIATRIE" = 4L,
+                         "HC" = 5L, "HP" = 6L, "UHCD" = 7L)
+
 # Pénalisation des effectifs des codes diabète .9 (v7.1.2 l.208-213)
 CAGE_PED          <- c("[1-5[", "[10-15[", "[5-10[", "[0-1[")
 CAGE_AGES         <- c("[50-60[", "[60-70[", "[70-80[", "[80-[")
@@ -131,6 +138,8 @@ if(file.exists(PATH_PAIRES_EXCLUES)){
 # Source : v7.2 l.24-275 (version riche : type_unite, prep_sc, flags diabete/hta,
 # branches an<=17 / 18-22 / >22). Écarts tracés dans MODIFICATIONS_V8.md (bloc B1) :
 #   §5.9a : distinct(.keep_all=TRUE) -> règle d'ordre explicite (window row_number)
+#   B1-10 : grain réduit à une ligne par séjour (ident), unité la plus prioritaire
+#           (PRIORITE_TYPE_UNITE), prep_sc = max par séjour.
 #   §3.2/§6.1 : ajout de raac (v7.1.2 l.30) et de cage2 (règle v7.1.2 l.68), initialement
 #               pour la branche chirurgie ambulatoire ; branche supprimée, colonnes inertes
 #               conservées (pas de réédition de la chaîne, cf. MODIFICATIONS_V8.md).
@@ -153,6 +162,14 @@ prep_data<-function(an){
       #Ajouter soins critiques adu - ped - neonat / gériatrie
         dplyr::select(ident,finessgeo,mode_hospit,type_unite,prep_sc) |> 
         dplyr::group_by(ident,type_unite) |> dplyr::filter(dplyr::row_number(mode_hospit) == 1L) |> dplyr::ungroup() |>   # §5.9a (ex distinct(ident,type_unite,.keep_all=TRUE))
+        dplyr::mutate(prep_sc = max(prep_sc), .by = ident) |>   # écart B1-10, une ligne par séjour, SC prioritaire
+        dplyr::mutate(rang_unite = dplyr::case_when(
+          type_unite == "SC" ~ 1L, type_unite == "SC-NEONAT" ~ 2L,
+          type_unite == "NEONAT" ~ 3L, type_unite == "GERIATRIE" ~ 4L,
+          type_unite == "HC" ~ 5L, type_unite == "HP" ~ 6L, TRUE ~ 7L)) |>   # écart B1-10 (ordre : PRIORITE_TYPE_UNITE)
+        dplyr::group_by(ident) |>
+        dplyr::filter(dplyr::row_number(rang_unite) == 1L) |>   # écart B1-10
+        dplyr::ungroup() |> dplyr::select(-rang_unite) |>   # écart B1-10
         dplyr::left_join(pRatihque::atihble(conn, 'nomgen.finessgeo') |> 
                            dplyr::distinct(finessgeo,categ_pmsi)) |> 
 
@@ -228,6 +245,14 @@ prep_data<-function(an){
                     prep_sc= ifelse(type_rum_1 %in%c(TYPEAUT_SC,"06"),1,0)) |> 
       dplyr::select(ident,finessgeo,mode_hospit,type_unite,prep_sc) |> 
       dplyr::group_by(ident,type_unite) |> dplyr::filter(dplyr::row_number(mode_hospit) == 1L) |> dplyr::ungroup() |>   # §5.9a (ex distinct(ident,type_unite,.keep_all=TRUE))
+      dplyr::mutate(prep_sc = max(prep_sc), .by = ident) |>   # écart B1-10, une ligne par séjour, SC prioritaire
+      dplyr::mutate(rang_unite = dplyr::case_when(
+        type_unite == "SC" ~ 1L, type_unite == "SC-NEONAT" ~ 2L,
+        type_unite == "NEONAT" ~ 3L, type_unite == "GERIATRIE" ~ 4L,
+        type_unite == "HC" ~ 5L, type_unite == "HP" ~ 6L, TRUE ~ 7L)) |>   # écart B1-10 (ordre : PRIORITE_TYPE_UNITE)
+      dplyr::group_by(ident) |>
+      dplyr::filter(dplyr::row_number(rang_unite) == 1L) |>   # écart B1-10
+      dplyr::ungroup() |> dplyr::select(-rang_unite) |>   # écart B1-10
       dplyr::left_join(pRatihque::atihble(conn, 'nomgen.finessgeo') |> 
                          dplyr::distinct(finessgeo,categ_pmsi)) |> 
       dplyr::inner_join(pRatihque::atihble(conn, "PRD_VUE_MCOBL_20" %+% an %+% '.fixe') |>
@@ -308,6 +333,14 @@ prep_data<-function(an){
                     prep_sc= ifelse(type_rum_1 %in%c(TYPEAUT_SC,"06"),1,0)) |> 
       dplyr::select(ident,finessgeo,mode_hospit,type_unite,prep_sc) |> 
       dplyr::group_by(ident,type_unite) |> dplyr::filter(dplyr::row_number(mode_hospit) == 1L) |> dplyr::ungroup() |>   # §5.9a (ex distinct(ident,type_unite,.keep_all=TRUE))
+      dplyr::mutate(prep_sc = max(prep_sc), .by = ident) |>   # écart B1-10, une ligne par séjour, SC prioritaire
+      dplyr::mutate(rang_unite = dplyr::case_when(
+        type_unite == "SC" ~ 1L, type_unite == "SC-NEONAT" ~ 2L,
+        type_unite == "NEONAT" ~ 3L, type_unite == "GERIATRIE" ~ 4L,
+        type_unite == "HC" ~ 5L, type_unite == "HP" ~ 6L, TRUE ~ 7L)) |>   # écart B1-10 (ordre : PRIORITE_TYPE_UNITE)
+      dplyr::group_by(ident) |>
+      dplyr::filter(dplyr::row_number(rang_unite) == 1L) |>   # écart B1-10
+      dplyr::ungroup() |> dplyr::select(-rang_unite) |>   # écart B1-10
       dplyr::left_join(pRatihque::atihble(conn, 'nomgen.finessgeo') |> 
                          dplyr::distinct(finessgeo,categ_pmsi)) |> 
       dplyr::inner_join(pRatihque::atihble(conn, "PRD_VUE_MCOBL_20" %+% an %+% '.fixe') |>
