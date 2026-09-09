@@ -1,0 +1,255 @@
+###############################################################################
+# tests/test_helpers.R — tests unitaires hors base des helpers purs du v8 (SPEC §8.1)
+# Exécution : Rscript tests/test_helpers.R   (depuis la racine du dépôt ou tests/)
+# Ne charge QUE la section "## ---- 4. Helpers purs" de extraction_associations_codes_v8.R :
+# aucune connexion base, aucune dépendance à utils.R / referentiels.R.
+###############################################################################
+suppressPackageStartupMessages({library(dplyr); library(tibble); library(stringr)})
+for(loc in c("fr_FR.UTF-8", "en_US.UTF-8", "C.UTF-8")) if(!is.na(suppressWarnings(Sys.setlocale("LC_CTYPE", loc))) && Sys.getlocale("LC_CTYPE") == loc) break
+
+fichier_v8 <- c("extraction_associations_codes_v8.R", "../extraction_associations_codes_v8.R")
+fichier_v8 <- fichier_v8[file.exists(fichier_v8)][1]
+stopifnot(!is.na(fichier_v8))
+lignes <- readLines(fichier_v8, encoding = "UTF-8")
+deb <- grep("^## ---- 4\\. Helpers purs", lignes)
+fin <- grep("^## ---- 5\\. Branche chirurgie ambulatoire", lignes)
+stopifnot(length(deb) == 1, length(fin) == 1, fin > deb)
+eval(parse(text = lignes[deb:(fin - 1)], encoding = "UTF-8"), envir = globalenv())
+
+`%+%` <- function(x, y) paste0(x, y)
+n_ok <- 0
+ok <- function(nom, expr){
+  if(!isTRUE(expr)) stop("ECHEC : " %+% nom)
+  n_ok <<- n_ok + 1
+  cat("  ok  ", nom, "\n")
+}
+
+# ---------------------------------------------------------------- fixtures --
+CAGES <- c("[0-1[", "[1-5[", "[5-10[", "[10-15[", "[15-18[", "[18-30[", "[30-40[",
+           "[40-50[", "[50-60[", "[60-70[", "[70-80[", "[80-[")
+BORNES <- list("[0-1[" = c(0, 0), "[1-5[" = c(1, 4), "[5-10[" = c(5, 9), "[10-15[" = c(10, 14),
+               "[15-18[" = c(15, 17), "[18-30[" = c(18, 29), "[30-40[" = c(30, 39), "[40-50[" = c(40, 49),
+               "[50-60[" = c(50, 59), "[60-70[" = c(60, 69), "[70-80[" = c(70, 79), "[80-[" = c(80, 95))
+
+codes_diab_fx <- tibble::tibble(
+  code   = c("N083", "H360", "G632", "I792", "M142", "L998", "E1120", "E1128"),
+  chemin = c("complications/renal/asterisques_obligatoires/x",
+             "complications/oculaire/asterisques_obligatoires/x",
+             "complications/neurologique/asterisques_obligatoires/x",
+             "complications/vasculaire_peripherique/asterisques_obligatoires/x",
+             "complications/autres_precisees/asterisques_obligatoires/x",
+             "complications/autres_precisees/asterisques_obligatoires/y",
+             "satellites/E1120", "satellites/E1128"))
+comp_diabete_fx <- tibble::tibble(
+  cage = rep(c("[60-70[", "[30-40["), each = 4),
+  diabete = "E11i",
+  comp = rep(c("2", "7", "8", "9"), 2),
+  nb = c(10, 5, 3, 20, 4, 1, 1, 30)) |>
+  dplyr::bind_rows(tibble::tibble(cage = "[60-70[", diabete = "E10", comp = c("1", "7"), nb = c(2, 5)))
+code_did_fx      <- c("E102", "E103", "E104", "E105", "E106", "E107", "E108", "E109")
+code_dnid_ins_fx <- c("E1120", "E1130", "E1140", "E1150", "E1160", "E1170", "E1180", "E1190")
+code_dnid_fx     <- c("E1128", "E1138", "E1148", "E1158", "E1168", "E1178", "E1188", "E1198")
+hta_autres_fx    <- c("I110", "I119", "I120", "I129", "I131", "I132", "I139", "I150", "I151", "I152", "I158", "I159")
+neo_fx           <- c("E10", "E11i", "E11ni")
+paires_fx        <- list(c("E10", "E11"), c("I10", "I15"))
+
+refs_fx <- construire_refs(comp_diabete = comp_diabete_fx, codes_diab = codes_diab_fx,
+                           codes_comp_sat_diab = c("N083", "H360"), hta_autres = hta_autres_fx,
+                           code_did = code_did_fx, code_dnid_ins = code_dnid_ins_fx, code_dnid = code_dnid_fx,
+                           neo_codes = neo_fx, paires_exclues = paires_fx)
+
+# ------------------------------------------------------- sample_age_ligne --
+cat("\n# sample_age_ligne / sample_age / decoupe_cage\n")
+set.seed(1)
+for(cg in CAGES){
+  tir <- replicate(1000, sample_age_ligne(cg, age_max = 95))
+  ok("bornes semi-ouvertes " %+% cg, all(tir >= BORNES[[cg]][1] & tir <= BORNES[[cg]][2]) && is.integer(tir))
+  ok("decoupe_cage(âge tiré) == classe " %+% cg, all(decoupe_cage(tir) == cg))
+}
+ok("[1-5[ atteint 1 et 4, jamais 5", { t <- replicate(2000, sample_age_ligne("[1-5[")); all(c(1, 4) %in% t) && !5 %in% t })
+ok("[80-[ atteint 95", 95 %in% replicate(3000, sample_age_ligne("[80-[", 95)))
+ok("libellé inconnu -> NA", is.na(sample_age_ligne("inconnu")))
+ok("vectorisation : 100 cages identiques -> > 1 valeur distincte (régression §5.6)",
+   length(unique(sample_age(rep("[50-60[", 100)))) > 1)
+ok("sample_age conserve la longueur et le type", { v <- sample_age(rep(CAGES, 3)); length(v) == 36 && is.integer(v) })
+
+# ------------------------------------------------------- dedup_categorie --
+cat("\n# dedup_categorie\n")
+ok("conserve E110+E780+I100", identical(dedup_categorie(c("E110", "E780", "I100")), c("E110", "E780", "I100")))
+ok("élimine le second de E110+E119", identical(dedup_categorie(c("E110", "E119")), "E110"))
+ok("respecte l'ordre : la graine (en tête) n'est jamais éliminée",
+   identical(dedup_categorie(c("I500", "E119", "E110", "I501")), c("I500", "E119")))
+ok("exclusion YAML [E10, E11] : E11 écarté si E10 gardé", identical(dedup_categorie(c("E102", "E1120", "I10"), paires_fx), c("E102", "I10")))
+ok("exclusion YAML symétrique : E10 écarté si E11 gardé", identical(dedup_categorie(c("E1120", "E102"), paires_fx), "E1120"))
+ok("exclusion YAML [I10, I15]", identical(dedup_categorie(c("I10", "I150"), paires_fx), "I10"))
+ok("sans YAML : I10 + I150 coexistent (catégories différentes)", identical(dedup_categorie(c("I10", "I150")), c("I10", "I150")))
+ok("NA et chaînes vides ignorés", identical(dedup_categorie(c(NA, "", "A000")), "A000"))
+ok("vecteur vide -> character(0)", identical(dedup_categorie(character(0)), character(0)))
+ok("paire mal formée -> erreur", inherits(try(dedup_categorie("A00", list(c("A"))), silent = TRUE), "try-error"))
+
+# ------------------------------------------- retro_code / get_codes_diabete --
+cat("\n# retro_code_diabete / tirer_comp_diabete / get_codes_diabete_from_neo\n")
+ok("retro E10 + 2 -> E102", retro_code_diabete("E10", "2") == "E102")
+ok("retro E11i + 2 -> E1120 (insulinotraité = 5e caractère 0, cf. code_dnid_ins)", retro_code_diabete("E11i", 2) == "E1120")
+ok("retro E11ni + 9 -> E1198", retro_code_diabete("E11ni", "9") == "E1198")
+ok("rétro-codes E11 appartiennent aux listes code_dnid_ins / code_dnid",
+   all(retro_code_diabete("E11i", 2:9) %in% code_dnid_ins_fx) && all(retro_code_diabete("E11ni", 2:9) %in% code_dnid_fx))
+
+set.seed(2)
+ok("comp forcée 8 -> code en 9, sans astérisque",
+   identical(get_codes_diabete_from_neo("E11i", "[60-70[", comp_diabete_fx, codes_diab_fx, comp_forcee = "8"), "E1190"))
+res7 <- replicate(200, get_codes_diabete_from_neo("E11ni", "[60-70[", comp_diabete_fx, codes_diab_fx, comp_forcee = "7"), simplify = FALSE)
+ok("comp forcée 7 -> code E1178 en dernier", all(vapply(res7, function(v) v[length(v)] == "E1178", logical(1))))
+ok("comp 7 -> 3 à 4 astérisques distincts, tous dans les chemins asterisques_obligatoires",
+   all(vapply(res7, function(v){ a <- v[-length(v)]; length(a) %in% 3:4 && !any(duplicated(a)) && all(a %in% codes_diab_fx$code[1:6]) }, logical(1))))
+ok("comp 7 -> les astérisques couvrent des complications distinctes (2:6)",
+   all(vapply(res7, function(v){ a <- v[-length(v)]; ch <- codes_diab_fx$chemin[match(a, codes_diab_fx$code)]; !any(duplicated(sub("/asterisques.*", "", ch))) }, logical(1))))
+res_marg <- replicate(500, get_codes_diabete_from_neo("E11i", "[60-70[", comp_diabete_fx, codes_diab_fx), simplify = FALSE)
+codes_e11 <- vapply(res_marg, function(v) v[length(v)], character(1))
+ok("tirage marginal : jamais de code E11 sans 4e+5e caractères valides",
+   all(nchar(codes_e11) == 5 & substr(codes_e11, 1, 3) == "E11" & substr(codes_e11, 4, 4) %in% as.character(2:9) & substr(codes_e11, 5, 5) %in% c("0", "8")))
+ok("tirage marginal : comp 8 jamais en sortie (remplacé par 9)", !any(substr(codes_e11, 4, 4) == "8"))
+ok("tirage marginal : comps 2, 7 et 9 tous observés", all(c("2", "7", "9") %in% substr(codes_e11, 4, 4)))
+ok("comp 2 -> exactement un astérisque rénal", all(vapply(res_marg[substr(codes_e11, 4, 4) == "2"], function(v) identical(v, c("N083", "E1120")), logical(1))))
+ok("comp 9 -> aucun astérisque", all(vapply(res_marg[substr(codes_e11, 4, 4) == "9"], function(v) identical(v, "E1190"), logical(1))))
+ok("strate d'âge absente -> repli toutes classes (pas d'erreur)",
+   { v <- get_codes_diabete_from_neo("E11i", "[0-1[", comp_diabete_fx, codes_diab_fx); nchar(v[length(v)]) == 5 })
+ok("aucune information -> comp 9", identical(get_codes_diabete_from_neo("E11ni", "[0-1[", comp_diabete_fx[0, ], codes_diab_fx), "E1198"))
+ok("E10 comp 1 (sans astérisque) -> E101 seul, pas de NA",
+   identical(get_codes_diabete_from_neo("E10", "[60-70[", comp_diabete_fx, codes_diab_fx, comp_forcee = "1"), "E101"))
+
+# ------------------------------------------------------------- ajoute_hta --
+cat("\n# ajoute_hta / neo_code_de_diag\n")
+ok("hta != N sans hta_autres -> I10 en tête", identical(ajoute_hta(c("J449"), "I10", hta_autres_fx), c("I10", "J449")))
+ok("hta != N avec hta_autres -> pas de I10", identical(ajoute_hta(c("I110", "J449"), "I10", hta_autres_fx), c("I110", "J449")))
+ok("hta == N -> inchangé", identical(ajoute_hta(c("J449"), "N", hta_autres_fx), "J449"))
+ok("I10 déjà présent + hta_autres -> I10 retiré", identical(ajoute_hta(c("I10", "I150"), "I10", hta_autres_fx), "I150"))
+ok("neo_code_de_diag", identical(neo_code_de_diag(c("E1120", "E1128", "E102", "J449"), code_did_fx, code_dnid_ins_fx, code_dnid_fx), c("E11i", "E11ni", "E10", "N")))
+ok("neo_code_de_diag defaut", neo_code_de_diag("J449", code_did_fx, code_dnid_ins_fx, code_dnid_fx, defaut = "E11i") == "E11i")
+
+# ------------------------------------------------------- sample_das_court --
+cat("\n# sample_das_court\n")
+ref_chro_brut <- tibble::tibble(
+  diag2 = "J449", cage = "[60-70[",
+  sexe  = c(rep("1", 25), rep("2", 25)),
+  das   = c(paste0("H", sprintf("%02d", 1:25), "0"), paste0("F", sprintf("%02d", 20:44), "0")),
+  niveau = "1", type_liste = "Patho_chro", caract = "x",
+  nb_das = 10)
+ref_chro_fx <- prep_ref_chronique(ref_chro_brut)
+ref_nb_fx <- tibble::tibble(cage = "[60-70[", sexe = "1", nb_chro = c(2, 3), nb = c(50, 50))
+codes_sexe1 <- ref_chro_brut$das[ref_chro_brut$sexe == "1"]
+codes_sexe2 <- ref_chro_brut$das[ref_chro_brut$sexe == "2"]
+
+set.seed(3)
+res_c <- purrr::map(1:100, ~ sample_das_court("HC", "1", "[60-70[", "04M05", "J449", 1, nb = 40,
+                                              ref_chro = ref_chro_fx, ref_nb_chro = ref_nb_fx, refs = refs_fx,
+                                              nb_tirages = 2, seuil_ref = 20, cibles_defaut = list(), age_max = 95)) |> purrr::list_rbind()
+das_c <- split_das(res_c$diagnostic_associes)
+ok("sexe respecté : aucun code de la strate de l'autre sexe (régression §5.1)", !any(unlist(das_c) %in% codes_sexe2) && all(unlist(das_c) %in% codes_sexe1))
+ok("nb_tirages variantes par pivot", nrow(res_c) == 200 && all(sort(unique(res_c$variante)) == 1:2))
+ok("nombre de DAS tiré dans ref_nb_chro (2 ou 3)", all(lengths(das_c) %in% 2:3) && all(c(2L, 3L) %in% lengths(das_c)))
+ok("jamais deux codes de même catégorie", !any(vapply(das_c, function(v) any(duplicated(substr(v, 1, 3))), logical(1))))
+ok("âge par variante dans la classe", all(res_c$age >= 60 & res_c$age <= 69) && length(unique(res_c$age)) > 1)
+ok("colonnes de sortie", all(c("mode_hospit", "sexe", "cage", "ghm2", "diag2", "duree", "poids", "variante", "age", "nb_das", "diabete_scenario", "hta_scenario", "diagnostic_associes") %in% names(res_c)))
+ok("poids propagé", all(res_c$poids == 40))
+ok("source_ref = strate (25 codes >= seuil 20)", all(res_c$source_ref == "strate"))
+
+# repli : strate (diag2 inconnu) vide -> repli (cage, sexe)
+res_r <- sample_das_court("HC", "2", "[60-70[", "04M05", "ZZZZ", 1, ref_chro = ref_chro_fx, ref_nb_chro = ref_nb_fx, refs = refs_fx,
+                          nb_tirages = 1, seuil_ref = 20, cibles_defaut = list("[60-70[" = c(1, 1)))
+ok("repli sur (cage, sexe) quand la strate diag2 est vide", res_r$source_ref == "repli" && all(unlist(split_das(res_r$diagnostic_associes)) %in% codes_sexe2))
+ok("cible dégradée utilisée quand ref_nb_chro vide pour la strate", res_r$nb_cible == 1 && res_r$nb_das == 1)
+ok("return(NULL) propre quand la strate est vide",
+   is.null(sample_das_court("HC", "1", "[80-[", "04M05", "J449", 1, ref_chro = ref_chro_fx, ref_nb_chro = ref_nb_fx, refs = refs_fx)))
+ok("GHM en C : R2630 / F0x / F10 exclus, F17 conservé",
+   { tmp <- tibble::tibble(das = c("R2630", "F050", "F102", "F172", "J449"), nb_das = 1)
+     identical(filtre_das_ghm_c(tmp, "06C04")$das, c("F172", "J449")) && identical(filtre_das_ghm_c(tmp, "06M04")$das, tmp$das) })
+
+# diabète dans les courts : néo-code tiré remplacé par les codes réels, flag positionné
+ref_chro_diab <- prep_ref_chronique(tibble::tibble(diag2 = "J449", cage = "[60-70[", sexe = "1", das = c("E11i", "I10", "I110"),
+                                                   niveau = "1", type_liste = "Patho_chro", caract = "x", nb_das = c(100, 1, 1)))
+set.seed(4)
+res_d <- purrr::map(1:50, ~ sample_das_court("HC", "1", "[60-70[", "04M05", "J449", 1, ref_chro = ref_chro_diab, ref_nb_chro = ref_nb_fx[0, ], refs = refs_fx,
+                                             nb_tirages = 1, seuil_ref = 1, cibles_defaut = list("[60-70[" = c(3, 3)))) |> purrr::list_rbind()
+das_d <- split_das(res_d$diagnostic_associes)
+ok("néo-code E11i jamais en sortie", !any(unlist(das_d) %in% neo_fx))
+ok("flag diabete_scenario = E11i et code E11xx présent", all(res_d$diabete_scenario == "E11i") && all(vapply(das_d, function(v) any(grepl("^E11[2-9][08]$", v)), logical(1))))
+ok("I10 jamais avec un code hta_autres", !any(vapply(das_d, function(v) "I10" %in% v && any(v %in% hta_autres_fx), logical(1))))
+ok("hta_scenario cohérent avec I10 tiré", all((res_d$hta_scenario == "I10") == vapply(das_d, function(v) "I10" %in% v, logical(1)) | vapply(das_d, function(v) any(v %in% hta_autres_fx), logical(1))))
+res_dp <- sample_das_court("HC", "1", "[60-70[", "04M05", "E1128", 1, ref_chro = ref_chro_fx, ref_nb_chro = ref_nb_fx, refs = refs_fx, nb_tirages = 1)
+ok("DP diabète -> flag E11ni depuis le DP", res_dp$diabete_scenario == "E11ni" && any(grepl("^E11[2-9]8$", split_das(res_dp$diagnostic_associes)[[1]])))
+
+# -------------------------------------------------------- sample_das_long --
+cat("\n# sample_das_long\n")
+ref_aigu_fx <- tibble::tibble(
+  mode_hospit = "HC", cage = "[60-70[", racine = "04M05", ghm2 = "04M053", diag2 = "J449",
+  sexe = c(rep("1", 30), rep("2", 30)),
+  das = c(paste0("N", sprintf("%02d", 10:39)), paste0("K", sprintf("%02d", 20:49))),
+  n = 5)
+codes_aigu_s1 <- ref_aigu_fx$das[ref_aigu_fx$sexe == "1"]
+codes_aigu_s2 <- ref_aigu_fx$das[ref_aigu_fx$sexe == "2"]
+
+set.seed(5)
+res_l <- purrr::map(1:100, ~ sample_das_long("HC", "1", "ge_18", "[60-70[", "04M05", "04M053", "N", "N", "J449", 4,
+                                             "I500 N189", type_unite = "HC", prep_sc = 0, poids = 123,
+                                             ref_das_aigu = ref_aigu_fx, refs = refs_fx, nb_tirage = 1)) |> purrr::list_rbind()
+das_l <- split_das(res_l$diagnostic_associes)
+ok("sexe respecté : aucun code de la strate de l'autre sexe (régression §5.1)", !any(unlist(das_l) %in% codes_aigu_s2))
+ok("codes tirés ∈ strate du sexe ou graine", all(unlist(das_l) %in% c(codes_aigu_s1, "I500", "N189")))
+ok("la graine n'est jamais retirée et passe en tête", all(vapply(das_l, function(v) identical(v[1:2], c("I500", "N189")), logical(1))))
+ok("jamais deux codes de même catégorie (N18 de la graine bloque N18x tiré)", !any(vapply(das_l, function(v) any(duplicated(substr(v, 1, 3))), logical(1))))
+ok("taille tirée = min(nbda, candidats) avant dédoublonnage : <= 2 + 4", all(lengths(das_l) <= 6 & lengths(das_l) >= 3))
+ok("colonnes pivots + graine + poids + type_unite/prep_sc conservées",
+   all(c("mode_hospit", "sexe", "age", "cage", "racine", "ghm2", "diabete", "hta", "diag2", "nbda", "type_unite", "prep_sc", "poids", "graine", "diabete_scenario", "nb_das", "diagnostic_associes") %in% names(res_l)) &&
+     all(res_l$age == "ge_18") && all(res_l$graine == "I500 N189") && all(res_l$poids == 123) && all(res_l$type_unite == "HC"))
+ok("return(NULL) propre quand la strate est vide",
+   is.null(sample_das_long("HP", "1", "ge_18", "[60-70[", "04M05", "04M053", "N", "N", "J449", 4, "I500", ref_das_aigu = ref_aigu_fx, refs = refs_fx)))
+ok("nb_tirage variantes", nrow(sample_das_long("HC", "1", "ge_18", "[60-70[", "04M05", "04M053", "N", "N", "J449", 4, "I500", ref_das_aigu = ref_aigu_fx, refs = refs_fx, nb_tirage = 3)) == 3)
+
+# HTA et diabète dans les longs
+set.seed(6)
+res_h <- purrr::map(1:50, ~ sample_das_long("HC", "1", "ge_18", "[60-70[", "04M05", "04M053", "E11i", "I10", "J449", 3,
+                                            "I500", ref_das_aigu = ref_aigu_fx, refs = refs_fx)) |> purrr::list_rbind()
+das_h <- split_das(res_h$diagnostic_associes)
+ok("hta != N -> I10 présent (aucun hta_autres possible ici)", all(vapply(das_h, function(v) "I10" %in% v, logical(1))))
+ok("flag diabète -> un code E11x0 présent, jamais de néo-code", all(vapply(das_h, function(v) any(grepl("^E11[2-9]0$", v)) && !any(v %in% neo_fx), logical(1))))
+ok("graine en tête même avec diabète/HTA", all(vapply(das_h, function(v) v[1] == "I500", logical(1))))
+ok("jamais deux codes de même catégorie avec diabète/HTA", !any(vapply(das_h, function(v) any(duplicated(substr(v, 1, 3))), logical(1))))
+res_hta2 <- sample_das_long("HC", "1", "ge_18", "[60-70[", "04M05", "04M053", "N", "I10", "J449", 1, "I110", ref_das_aigu = ref_aigu_fx, refs = refs_fx)
+ok("hta != N mais hta_autres en graine -> pas de I10", !"I10" %in% split_das(res_hta2$diagnostic_associes)[[1]])
+# complication satellite présente -> complications multiples (comp 7)
+set.seed(7)
+res_sat <- sample_das_long("HC", "1", "ge_18", "[60-70[", "04M05", "04M053", "E11ni", "N", "J449", 1, "N083", ref_das_aigu = ref_aigu_fx, refs = refs_fx)
+ok("code satellite en graine -> E1178 (complications multiples)", "E1178" %in% split_das(res_sat$diagnostic_associes)[[1]])
+ok("DP diabète -> diabete_scenario depuis le DP, colonne diabete (pivot) inchangée",
+   { r <- sample_das_long("HC", "1", "ge_18", "[60-70[", "04M05", "04M053", "N", "N", "E102", 1, "I500", ref_das_aigu = ref_aigu_fx |> dplyr::mutate(diag2 = "E102"), refs = refs_fx)
+     r$diabete_scenario == "E10" && r$diabete == "N" })
+
+# ------------------------------------------------------- contrôles §8.2 --
+cat("\n# helpers du rapport\n")
+df_ctrl <- tibble::tibble(diagnostic_associes = c("E1120 N083 J449", "I10 I110", "E1198 J449", "J449 J440", ""),
+                          diabete_scenario = c("E11i", "N", "N", "N", "N"), poids = c(11, 11, 10, 11, 11), cage = "[60-70[")
+cc <- controler_scenarios(df_ctrl, hta_autres_fx, 10)
+ok("controler_scenarios détecte doublon catégorie / diabète hors flag / I10+hta_autres / poids",
+   cc$doublons_categorie == 1 && cc$diabete_hors_flag == 1 && cc$i10_avec_hta_autres == 1 && cc$poids_sous_seuil == 1 && cc$n == 5)
+ok("controler_scenarios sans colonne DAS -> NA", is.na(controler_scenarios(tibble::tibble(poids = 11), hta_autres_fx, 10)$doublons_categorie))
+ok("taux_imprecis", taux_imprecis(df_ctrl, c("J449")) == round(3 / 9, 4))
+ok("distribution_nb_das", { d <- distribution_nb_das(df_ctrl); d$n == 5 && d$min == 0 && d$max == 3 })
+ok("codes_imprecis_de_cim", identical(codes_imprecis_de_cim(tibble::tibble(code = c("J44.9", "J44.0", "I10"), libelle = c("BPCO, sans précision", "BPCO avec infection", "HTA non précisée"))), c("J449", "I10")))
+ok("split_das gère NA", identical(split_das(c(NA, "A B")), list(character(0), c("A", "B"))))
+ok("tirer_nb_chroniques : distribution empirique", { set.seed(8); v <- replicate(200, tirer_nb_chroniques("[60-70[", "1", ref_nb_fx, list())); all(v %in% 2:3) && all(2:3 %in% v) })
+ok("tirer_nb_chroniques : cible dégradée", { set.seed(9); v <- replicate(200, tirer_nb_chroniques("[70-80[", "1", ref_nb_fx, list("[70-80[" = c(3, 5)))); all(v %in% 3:5) && all(3:5 %in% v) })
+ok("tirer_nb_chroniques : rien -> 0", tirer_nb_chroniques("[70-80[", "1", ref_nb_fx, list()) == 0L)
+
+# ----------------------------------------------------------- déterminisme --
+cat("\n# déterminisme\n")
+run_all <- function(){
+  set.seed(20260907)
+  list(sample_age(rep(CAGES, 5)),
+       get_codes_diabete_from_neo("E11i", "[60-70[", comp_diabete_fx, codes_diab_fx),
+       purrr::map(1:5, ~ sample_das_court("HC", "1", "[60-70[", "04M05", "J449", 1, ref_chro = ref_chro_fx, ref_nb_chro = ref_nb_fx, refs = refs_fx, nb_tirages = 2)) |> purrr::list_rbind(),
+       purrr::map(1:5, ~ sample_das_long("HC", "1", "ge_18", "[60-70[", "04M05", "04M053", "E11i", "I10", "J449", 4, "I500", ref_das_aigu = ref_aigu_fx, refs = refs_fx)) |> purrr::list_rbind())
+}
+ok("deux exécutions sous le même seed donnent le même résultat", identical(run_all(), run_all()))
+
+cat("\nTOUS LES TESTS SONT VERTS :", n_ok, "assertions\n")

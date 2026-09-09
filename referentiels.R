@@ -29,10 +29,19 @@ code_dnid =  c("E1128","E1138","E1148",
                "E1158","E1168","E1178","E1188","E1198")
 code_dnid_ = prep_grep(code_dnid)
 
-cma<- pRatihque::atihble(conn, 'prd_vue_nompmsi.mco_diag_niveau') |> dplyr::filter(v2025>1) |> dplyr::collect() |> dplyr::pull(code)
+# Millésime de la table des niveaux : ANSEQTA_REF est défini par la config de
+# extraction_associations_codes_v8.R (§5.8) ; défaut "25" pour compatibilité v7.
+if(!exists("ANSEQTA_REF")) ANSEQTA_REF <- "25"
+cma<- pRatihque::atihble(conn, 'prd_vue_nompmsi.mco_diag_niveau') |> dplyr::filter(!!dplyr::sym("v20" %+% ANSEQTA_REF)>1) |> dplyr::collect() |> dplyr::pull(code)
 codes_diab <- lire_codes_diabete(path_projet %+%"referentiels/codes_diabete.yaml")
 codes_diab |> dplyr::filter(grepl("satellites",chemin)) |> dplyr::select(code) |> dplyr::pull(code)->codes_comp_sat_diab
 codes_diab |> dplyr::filter(grepl("asterisques_obligatoires",chemin)) |> dplyr::pull(code)->codes_astrisques_diabete
+# Alias : v7.2 l.448 référence `comp_sat_diab` (jamais défini) pour les codes satellites ;
+# `codes_comp_sat_diab` est la seule définition existante (cf. MODIFICATIONS_V8.md, Q2).
+comp_sat_diab <- codes_comp_sat_diab
+
+# Néo-codes diabète (définition unique, §5.10 ; ex v7.1.2 l.127 dans le corps de sample_das)
+neo_codes_diabete <- c("E10","E11i","E11ni")
 
 
 

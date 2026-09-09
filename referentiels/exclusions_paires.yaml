@@ -1,0 +1,10 @@
+# exclusions_paires.yaml — soupape d'exclusions par paires de préfixes de codes CIM-10
+# Utilisé par dedup_categorie() (extraction_associations_codes_v8.R, §6.4 du SPEC_V8.md).
+# Sémantique : si un code déjà retenu commence par l'un des deux préfixes, tout code
+# candidat commençant par l'autre préfixe est écarté (le premier arrivé est conservé).
+# Ce fichier n'encode PAS de doctrine clinique générale : uniquement des incompatibilités
+# évidentes. Le laisser quasi vide.
+- [E10, E11]   # diabète de type 1 vs type 2
+- [E10, E14]   # diabète de type 1 vs diabète sans précision
+- [E11, E14]   # diabète de type 2 vs diabète sans précision
+- [I10, I15]   # HTA essentielle vs HTA secondaire
