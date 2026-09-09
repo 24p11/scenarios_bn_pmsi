@@ -26,7 +26,6 @@ PATH_PROJET <- Sys.getenv("SCENARIOS_PMSI_PATH",
 if(!grepl("/$", PATH_PROJET)) PATH_PROJET <- paste0(PATH_PROJET, "/")
 PATH_RESULTS        <- paste0(PATH_PROJET, "results/")
 PATH_PAIRES_EXCLUES <- paste0(PATH_PROJET, "referentiels/exclusions_paires.yaml")
-FILE_VERSION_SPE    <- "2"          # referentiel_spe_racine_30_<version>.xlsx (v7.1.2 l.10)
 
 AN_REF         <- 26L               # année de référence (tables de référence, courts, chir ambu)
 ANS_HISTORIQUE <- 17:26             # années agrégées pour le catalogue des séjours longs
@@ -37,7 +36,6 @@ SEUIL_REF_DAS      <- 20            # effectif min de codes candidats d'une stra
 SEUIL_REF_IMPRECIS <- 20            # export §7.5 : nb >= seuil
 SEUIL_REF_PAIRES   <- 50            # export §7.6 : nb >= seuil
 
-DUREE_CHIR_AMBU <- 0L               # chirurgie ambulatoire : durée 0
 DUREE_COURTS    <- 0:2              # séjours courts : durée < 3
 DUREE_LONGS     <- 3:100            # séjours longs
 DUREE_MIN_REF   <- 3                # tables de référence DAS : séjours de durée > DUREE_MIN_REF (v7.2 l.445, §6.2)
@@ -66,10 +64,7 @@ CIBLES_NB_CHRONIQUES <- list(
 TYPES_ETBS_LONGS      <- c("CHR/U", "CH")   # ordre d'agrégation v7.2 : CHR/U puis CH
 TYPE_ETBS_REF_DIABETE <- "CHR/U"            # v7.1.2 l.196 / v7.2 l.457
 
-# GHM
-CMD_OBSTETRIQUE     <- c("14", "15")
-GHM_CHIR_AMBU_LISTE <- c("03K02", "05K14", "11K07", "12K06", "09Z02", "14Z08", "23Z03")
-# Listes obstétriques v7.2 l.518-524 : reprises telles quelles. Non utilisées dans le
+# GHM — listes obstétriques v7.2 l.518-524 : reprises telles quelles. Non utilisées dans le
 # tirage v8 (le filtre de test nb>5000 / sample_n(3000) disparaît, §2.5) ; conservées
 # pour l'allocation en aval.
 GHM_ACC_NORMAL    <- c("14C03A", "14C07A", "14C08A", "14Z11A", "14Z12A",
@@ -92,8 +87,6 @@ PENALITE_9_AGES   <- 0.2
 PENALITE_9_AUTRES <- 0.5
 
 # Pivots par branche
-PIVOTS_CHIR_AMBU   <- c("mode_hospit", "mode_entree", "mode_sortie", "sexe", "cage", "cage2",
-                        "racine", "ghm2", "diag2", "mdp", "raac")                       # v7.1.2 l.259
 PIVOTS_COURTS      <- c("mode_hospit", "sexe", "cage", "ghm2", "diag2", "duree")        # v7.1.2 l.217
 PIVOTS_LONGS       <- c("mode_hospit", "sexe", "age", "cage", "racine", "ghm2", "diabete", "hta",
                         "diag2", "nbda", "type_unite", "prep_sc")                       # v7.2 l.483 + §2.8
@@ -126,11 +119,6 @@ conn <- pRatihque::connection_database()
 source(paste0(PATH_PROJET, "exclusions.R"))
 source(paste0(PATH_PROJET, "referentiels.R"))   # définit neo_codes_diabete, codes_diab, hta_autres, cim, ...
 
-# Référentiel spécialité × racine (v7.1.2 l.12-13)
-df_ref_specialite <- readxl::read_excel(PATH_PROJET %+% "referentiels/referentiel_spe_racine_30_" %+% FILE_VERSION_SPE %+% ".xlsx",
-                                        sheet = "Feuille1") |>
-  dplyr::rename(specialite_medicale = lib_spe_uma, cage2 = age)
-
 # Paires de préfixes exclues (§6.4) : liste de vecteurs c(prefixeA, prefixeB)
 PAIRES_EXCLUES <- list()
 if(file.exists(PATH_PAIRES_EXCLUES)){
@@ -143,8 +131,9 @@ if(file.exists(PATH_PAIRES_EXCLUES)){
 # Source : v7.2 l.24-275 (version riche : type_unite, prep_sc, flags diabete/hta,
 # branches an<=17 / 18-22 / >22). Écarts tracés dans MODIFICATIONS_V8.md (bloc B1) :
 #   §5.9a : distinct(.keep_all=TRUE) -> règle d'ordre explicite (window row_number)
-#   §3.2/§6.1 : ajout de raac (v7.1.2 l.30) et de cage2 (règle v7.1.2 l.68) pour la
-#               branche chirurgie ambulatoire.
+#   §3.2/§6.1 : ajout de raac (v7.1.2 l.30) et de cage2 (règle v7.1.2 l.68), initialement
+#               pour la branche chirurgie ambulatoire ; branche supprimée, colonnes inertes
+#               conservées (pas de réédition de la chaîne, cf. MODIFICATIONS_V8.md).
 prep_data<-function(an){
   
   if(an>22){
@@ -285,7 +274,7 @@ prep_data<-function(an){
                           dplyr::distinct(ident,ghmv2023) |> 
                           dplyr::rename(ghm2=ghmv2023) |> 
                           dplyr::mutate(racine =substr(ghm2,1,5))) |> 
-      dplyr::mutate(raac = NA) |>   # raac absent des millésimes <= 22 (§6.1 : colonne requise par PIVOTS_CHIR_AMBU)
+      dplyr::mutate(raac = NA) |>   # raac absent des millésimes <= 22 (colonne inerte depuis la suppression de la branche chir ambu)
       dplyr::left_join(pRatihque::atihble(conn, "PRD_VUE_MCOBL_20" %+% an %+% '.diag') |> 
                          dplyr::filter(typ_diag==5,diag%in%c(code_dnid_ins,code_dnid,code_did)) |> 
                          dplyr::mutate(diabete = dplyr::case_when(diag %in% code_dnid_ins ~ "E11i",
@@ -365,7 +354,7 @@ prep_data<-function(an){
                           dplyr::distinct(ident,ghmv2021) |> 
                           dplyr::rename(ghm2=ghmv2021) |> 
                           dplyr::mutate(racine =substr(ghm2,1,5))) |>
-      dplyr::mutate(raac = NA) |>   # raac absent des millésimes <= 22 (§6.1 : colonne requise par PIVOTS_CHIR_AMBU)
+      dplyr::mutate(raac = NA) |>   # raac absent des millésimes <= 22 (colonne inerte depuis la suppression de la branche chir ambu)
       dplyr::left_join(pRatihque::atihble(conn, "PRD_VUE_MCOBL_20" %+% an %+% '.diag') |> 
                          dplyr::filter(typ_diag==5,diag%in%c(code_dnid_ins,code_dnid,code_did)) |> 
                          dplyr::mutate(diabete = dplyr::case_when(diag %in% code_dnid_ins ~ "E11i",  
@@ -904,35 +893,17 @@ taux_imprecis <- function(df, codes_imprecis){
   round(mean(v %in% codes_imprecis), 4)
 }
 
-## ---- 5. Branche chirurgie ambulatoire ----
-# Durée 0, GHM en C (hors CMD 14/15) ou liste GHM_CHIR_AMBU_LISTE. Source : v7.1.2 l.259-272
-# (bloc B7 de MODIFICATIONS_V8.md). Le second bloc v7.1.2 l.278-287 (duree<3, sortie
-# "scenarios_chir_ambu_") n'est pas repris (doublon hors §6.1).
+## ---- 5. Branche chirurgie ambulatoire (supprimée) ----
+# La branche chirurgie ambulatoire (v7.1.2 l.259-272, durée 0, jointure df_dp_das et
+# df_ref_specialite) n'est pas reprise : partie obsolète et seul consommateur de df_dp_das,
+# référentiel absent du dépôt (MODIFICATIONS_V8.md, section 5 et Q1). Les colonnes raac et
+# cage2 de prep_data, ajoutées pour ses pivots, restent en place (inertes).
 
+# Objets de référence communs aux branches 6 et 7 (§5.2 : plus de variable globale implicite)
 REFS <- construire_refs(comp_diabete = df_res_epi_comp_diabete, codes_diab = codes_diab,
                         codes_comp_sat_diab = codes_comp_sat_diab, hta_autres = hta_autres,
                         code_did = code_did, code_dnid_ins = code_dnid_ins, code_dnid = code_dnid,
                         neo_codes = neo_codes_diabete, paires_exclues = PAIRES_EXCLUES)
-
-# df_dp_das : référentiel DP -> DAS de chirurgie ambulatoire joint en v7.1.2 l.268. Il n'est
-# défini dans aucun fichier du dépôt (cf. MODIFICATIONS_V8.md, question Q1) : il doit être
-# chargé dans l'environnement avant cette section.
-if(!exists("df_dp_das")) stop("df_dp_das introuvable : charger le référentiel DP -> DAS (v7.1.2 l.268) avant la branche chirurgie ambulatoire")
-
-df_scenarios_ambu <- pRatihque::atihble(conn, "prep_data_" %+% AN_REF) |> 
-  dplyr::filter(!substr(ghm2,1,2)%in%CMD_OBSTETRIQUE,duree==DUREE_CHIR_AMBU) |> 
-  dplyr::filter(substr(ghm2,3,3)=="C" | substr(ghm2,1,5) %in% GHM_CHIR_AMBU_LISTE) |> 
-  dplyr::collect()
-
-df_chir_ambu <- df_scenarios_ambu |>   dplyr::summarise(nb = dplyr::n(),.by=dplyr::all_of(PIVOTS_CHIR_AMBU)) |> 
-  dplyr::filter(nb>SEUIL_PIVOT) |> 
-  dplyr::mutate(age = sample_age(cage, AGE_MAX_OUVERT)) |>   # §5.6 : un tirage par ligne
-  dplyr::left_join(df_dp_das,relationship = "many-to-many") |> 
-  dplyr::left_join(df_ref_specialite |> dplyr::select(racine,cage2,specialite_medicale)) |>
-  dplyr::rename(poids = nb)
-
-rm(df_scenarios_ambu)
-print("- Nombre de lignes chirurgie ambulatoire = " %+% nrow(df_chir_ambu))
 
 ## ---- 6. Branche séjours courts ----
 # Durée < 3, saturation en DAS chroniques (§6.2). Sources : v7.1.2 l.217-221 (pivots),
@@ -1080,7 +1051,6 @@ print("- Nombre de lignes séjours longs (final) = " %+% nrow(df_longs))
 if(!dir.exists(PATH_RESULTS)) dir.create(PATH_RESULTS, recursive = TRUE)
 chemin_export <- function(nom) PATH_RESULTS %+% nom %+% "_v8_" %+% DATE_TAG %+% ".parquet"
 
-arrow::write_parquet(df_chir_ambu,       chemin_export("scenarios_chir_ambu"))
 arrow::write_parquet(df_courts,          chemin_export("scenarios_courts"))
 arrow::write_parquet(df_catalogue_longs, chemin_export("scenarios_longs_catalogue"))
 arrow::write_parquet(df_longs,           chemin_export("scenarios_longs_tirage"))
@@ -1095,12 +1065,10 @@ df_ref_paires <- ref_paires_chroniques(AN_REF)
 arrow::write_parquet(df_ref_paires, chemin_export("referentiel_paires_chroniques"))
 
 ## ---- 9. Rapport de contrôle ----
-branches <- list("chirurgie_ambulatoire" = df_chir_ambu,
-                 "sejours_courts" = df_courts,
+branches <- list("sejours_courts" = df_courts,
                  "sejours_longs_catalogue" = df_catalogue_longs,
                  "sejours_longs_tirage" = df_longs)
-pivots_branches <- list("chirurgie_ambulatoire" = PIVOTS_CHIR_AMBU,
-                        "sejours_courts" = PIVOTS_COURTS,
+pivots_branches <- list("sejours_courts" = PIVOTS_COURTS,
                         "sejours_longs_catalogue" = PIVOTS_LONGS,
                         "sejours_longs_tirage" = PIVOTS_LONGS)
 

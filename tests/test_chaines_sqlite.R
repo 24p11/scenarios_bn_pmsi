@@ -180,24 +180,12 @@ df_ref_paires <- ref_paires_chroniques(AN_REF)
 cat("   paires chroniques :", nrow(df_ref_paires), "lignes ; nb max =", suppressWarnings(max(df_ref_paires$nb)), "\n")
 ok("§7.6 : paires das_a < das_b, seuil", nrow(df_ref_paires) > 0 && all(df_ref_paires$das_a < df_ref_paires$das_b) && all(df_ref_paires$nb >= SEUIL_REF_PAIRES))
 
-# ---------------------------------------------- section 5 : chirurgie ambulatoire --
-cat("\n# chirurgie ambulatoire\n")
+# ---------------------------------------------- section 5 : REFS (branche chir ambu supprimée) --
 REFS <- construire_refs(comp_diabete = df_res_epi_comp_diabete, codes_diab = codes_diab, codes_comp_sat_diab = codes_comp_sat_diab,
                         hta_autres = hta_autres, code_did = code_did, code_dnid_ins = code_dnid_ins, code_dnid = code_dnid,
                         neo_codes = neo_codes_diabete, paires_exclues = PAIRES_EXCLUES)
-df_dp_das <- tibble::tibble(diag2 = c("J449","J449","K802"), diagnostic_associes = c("I10", "E785", "I10"))
-df_ref_specialite <- tibble::tibble(racine = c("06C04","03K02"), cage2 = "ge_18", specialite_medicale = c("Chirurgie digestive","ORL"))
-evalq_lignes(bloc_inline("^df_scenarios_ambu <- "))
-ok("chir ambu : durée 0, GHM C hors CMD 14/15 ou liste",
-   nrow(df_scenarios_ambu) > 0 && all(df_scenarios_ambu$duree == 0) &&
-     all(substr(df_scenarios_ambu$ghm2,3,3) == "C" | substr(df_scenarios_ambu$ghm2,1,5) %in% GHM_CHIR_AMBU_LISTE))
-df_chir_ambu <- df_scenarios_ambu |>   dplyr::summarise(nb = dplyr::n(),.by=dplyr::all_of(PIVOTS_CHIR_AMBU)) |>
-  dplyr::filter(nb>SEUIL_PIVOT) |>
-  dplyr::mutate(age = sample_age(cage, AGE_MAX_OUVERT)) |>
-  dplyr::left_join(df_dp_das,relationship = "many-to-many") |>
-  dplyr::left_join(df_ref_specialite |> dplyr::select(racine,cage2,specialite_medicale)) |>
-  dplyr::rename(poids = nb)
-ok("chir ambu : âge par ligne cohérent avec cage (§5.6)", all(decoupe_cage(df_chir_ambu$age) == df_chir_ambu$cage) && length(unique(df_chir_ambu$age)) > 3)
+ok("sample_age vectorisé sur les cage de prep_data : âge cohérent avec la classe (§5.6)",
+   { a <- sample_age(pd$cage, AGE_MAX_OUVERT); all(decoupe_cage(a) == pd$cage) && length(unique(a)) > 10 })
 
 # ---------------------------------------------- section 6 : séjours courts --
 cat("\n# séjours courts\n")

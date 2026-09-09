@@ -13,7 +13,7 @@ Les numéros de lignes v8 sont ceux du fichier livré.
 
 ## 1. Blocs dbplyr repris (copies + écarts autorisés)
 
-### B1 — `prep_data(an)` — v8 l.148-402
+### B1 — `prep_data(an)` — v8 l.137-391
 **Source :** v7.2 l.24-275 (version riche : `type_unite`, `prep_sc`, flags `diabete`/`hta`,
 branches `an>22` / `18-22` / `<=17`). Copie caractère par caractère, sauf :
 
@@ -24,64 +24,67 @@ branches `an>22` / `18-22` / `<=17`). Copie caractère par caractère, sauf :
 | 3 | `dplyr::distinct(anonyme,ghm2,.keep_all = TRUE)` (×3, l.49, 122, 201) | `dplyr::group_by(anonyme,ghm2) \|> dplyr::filter(dplyr::row_number(ident) == 1L) \|> dplyr::ungroup()` | §5.9a (séjour de plus petit `ident` par patient × GHM ; voir Q3) |
 | 4 | `dplyr::select(ident,diabete) \|> dplyr::distinct(ident,.keep_all = TRUE)` (×3, l.92-93, 171-172, 250-251) | `... \|> dplyr::group_by(ident) \|> dplyr::filter(dplyr::row_number(diabete) == 1L) \|> dplyr::ungroup()` | §5.9a (néo-code le plus petit : E10 < E11i < E11ni) |
 | 5 | `dplyr::distinct(ident,.keep_all = TRUE)` du sous-bloc HTA (×3, l.98, 177, 256) | **inchangé**, commentaire ajouté | §8.3 : `hta` est une constante `"I10"` → la ligne est déjà déterministe |
-| 6 | l.48 `...ghm2,passage_urg,nbrum)` | `...ghm2,passage_urg,nbrum,raac)` | §3.2 + §6.1 : `raac` est un pivot de la chirurgie ambulatoire (v7.1.2 l.30) |
-| 7 | (absent, branches 18-22 et <=17) | `dplyr::mutate(raac = NA) \|>` inséré après le `inner_join(.rgp)` (v8 l.288, 368) | idem 6 : colonne requise par le `select` final ; `raac` n'existe pas dans les millésimes anciens (Q4) |
-| 8 | (absent) | `dplyr::mutate(cage2 = ifelse(cage3=="lt_18" & substr(ghm2,3,3)=="C" & age>14,"ge_18",cage3)) \|>` avant le `select` final (v8 l.390) | §4 (règle `cage2` v7.1.2 l.68 conservée) + §6.1 |
+| 6 | l.48 `...ghm2,passage_urg,nbrum)` | `...ghm2,passage_urg,nbrum,raac)` | §3.2 + §6.1 : `raac` était un pivot de la chirurgie ambulatoire (v7.1.2 l.30) — branche supprimée depuis, colonne **inerte conservée** (voir note sous le tableau) |
+| 7 | (absent, branches 18-22 et <=17) | `dplyr::mutate(raac = NA) \|>` inséré après le `inner_join(.rgp)` (v8 l.277, 357) | idem 6 : colonne requise par le `select` final ; `raac` n'existe pas dans les millésimes anciens (Q4) |
+| 8 | (absent) | `dplyr::mutate(cage2 = ifelse(cage3=="lt_18" & substr(ghm2,3,3)=="C" & age>14,"ge_18",cage3)) \|>` avant le `select` final (v8 l.379) | §4 (règle `cage2` v7.1.2 l.68 conservée) + §6.1 — colonne **inerte conservée** |
 | 9 | `dplyr::select(anonyme,...,cage3,cage,...,type_unite,prep_sc)` (l.264-265) | `... cage3,cage2,cage, ... ,type_unite,prep_sc,raac)` | idem 6, 8 |
+
+**Relecture (branche chirurgie ambulatoire supprimée) :** les écarts 6 à 9 (`raac`, `cage2`) avaient
+été faits pour servir les pivots ambulatoires. Ils n'ont plus de consommateur mais sont **conservés
+volontairement** : les retirer reviendrait à rééditer la plus grosse chaîne base pour un gain nul,
+exactement le type de retouche interdit par §0.1. Colonnes inertes dans `prep_data_<an>`.
 
 Le `dplyr::rename(age = cage3)` de v7.2 l.267 est conservé : la colonne `age` de
 `prep_data` reste la classe `ge_18`/`lt_18` (pivot des séjours longs), `cage2` est la
 même classe avec la règle « mineur >14 ans en GHM C ».
 
-### B2 — `ref_das_aigu(an)` — v8 l.408-420 (ex `df_das_ref`)
+### B2 — `ref_das_aigu(an)` — v8 l.397-409 (ex `df_das_ref`)
 **Source :** v7.2 l.444-453. Écarts :
 - `dplyr::filter(duree>3)` → `dplyr::filter(duree>DUREE_MIN_REF)` (config, `DUREE_MIN_REF = 3`).
 - `all_of(` → `dplyr::all_of(` (§1, appels namespacés).
-- `dplyr::collect()-> df_das_ref` → `dplyr::collect()` (valeur de retour de la fonction ; §0.2 « nom de la variable de sortie »). Affectation `df_das_ref <- ref_das_aigu(AN_REF)` en v8 l.537.
+- `dplyr::collect()-> df_das_ref` → `dplyr::collect()` (valeur de retour de la fonction ; §0.2 « nom de la variable de sortie »). Affectation `df_das_ref <- ref_das_aigu(AN_REF)` en v8 l.525.
 - `comp_sat_diab` (non défini dans le dépôt) : la chaîne est **inchangée** ; un alias
   `comp_sat_diab <- codes_comp_sat_diab` est ajouté dans `referentiels.R` (Q2).
 
-### B3 — `prep_das_chronique(an)` + `ref_das_chronique(an)` — v8 l.426-459
+### B3 — `prep_das_chronique(an)` + `ref_das_chronique(an)` — v8 l.415-448
 **Source :** v7.1.2 l.88-112 (`prep_das`). Écarts :
 - nom de fonction `prep_das` → `prep_das_chronique` ; nom de table `"prep_das" %+% an` → `"prep_das_chro_" %+% an`.
 - `anseqta = anseqta_de(an)` ajouté en tête ; `dplyr::filter(v2025>1)` → `dplyr::filter(!!dplyr::sym("v20"%+% anseqta)>1)` ; `"v20"%+% an` (×2) → `"v20"%+% anseqta` (§5.8 : même millésime dynamique partout ; pour `an = 26`, `v2026` n'existe pas, `anseqta` donne `"25"`).
 - `dplyr::filter(duree>DUREE_MIN_REF) |>` inséré après `atihble(...)` (§6.2 : prévalence estimée sur les séjours longs).
 - `all_of(` → `dplyr::all_of(`.
-- La ligne `dplyr::summarise(nb_das = dplyr::n(),.by= c(diag2,das,sexe,cage,niveau,type_liste,caract))` (v7.1.2 l.108) est **déplacée à l'identique** dans `ref_das_chronique()` (v8 l.455-459), appliquée sur la table calculée ; le `compute` garde le niveau séjour (`ident`) pour alimenter B4 (§3.3d) et N3 (§7.6). Résultat identique à v7.1.2 l.223 (`collect()` de la table).
+- La ligne `dplyr::summarise(nb_das = dplyr::n(),.by= c(diag2,das,sexe,cage,niveau,type_liste,caract))` (v7.1.2 l.108) est **déplacée à l'identique** dans `ref_das_chronique()` (v8 l.444-448), appliquée sur la table calculée ; le `compute` garde le niveau séjour (`ident`) pour alimenter B4 (§3.3d) et N3 (§7.6). Résultat identique à v7.1.2 l.223 (`collect()` de la table).
 - `|> invisible()` après le `compute` (pas d'impression au niveau supérieur).
 
-### B4 — `ref_comp_diabete(an)` — v8 l.465-477 (ex `df_res_epi_diabete_chu`)
+### B4 — `ref_comp_diabete(an)` — v8 l.454-466 (ex `df_res_epi_diabete_chu`)
 **Source :** v7.1.2 l.195-205 (chaîne valide). La version v7.2 l.456-467, au pipe cassé
 (`mutate(sc = max(prep_sc), .by = ident)` sans `|>`), est abandonnée ; le `mutate(sc=...)`
 orphelin, vestigial, est supprimé (§5.3). Écarts :
 - `categ_pmsi=="CHR/U"` → `categ_pmsi==TYPE_ETBS_REF_DIABETE` (config).
 - `dplyr::collect() ->df_res_epi_diabete_chu` → `dplyr::collect()`.
-- Post-collect (R, v7.1.2 l.207-214), v8 l.542-547 : `cage_ped`/`cage_ages` → `CAGE_PED`/`CAGE_AGES`, `0.2`/`0.5` → `PENALITE_9_AGES`/`PENALITE_9_AUTRES` (config).
+- Post-collect (R, v7.1.2 l.207-214), v8 l.531-536 : `cage_ped`/`cage_ages` → `CAGE_PED`/`CAGE_AGES`, `0.2`/`0.5` → `PENALITE_9_AGES`/`PENALITE_9_AUTRES` (config).
 
-### B5 — Sélection chirurgie ambulatoire — v8 l.922-925
-**Source :** v7.1.2 l.261-264. Écarts : `"prep_data_" %+% an` → `%+% AN_REF` (§5.12) ;
-`%in%c("14","15")` → `%in%CMD_OBSTETRIQUE` ; `duree==0` → `duree==DUREE_CHIR_AMBU` ;
-liste GHM littérale → `GHM_CHIR_AMBU_LISTE` (config) ; `df_scenarios<-` → `df_scenarios_ambu <-`.
-Post-collect (v7.1.2 l.265-269, R) : `all_of` → `dplyr::all_of(PIVOTS_CHIR_AMBU)`,
-`nb>9` → `nb>SEUIL_PIVOT` (§2.2 : >10), `sample_age(cage)` → `sample_age(cage, AGE_MAX_OUVERT)`
-(§5.6, tirage par ligne), `dplyr::rename(poids = nb)` ajouté (§8.2 : contrôle `poids`).
+### B5 — Sélection chirurgie ambulatoire — **supprimé à la relecture**
+Bloc v7.1.2 l.261-269 initialement repris en v8 (section 5). Retiré avec toute la branche :
+partie obsolète et seul consommateur de `df_dp_das`, référentiel absent du dépôt. Détail en
+section 5 (« non repris ») ; Q1 résolue. La section 5 du v8 (l.896-906) ne contient plus que le
+commentaire de suppression et la construction de `REFS`, commune aux branches 6 et 7.
 
-### B6 — Pivots séjours courts — v8 l.941-943
+### B6 — Pivots séjours courts — v8 l.912-914
 **Source :** v7.1.2 l.219-221. Écarts : `an` → `AN_REF` ; `duree<3` → `duree%in%DUREE_COURTS`
 (config `0:2`, équivalent pour une durée entière) ; `all_of(pivots)` → `dplyr::all_of(PIVOTS_COURTS)` ;
 `nb>10` → `nb>SEUIL_PIVOT` (même valeur) ; `-> df_cases` → `df_cases_courts <-`.
 
-### B7 — `df_v_admin_courts` — v8 l.945-947
+### B7 — `df_v_admin_courts` — v8 l.916-918
 **Source :** v7.1.2 l.232-234. Écarts : `an` (25 en dur) → `AN_REF` ; nom `df_v_admin` → `df_v_admin_courts`.
 
-### B8 — `prep_scenarios2(...)` — v8 l.973-1022
+### B8 — `prep_scenarios2(...)` — v8 l.944-993
 **Source :** v7.2 l.278-327. Écarts :
 - `anseqta = dplyr::case_when(...)` (3 lignes) → `anseqta = anseqta_de(an)` (même table de correspondance, déplacée en config §3.0).
 - `dplyr::filter(v2025>1)` → `dplyr::filter(!!dplyr::sym("v20"%+% anseqta)>1)` (§5.8).
 - `all_of(` → `dplyr::all_of(` (×3).
 - Post-collect (R) : `dplyr::arrange(ident,desc(niveau),desc(nb_das))` → `dplyr::arrange(ident,dplyr::desc(niveau),dplyr::desc(nb_das),das)` (§5.9 : ordre total, les ex æquo de niveau/fréquence étaient tranchés par l'ordre de collecte).
 
-### B9 — Catalogue séjours longs — v8 l.1025-1049
+### B9 — Catalogue séjours longs — v8 l.996-1020
 **Source :** v7.2 l.483-534. Le code de boucle (R, post-collect) est encapsulé dans
 `construire_catalogue_longs()` : deux boucles `TYPES_ETBS_LONGS × ANS_HISTORIQUE` reproduisent
 CHR/U (26 puis 17-25) puis CH (17-26) ; la somme étant commutative, l'ordre des années est
@@ -92,7 +95,7 @@ Seuil (v7.2 l.526-530) : `.by = c("mode_hospit",...,"diag2")` → `.by = dplyr::
 (§2.2) ; `select(-n)` conservé (§2.2) ; `dplyr::rename(poids = nb)` ajouté (§6.3).
 Supprimés : `print("- Noombre ...")` (§5.14), l.537-540 (`sample_n(3000)`, `nb>5000` : §2.5).
 
-### B10 — `df_v_admin_longs` — v8 l.1064-1066
+### B10 — `df_v_admin_longs` — v8 l.1035-1037
 **Source :** v7.2 l.551-553. Écarts : `an` (25 en dur) → `AN_REF` ; nom → `df_v_admin_longs`.
 
 ### B11 — `cma` dans `referentiels.R` l.32
@@ -107,9 +110,9 @@ Supprimés : `print("- Noombre ...")` (§5.14), l.537-540 (`sample_n(3000)`, `nb
 
 | Bloc | v8 | Exigence | Description |
 |------|----|----------|-------------|
-| N1 `ref_nb_chroniques(an)` | l.482-492 | §3.3d, §6.2 | `prep_data_<an>` (durée > `DUREE_MIN_REF`), `distinct(ident,cage,sexe)`, left_join du nb de DAS chroniques distincts par séjour (`prep_das_chro_<an>`), NA → 0, comptage par `(cage, sexe, nb_chro)`. |
-| N2 `ref_substitution_imprecis(an, codes_imprecis)` | l.498-516 | §7.5 | effectifs de **tous** les codes de `.diag` par `(cat, code, cage, sexe)`, seuil `nb >= SEUIL_REF_IMPRECIS`, jointure niveau (`anseqta`), puis **après collect** filtre sur les catégories contenant un code « sans précision » (évite une liste `IN` de plusieurs centaines de valeurs côté base) et colonne `imprecis`. |
-| N3 `ref_paires_chroniques(an)` | l.519-528 | §7.6 | auto-jointure de `prep_das_chro_<an>` distinct `(ident,cage,sexe,das)` sur `(ident,cage,sexe)`, `das_a < das_b`, comptage, seuil `nb >= SEUIL_REF_PAIRES`. |
+| N1 `ref_nb_chroniques(an)` | l.471-481 | §3.3d, §6.2 | `prep_data_<an>` (durée > `DUREE_MIN_REF`), `distinct(ident,cage,sexe)`, left_join du nb de DAS chroniques distincts par séjour (`prep_das_chro_<an>`), NA → 0, comptage par `(cage, sexe, nb_chro)`. |
+| N2 `ref_substitution_imprecis(an, codes_imprecis)` | l.487-505 | §7.5 | effectifs de **tous** les codes de `.diag` par `(cat, code, cage, sexe)`, seuil `nb >= SEUIL_REF_IMPRECIS`, jointure niveau (`anseqta`), puis **après collect** filtre sur les catégories contenant un code « sans précision » (évite une liste `IN` de plusieurs centaines de valeurs côté base) et colonne `imprecis`. |
+| N3 `ref_paires_chroniques(an)` | l.508-517 | §7.6 | auto-jointure de `prep_das_chro_<an>` distinct `(ident,cage,sexe,das)` sur `(ident,cage,sexe)`, `das_a < das_b`, comptage, seuil `nb >= SEUIL_REF_PAIRES`. |
 
 ---
 
@@ -117,17 +120,17 @@ Supprimés : `print("- Noombre ...")` (§5.14), l.537-540 (`sample_n(3000)`, `nb
 
 | §5 | Correction | Où (v8) |
 |----|-----------|---------|
-| 1 | `sexe_ ==sexe_` → `sexe == sexe_` | `sample_das_long` l.819 ; tests « sexe respecté » (helpers + SQLite) |
+| 1 | `sexe_ ==sexe_` → `sexe == sexe_` | `sample_das_long` l.808 ; tests « sexe respecté » (helpers + SQLite) |
 | 2 | `age_` non défini → argument `age` ; aucune globale implicite (`refs`, tables en argument) ; `df_tmp_sav<<-` supprimé | `sample_das_long`, `sample_das_court`, `construire_refs` |
 | 3 | bloc `df_res_epi_diabete_chu` au pipe cassé | B4 (version v7.1.2 valide, `mutate(sc=...)` supprimé) |
-| 4 | `filter_chap` (1 caractère) → `dedup_categorie` (3 caractères + YAML) | l.594-614 ; `filter_cat` (2 caractères, v7.1.2) également remplacé |
+| 4 | `filter_chap` (1 caractère) → `dedup_categorie` (3 caractères + YAML) | l.583-603 ; `filter_cat` (2 caractères, v7.1.2) également remplacé |
 | 5 | `complications_diab` → `codes_diab` en argument | `get_codes_diabete_from_neo(…, codes_diab, …)` |
-| 6 | `sample_age` par ligne, bornes semi-ouvertes (`[1-5[` → 1:4, `[80-[` → 80:`AGE_MAX_OUVERT`) | `sample_age_ligne`, `sample_age` (vapply) ; tests 1000 tirages/classe + régression vectorisation |
+| 6 | `sample_age` par ligne, bornes semi-ouvertes (`[1-5[` → 1:4, `[80-[` → 80:`AGE_MAX_OUVERT`) | `sample_age_ligne`, `sample_age` (vapply, plus de consommateur dans le v8 depuis la suppression de la branche chir ambu, conservé et testé) ; tests 1000 tirages/classe + régression vectorisation |
 | 7 | bloc v7.1.2 l.224-228 mort et cassé | **supprimé** (`niveau` ne servait qu'au filtre commenté l.134-136) |
 | 8 | `filter(v2025 > 1)` en dur | B3, B8, N2 (`!!dplyr::sym("v20"%+% anseqta)`), B11 (`ANSEQTA_REF`) ; grep `v2025` : plus aucune occurrence hors commentaires |
-| 9 | (a) `distinct(.keep_all=TRUE)` côté base → window `row_number` (B1) ; (b) `slice(1:2)` → `dplyr::slice_sample(n = NB_VARIANTES_ADMIN_COURTS)` sous le seed global (l.959-963) ; tiebreak `das` dans B8 | B1, B8, section 6 |
+| 9 | (a) `distinct(.keep_all=TRUE)` côté base → window `row_number` (B1) ; (b) `slice(1:2)` → `dplyr::slice_sample(n = NB_VARIANTES_ADMIN_COURTS)` sous le seed global (l.930-934) ; tiebreak `das` dans B8 | B1, B8, section 6 |
 | 10 | `neo_codes_diabete` défini dans `sample_das` | `referentiels.R` (définition unique) ; passé en argument `refs$neo_codes` |
-| 11 | extension `.parquet` | `chemin_export()` l.1081 |
+| 11 | extension `.parquet` | `chemin_export()` l.1052 |
 | 12 | `an` réassigné | plus aucune affectation de `an` ; `AN_REF`, `ANS_HISTORIQUE`, boucles `an_` |
 | 13 | `PATH_PROJET` via `SCENARIOS_PMSI_PATH` avec défaut | l.24-26 ; alias `path_projet` pour `referentiels.R` |
 | 14 | `Noombre`, code commenté mort | supprimés ; v7.1.2 l.289-315 (liste de libellés) non repris |
@@ -141,11 +144,11 @@ Tous dans les **helpers purs** (§0.3 : « là où tu peux écrire du code neuf 
 - **H1 — `retro_code_diabete` : 5e caractère inversé dans utils.R l.338-340.** utils.R produisait
   `E11i → "E11"+comp+"8"` et `E11ni → "E11"+comp+"0"`, alors que `code_dnid_ins` (insulinotraité)
   = `E1120, E1130…` (5e caractère **0**) et `code_dnid` = `E1128…` (**8**) — cf. aussi les libellés
-  v7.1.2 l.293-294. v8 l.628-633 : `E11i → …0`, `E11ni → …8`. Test : « rétro-codes E11 appartiennent
+  v7.1.2 l.293-294. v8 l.617-622 : `E11i → …0`, `E11ni → …8`. Test : « rétro-codes E11 appartiennent
   aux listes code_dnid_ins / code_dnid ». Pour revenir à l'ancien comportement : échanger `"0"` et `"8"`.
 - **H2 — filtre GHM en C (v7.1.2 l.132) : `substr(das,1,2)!="F10"`** compare 2 caractères à
   une chaîne de 3 → toujours vrai, F1x jamais exclu. Le spec (§6.2 « F10 sauf F17 ») décrit
-  l'intention. v8 `filtre_das_ghm_c` l.733-738 : `substr(das,1,2)!="F1"`. Pour revenir : remettre `"F10"`.
+  l'intention. v8 `filtre_das_ghm_c` l.722-727 (utilisé par la branche courts) : `substr(das,1,2)!="F1"`. Pour revenir : remettre `"F10"`.
 - **H3 — `get_codes_diabete_from_neo` (utils.R l.361-377)** : pour une complication hors 2:6
   (ex. E10 comp "1", acidocétose) le `case_when` renvoyait `NA` qui était ajouté aux DAS. v8 :
   astérisque uniquement pour comp ∈ {2,…,6} (`CHEMINS_ASTERISQUES_DIABETE`). Strate `(diabete, cage)`
@@ -169,6 +172,8 @@ Tous dans les **helpers purs** (§0.3 : « là où tu peux écrire du code neuf 
 | Source | Contenu | Raison |
 |--------|---------|--------|
 | v7.1.2 l.224-228 | forçage `niveau` cassé | §5.7 |
+| v7.1.2 l.259-272 | **branche chirurgie ambulatoire** (durée 0, pivots avec `raac`/`cage2`, jointures `df_dp_das` et `df_ref_specialite`, sortie `scenarios_chir_ambu_v3_`) | **supprimée à la relecture** : partie obsolète, seul consommateur de `df_dp_das` (référentiel absent du dépôt). Retirés avec elle : le `stop()` sur `df_dp_das`, l'export `scenarios_chir_ambu_*`, ses lignes du rapport §9, et les constantes orphelines `GHM_CHIR_AMBU_LISTE`, `PIVOTS_CHIR_AMBU`, `DUREE_CHIR_AMBU`, `CMD_OBSTETRIQUE`, `FILE_VERSION_SPE`. Non touchés : `prep_data` (B1, colonnes `raac`/`cage2` inertes), `filtre_das_ghm_c` (utilisé par les courts), `sample_age` (helper testé). |
+| v7.1.2 l.12-13 | chargement `df_ref_specialite` (`referentiel_spe_racine_30_2.xlsx`) | plus de consommateur : non chargé |
 | v7.1.2 l.278-287 | second bloc chir ambu `duree<3` (`age2`), sortie `scenarios_chir_ambu_` | doublon hors §6.1 |
 | v7.1.2 l.289-315 | libellés E11x en commentaires | §5.14 |
 | v7.1.2 l.166-176, v7.2 l.424-434 | `filter_cat`, `filter_chap` | §5.4 |
@@ -193,7 +198,7 @@ Tous dans les **helpers purs** (§0.3 : « là où tu peux écrire du code neuf 
 - `referentiels/exclusions_paires.yaml` : créé (§6.4), 4 paires évidentes, structure `- [A, B]`.
 - `tests/test_helpers.R` : §8.1, 103 assertions (`stopifnot`, sans testthat). Charge uniquement la section 4 du v8.
 - `tests/test_chaines_sqlite.R` : simulation **hors base** des chaînes dbplyr (sections 2, 3, 5, 6, 7)
-  sur SQLite en mémoire avec un faux paquet `pRatihque` et des tables factices ; 35 assertions.
+  sur SQLite en mémoire avec un faux paquet `pRatihque` et des tables factices ; 34 assertions.
   Valide l'enchaînement R/dbplyr (dont les fenêtres §5.9a, `.by`, `!!sym`), **pas** le dialecte
   ni les colonnes réelles de la base de production.
 - `utils.R`, `exclusions.R`, scripts v7 : inchangés.
@@ -202,10 +207,9 @@ Tous dans les **helpers purs** (§0.3 : « là où tu peux écrire du code neuf 
 
 ## 7. Questions (doutes consignés, aucune action prise — §0.5)
 
-- **Q1 — `df_dp_das` n'est défini nulle part** (v7.1.2 l.268 le joint ; ni utils.R, ni referentiels.R,
-  ni exclusions.R ne le créent). v8 l.920 : `stop()` explicite s'il est absent de l'environnement.
-  À fournir avant la section 5 (chargement d'un parquet/xlsx ?). Le rapport §9 gère l'absence
-  éventuelle de colonne `diagnostic_associes` dans cette branche.
+- **Q1 — `df_dp_das` (RÉSOLUE à la relecture)** : il n'était défini nulle part et n'avait qu'un
+  consommateur, la branche chirurgie ambulatoire. La branche est supprimée (section 5) ; plus aucune
+  dépendance à `df_dp_das` ni à `df_ref_specialite`.
 - **Q2 — `comp_sat_diab`** (v7.2 l.448) n'existe pas ; `referentiels.R` définit `codes_comp_sat_diab`
   (codes « satellites » du yaml). Alias ajouté sans toucher à la chaîne. Si une autre liste était visée,
   redéfinir l'alias.
@@ -218,7 +222,7 @@ Tous dans les **helpers purs** (§0.3 : « là où tu peux écrire du code neuf 
   `ident` (plus petit séjour par patient × GHM ; `.fixe` étant à une ligne par séjour, « ligne de
   rumdudp » n'a pas d'objet), diabète → `diabete`. Si la base n'accepte pas les fonctions fenêtre
   (`ROW_NUMBER() OVER`), remplacer par l'ancien `distinct` (3 lignes × 3 branches, repérées `# §5.9a`).
-- **Q4 — `raac`** : sélectionné dans `.fixe` pour `an > 22` (comme v7.1.2 sur 2025) ; `NA` pour
+- **Q4 — `raac`** (colonne désormais inerte, B1) : sélectionné dans `.fixe` pour `an > 22` (comme v7.1.2 sur 2025) ; `NA` pour
   `an <= 22`. Si la colonne existe aussi avant 2023, on peut la sélectionner dans ces branches.
 - **Q5 — `type_unite`/`prep_sc` ajoutés à `PIVOTS_LONGS`** (§2.8 « conservés dans les sorties »).
   Conséquence : un séjour multi-unités (ex. HC + GERIATRIE, hors SC) compte une fois par `type_unite`
@@ -251,7 +255,7 @@ Tous dans les **helpers purs** (§0.3 : « là où tu peux écrire du code neuf 
 ```
 Rscript -e 'parse("extraction_associations_codes_v8.R")'        # syntaxe OK
 Rscript tests/test_helpers.R                                     # 103 assertions vertes
-R_LIBS_TEST=<lib avec dbplyr/DBI/RSQLite> Rscript tests/test_chaines_sqlite.R   # 35 assertions vertes
+R_LIBS_TEST=<lib avec dbplyr/DBI/RSQLite> Rscript tests/test_chaines_sqlite.R   # 34 assertions vertes
 grep -n 'filter_chap\|sexe_ ==sexe_\|v2025\|slice(1:2)\|<<-\|distinct(.*\.keep_all' extraction_associations_codes_v8.R
 #  -> uniquement des commentaires, plus l'unique distinct(.keep_all) HTA commenté « déterministe » (B1 #5)
 ```
@@ -271,9 +275,9 @@ diff /tmp/b3_src.R /tmp/b3_v8.R          # attendu : les écarts de B3
 
 ## 9. Points à surveiller à la première exécution en espace sécurisé
 
-1. Q1 (`df_dp_das`) — bloquant à la section 5.
+1. (Q1 résolue : plus de dépendance à `df_dp_das`.)
 2. Q3 — support des fonctions fenêtre par la base (B1, 9 lignes marquées `# §5.9a`).
-3. `raac` et `nbrum` dans `.fixe` (an > 22) : `raac` vient de v7.1.2, `nbrum` de v7.2, tous deux sur 2025.
+3. `raac` et `nbrum` dans `.fixe` (an > 22) : `raac` vient de v7.1.2, `nbrum` de v7.2, tous deux sur 2025. `raac` est inerte mais toujours sélectionné : si la colonne manquait, retirer `,raac` du `select` (B1 #6) et le `mutate(raac = NA)` (B1 #7).
 4. Volume de la section 7 : `pmap` sur tout le catalogue éligible (plus de filtre `nb>5000`) ;
    si trop long, renseigner `MAX_SCENARIOS_LONGS` (tirage au poids, §6.3), et éventuellement
    `NB_VARIANTES_ADMIN_LONGS` pour limiter l'habillage admin (v7.2 gardait toutes les variantes).
