@@ -228,6 +228,11 @@ df_das |> dplyr::mutate(niveau = case_when(das %in%neo_codes_diabete~"1",
 df_cases_f<-purrr::pmap_df(df_cases[,pivots],sample_das,df_das)
 arrow::write_parquet(df_cases_f , outfile %+% "scenarios_bn_court_sejours_inter_v7.1_" %+% format(Sys.Date(),"%Y%m%d"))
 
+
+
+
+
+
 an = 25
 pRatihque::atihble(conn, 'prep_data_' %+% an ) |> 
   dplyr::distinct(mode_hospit,mode_entree,mode_sortie,sexe,cage,ghm2,diag2,mdp,duree) |> 
@@ -254,6 +259,11 @@ df_cases_f |> dplyr::mutate( cage = dplyr::case_when(
   dplyr::slice(1:2) |> 
   dplyr::ungroup()-> df_cases_f2
 arrow::write_parquet(df_cases_f2 , outfile %+% "scenarios_bn_court_sejours_final_v7.1_" %+% format(Sys.Date(),"%Y%m%d"))
+
+
+
+
+
 
 an = 25
 pivots = c("mode_hospit","mode_entree","mode_sortie","sexe","cage","cage2","racine","ghm2","diag2","mdp","raac")

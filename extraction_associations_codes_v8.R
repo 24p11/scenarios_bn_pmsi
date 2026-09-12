@@ -1,138 +1,62 @@
 ###############################################################################
-# extraction_associations_codes_v8.R
+# extraction_associations_codes_v8.R — EXTRACTION (base -> agrégats parquet)
 #
-# Fusion de extraction_associations_codes_v7.1.2.R (chirurgie ambulatoire,
-# séjours courts) et extraction_associations_codes_v7.2.R (séjours longs).
-# Spécification : SPEC_V8.md. Journal des écarts : MODIFICATIONS_V8.md.
+# Pipeline scenarios_bn_pmsi v8, industrialisation. Fichiers :
+#   config_v8.R  : configuration et profils        helpers_v8.R : helpers purs
+#   ce script    : requêtes base, partiels, refs   tirage_scenarios_v8.R : tirage (sans base)
+# Spécification : SPEC_V8.md ; journal des écarts : MODIFICATIONS_V8.md.
 #
-# RÈGLE D'OR (SPEC §0) : toutes les chaînes dbplyr (de pRatihque::atihble() à
-# compute()/collect()) sont des copies de v7.1.2 / v7.2. Chaque caractère
-# modifié est tracé dans MODIFICATIONS_V8.md avec la référence §5 ou config
-# qui l'autorise. Ne pas « améliorer » ces chaînes.
+# RÈGLE D'OR (SPEC §0) : les chaînes dbplyr (prep_data, tables de référence, prep_scenarios2,
+# pivots courts, v_admin) sont des blocs DÉPLACÉS tels quels depuis le v8 mono-fichier
+# (diff vide attendu bloc à bloc, cf. MODIFICATIONS_V8.md « industrialisation »). Les
+# compute(temporary = TRUE) restent temporaires : rien n'est persisté en base.
 #
-# Point d'entrée unique. Sections :
-#   0. Config            5. Branche chirurgie ambulatoire
-#   1. Sources/connexion 6. Branche séjours courts
-#   2. prep_data(an)     7. Branche séjours longs
-#   3. Tables de réf.    8. Exports
-#   4. Helpers purs      9. Rapport de contrôle
+# Déroulé : 0. bootstrap  1. résolution des besoins  2. prep_data (déf.)  3. tables de
+# référence (déf.)  4. prep_scenarios2 (déf.)  5. exécution : prep_data pour les seules
+# années nécessaires, refs manquantes, catalogue longs par partiels (checkpoint, cache
+# inter-profils, instrumentation)  6. agrégation + seuil + exports (agrégats uniquement,
+# JAMAIS de niveau séjour).
 ###############################################################################
 
-## ---- 0. Config ----
-# Toutes les constantes paramétrables. Aucun nombre magique plus bas.
-
+## ---- 0. Bootstrap : config, sources, connexion ----
 PATH_PROJET <- Sys.getenv("SCENARIOS_PMSI_PATH",
                           unset = "~/commun/projets_communs/DIM_siege/divers_projets/Scenario_crh_fictifs/")
-if(!grepl("/$", PATH_PROJET)) PATH_PROJET <- paste0(PATH_PROJET, "/")
-PATH_RESULTS        <- paste0(PATH_PROJET, "results/")
-PATH_PAIRES_EXCLUES <- paste0(PATH_PROJET, "referentiels/exclusions_paires.yaml")
+source(file.path(PATH_PROJET, "config_v8.R"))
 
-AN_REF         <- 26L               # année de référence (tables de référence, courts, chir ambu)
-ANS_HISTORIQUE <- 17:26             # années agrégées pour le catalogue des séjours longs
-SEED           <- 20260907
-
-SEUIL_PIVOT        <- 10            # divulgation : nb > SEUIL_PIVOT au niveau des pivots (§2.2)
-SEUIL_REF_DAS      <- 20            # effectif min de codes candidats d'une strate de référence (§6.2)
-SEUIL_REF_IMPRECIS <- 20            # export §7.5 : nb >= seuil
-SEUIL_REF_PAIRES   <- 50            # export §7.6 : nb >= seuil
-
-DUREE_COURTS    <- 0:2              # séjours courts : durée < 3
-DUREE_LONGS     <- 3:100            # séjours longs
-DUREE_MIN_REF   <- 3                # tables de référence DAS : séjours de durée > DUREE_MIN_REF (v7.2 l.445, §6.2)
-NBDA_MAX        <- 25               # nbda %in% 1:NBDA_MAX pour les séjours longs
-K_GRAINE_LONGS  <- 2                # nb de DAS réels en graine (§2.1)
-
-NB_TIRAGES_COURTS         <- 3      # nb de variantes de DAS par pivot (séjours courts, ex-boucle nb_min:nb_max)
-NB_TIRAGES_LONGS          <- 1      # nb de complétions par combinaison (v7.2 : 1)
-NB_VARIANTES_ADMIN_COURTS <- 2      # variantes d'habillage admin par scénario court (ex slice(1:2))
-NB_VARIANTES_ADMIN_LONGS  <- NA     # NA = toutes les variantes (comportement v7.2)
-MAX_SCENARIOS_LONGS       <- NA     # NA = tirage sur tout le catalogue ; sinon slice_sample(weight_by = poids)
-AGE_MAX_OUVERT            <- 95     # borne haute de la classe ouverte "[80-[" pour le tirage d'âge
-
-# Cible dégradée du nombre de DAS chroniques par classe d'âge (bornes incluses),
-# utilisée quand la strate (cage, sexe) de ref_nb_chroniques est vide (§6.2).
-CIBLES_NB_CHRONIQUES <- list(
-  "[0-1["   = c(0, 0), "[1-5["   = c(0, 0), "[5-10["  = c(0, 0),
-  "[10-15[" = c(0, 0), "[15-18[" = c(0, 0),
-  "[18-30[" = c(0, 1), "[30-40[" = c(0, 1),
-  "[40-50[" = c(1, 2), "[50-60[" = c(1, 2),
-  "[60-70[" = c(2, 3),
-  "[70-80[" = c(3, 5), "[80-["   = c(3, 5)
-)
-
-# Établissements
-TYPES_ETBS_LONGS      <- c("CHR/U", "CH")   # ordre d'agrégation v7.2 : CHR/U puis CH
-TYPE_ETBS_REF_DIABETE <- "CHR/U"            # v7.1.2 l.196 / v7.2 l.457
-
-# GHM — listes obstétriques v7.2 l.518-524 : reprises telles quelles. Non utilisées dans le
-# tirage v8 (le filtre de test nb>5000 / sample_n(3000) disparaît, §2.5) ; conservées
-# pour l'allocation en aval.
-GHM_ACC_NORMAL    <- c("14C03A", "14C07A", "14C08A", "14Z11A", "14Z12A",
-                       "14Z13A", "14Z13T", "14Z14A", "14Z14T")
-RACINES_ACC_PATHO <- c("14C07", "14C08", "14Z10", "14Z11", "14Z12", "14Z13", "14Z14")
-GHM_BB_NORMAL     <- c("15M05A", "15M06A", "15M07A", "15M08A", "15M09A",
-                       "15M10A", "15M11A", "15M13A", "15M14A")
-RACINES_BB_MED    <- c("15M05", "15M06", "15M07", "15M08", "15M09",
-                       "15M10", "15M11", "15M13", "15M14")
-
-# Types d'autorisation d'unité (v7.2 l.20-22 ; les définitions l.16-19 étaient écrasées)
-TYPEAUT_UHCD <- c("07A", "07B")
-TYPEAUT_SC   <- c("01A", "01B", "13A", "13B", "03A", "03B")
-TYPEAUT_USI  <- c("02E", "02A")             # non utilisé (repris de v7.2)
-
-# Priorité des unités pour réduire prep_data à UNE ligne par séjour (écart B1-10, Q5 résolue).
-# Documente l'ordre codé en littéral dans le case_when de prep_data (chaîne dbplyr).
-# UHCD impérativement dernier : sinon un séjour multi-RUM passé par l'UHCD serait réduit à sa
-# ligne UHCD puis supprimé par le filtre (nbrum == 1 & type_unite == "UHCD") | type_unite != "UHCD".
-PRIORITE_TYPE_UNITE <- c("SC" = 1L, "SC-NEONAT" = 2L, "NEONAT" = 3L, "GERIATRIE" = 4L,
-                         "HC" = 5L, "HP" = 6L, "UHCD" = 7L)
-
-# Pénalisation des effectifs des codes diabète .9 (v7.1.2 l.208-213)
-CAGE_PED          <- c("[1-5[", "[10-15[", "[5-10[", "[0-1[")
-CAGE_AGES         <- c("[50-60[", "[60-70[", "[70-80[", "[80-[")
-PENALITE_9_AGES   <- 0.2
-PENALITE_9_AUTRES <- 0.5
-
-# Pivots par branche
-PIVOTS_COURTS      <- c("mode_hospit", "sexe", "cage", "ghm2", "diag2", "duree")        # v7.1.2 l.217
-PIVOTS_LONGS       <- c("mode_hospit", "sexe", "age", "cage", "racine", "ghm2", "diabete", "hta",
-                        "diag2", "nbda", "type_unite", "prep_sc")                       # v7.2 l.483 + §2.8
-PIVOTS_LONGS_SEUIL <- setdiff(PIVOTS_LONGS, "nbda")                                     # v7.2 l.528-529
-COLS_ADMIN         <- c("mode_entree", "mode_sortie", "mdp")                            # colonnes d'habillage
-
-# Export §7.5 : motif de repérage des libellés « sans précision »
-MOTIF_IMPRECIS <- "sans précision|non précisé"
-
-# Millésime de la table des niveaux de CMA (mco_diag_niveau, colonnes v20xx) selon
-# l'année de données (v7.2 l.280-282). Utilisé partout à la place de v2025 (§5.8).
-anseqta_de <- function(an){
-  dplyr::case_when(an <= 17 ~ "21",
-                   an > 17 & an <= 22 ~ "23",
-                   TRUE ~ "25")
-}
-ANSEQTA_REF <- anseqta_de(AN_REF)
-
-DATE_TAG <- format(Sys.Date(), "%Y%m%d")
-
-set.seed(SEED)
-
-## ---- 1. Sources et connexion ----
-source(paste0(PATH_PROJET, "utils.R"))
+source(file.path(PATH_PROJET, "utils.R"))
 path_projet <- PATH_PROJET     # alias attendu par referentiels.R (et write_xlsx de utils.R)
 outfile     <- PATH_RESULTS    # alias historique
 
 conn <- pRatihque::connection_database()
 
-source(paste0(PATH_PROJET, "exclusions.R"))
-source(paste0(PATH_PROJET, "referentiels.R"))   # définit neo_codes_diabete, codes_diab, hta_autres, cim, ...
+source(file.path(PATH_PROJET, "exclusions.R"))
+source(file.path(PATH_PROJET, "referentiels.R"))   # définit neo_codes_diabete, codes_diab, hta_autres, cim, ...
+source(file.path(PATH_PROJET, "helpers_v8.R"))
 
-# Paires de préfixes exclues (§6.4) : liste de vecteurs c(prefixeA, prefixeB)
-PAIRES_EXCLUES <- list()
-if(file.exists(PATH_PAIRES_EXCLUES)){
-  PAIRES_EXCLUES <- lapply(yaml::read_yaml(PATH_PAIRES_EXCLUES), as.character)
+for(d in c(PATH_RESULTS, EXPORTS_DIR, PARTIELS_DIR)) if(!dir.exists(d)) dir.create(d, recursive = TRUE)
+
+cat("PROFIL = ", PROFIL, " ; AN_REF = ", AN_REF, " ; ANS_HISTORIQUE = ", paste(ANS_HISTORIQUE, collapse = ","),
+    " ; TYPES_ETBS_LONGS = ", paste(TYPES_ETBS_LONGS, collapse = ","), "\n", sep = "")
+cat("EXPORTS_DIR = ", EXPORTS_DIR, "\nPARTIELS_DIR = ", PARTIELS_DIR, "\n", sep = "")
+
+## ---- 1. Résolution des besoins (avant toute requête) ----
+# Garde-fou des partiels : ils dépendent de K_GRAINE_LONGS et de la logique amont, pas du
+# seuil ni du périmètre d'années (cf. RUN.md, règles de cache).
+FICHIER_PARTIELS_META <- file.path(PARTIELS_DIR, "partiels_meta.yaml")
+meta_partiels <- meta_partiels_courant(K_GRAINE_LONGS, NBDA_MAX, DUREE_LONGS, PIVOTS_LONGS, VERSION_SCRIPT)
+if(file.exists(FICHIER_PARTIELS_META)){
+  verif <- verifier_partiels_meta(yaml::read_yaml(FICHIER_PARTIELS_META), meta_partiels)
+  if(!is.null(verif$erreur)) stop(verif$erreur)
+  for(a in verif$avertissements) warning(a, call. = FALSE)
 } else {
-  warning("Fichier absent : " %+% PATH_PAIRES_EXCLUES %+% " ; aucune paire exclue.")
+  yaml::write_yaml(meta_partiels, FICHIER_PARTIELS_META)
 }
+
+plan <- resoudre_besoins(TYPES_ETBS_LONGS, ANS_HISTORIQUE, AN_REF,
+                         fichiers_partiels = list.files(PARTIELS_DIR, pattern = "^catalogue_partiel_.*\\.parquet$"),
+                         fichiers_exports  = list.files(EXPORTS_DIR, pattern = "\\.parquet$"),
+                         forcer_refs = FORCER_REFS, noms_refs = NOMS_REFS, refs_chroniques = REFS_CHRONIQUES)
+imprimer_plan(plan)
 
 ## ---- 2. prep_data(an) ----
 # Source : v7.2 l.24-275 (version riche : type_unite, prep_sc, flags diabete/hta,
@@ -550,429 +474,8 @@ ref_paires_chroniques <- function(an){
     dplyr::collect()
 }
 
-# 3f. Exécution des préparations (base). Ordre v7.2 l.439 : prep_data pour toutes les
-# années, puis tables de référence sur AN_REF.
-for(an_ in ANS_HISTORIQUE) prep_data(an_)
-gc()
-
-df_das_ref       <- ref_das_aigu(AN_REF)
-prep_das_chronique(AN_REF)
-df_das_chronique <- ref_das_chronique(AN_REF)
-df_nb_chroniques <- ref_nb_chroniques(AN_REF)
-
-# Correction des effectifs .9 (v7.1.2 l.207-214 ; constantes en config)
-df_res_epi_comp_diabete <- ref_comp_diabete(AN_REF) |>
-  dplyr::mutate(tot = sum(nb,na.rm=TRUE),.by=c(cage,diabete)) |> 
-  dplyr::mutate(nb = dplyr::case_when(comp=="9"&cage%in%CAGE_AGES~tot*PENALITE_9_AGES,
-                                      comp=="9"&! cage%in%CAGE_PED~tot*PENALITE_9_AUTRES,
-                                      TRUE~nb)) |> 
-  dplyr::select(-tot)
-
-## ---- 4. Helpers purs (testables hors base) ----
-# Règles : aucune variable globale implicite (toute table de référence est un argument),
-# aucun `<<-`, dépendances limitées à dplyr/tibble/stringr/base. Ces fonctions masquent
-# les versions homonymes de utils.R (retro_code_diabete, get_codes_diabete_from_neo).
-# tests/test_helpers.R charge uniquement cette section (balises "## ---- 4." / "## ---- 5.").
-
-# Classes d'âge (même découpage que prep_data, v7.1.2 l.53-66 / l.238-251)
-decoupe_cage <- function(age){
-  dplyr::case_when(
-    age < 1 ~ "[0-1[",
-    age < 5 ~ "[1-5[",
-    age < 10 ~ "[5-10[",
-    age < 15 ~ "[10-15[",
-    age < 18 ~ "[15-18[",
-    age < 30 ~ "[18-30[",
-    age < 40 ~ "[30-40[",
-    age < 50 ~ "[40-50[",
-    age < 60 ~ "[50-60[",
-    age < 70 ~ "[60-70[",
-    age < 80 ~ "[70-80[",
-    TRUE ~ "[80-["
-  )
-}
-
-# Tirage d'un âge (scalaire) dans une classe semi-ouverte "[a-b[" -> a:(b-1) ;
-# classe ouverte "[a-[" -> a:age_max. Libellé inconnu -> NA (§5.6).
-sample_age_ligne <- function(cage, age_max = 95){
-  cage <- as.character(cage)
-  if(length(cage) != 1 || is.na(cage)) return(NA_integer_)
-  bornes <- as.integer(unlist(regmatches(cage, gregexpr("[0-9]+", cage))))
-  if(length(bornes) == 0) return(NA_integer_)
-  if(length(bornes) == 1) bornes <- c(bornes, as.integer(age_max) + 1L)
-  if(bornes[2] <= bornes[1]) return(bornes[1])
-  v <- seq.int(bornes[1], bornes[2] - 1L)
-  v[sample.int(length(v), 1)]
-}
-
-# Version vectorisée : un tirage indépendant par ligne (§5.6)
-sample_age <- function(cage, age_max = 95){
-  vapply(as.character(cage), sample_age_ligne, integer(1), age_max = age_max, USE.NAMES = FALSE)
-}
-
-# Dédoublonnage à la catégorie 3 caractères (au plus un code par substr(code,1,3), premier
-# arrivé conservé) + exclusions par paires de préfixes (§6.4). La graine et les codes
-# doctrine doivent être passés en tête de `codes`.
-dedup_categorie <- function(codes, paires_exclues = list()){
-  codes <- as.character(codes)
-  codes <- codes[!is.na(codes) & nzchar(codes)]
-  gardes <- character(0)
-  for(x in codes){
-    if(substr(x, 1, 3) %in% substr(gardes, 1, 3)) next
-    exclu <- FALSE
-    for(p in paires_exclues){
-      p <- as.character(p)
-      if(length(p) != 2) stop("exclusions_paires : chaque entrée doit être une paire [prefixeA, prefixeB]")
-      if((startsWith(x, p[1]) && any(startsWith(gardes, p[2]))) ||
-         (startsWith(x, p[2]) && any(startsWith(gardes, p[1])))){
-        exclu <- TRUE
-        break
-      }
-    }
-    if(exclu) next
-    gardes <- c(gardes, x)
-  }
-  gardes
-}
-
-# Néo-code diabète à partir d'un code (DP ou DAS) ; `defaut` sinon (v7.2 l.341-344)
-neo_code_de_diag <- function(diag, code_did, code_dnid_ins, code_dnid, defaut = "N"){
-  dplyr::case_when(diag %in% code_dnid_ins ~ "E11i",
-                   diag %in% code_dnid ~ "E11ni",
-                   diag %in% code_did ~ "E10",
-                   TRUE ~ defaut)
-}
-
-# Rétro-codage néo-code + complication -> code CIM-10 (utils.R l.336-342).
-# 5e caractère : "0" = insulinotraité (E11i, cf. code_dnid_ins = E1120...),
-# "8" = non insulinotraité ou sans précision (E11ni, cf. code_dnid = E1128...).
-# utils.R inversait 0/8 : corrigé ici (voir MODIFICATIONS_V8.md, écart H1).
-retro_code_diabete <- function(neocode, comp){
-  comp <- as.character(comp)
-  dplyr::case_when(neocode == "E10" ~ paste0("E10", comp),
-                   neocode == "E11i" ~ paste0("E11", comp, "0"),
-                   neocode == "E11ni" ~ paste0("E11", comp, "8"))
-}
-
-# Chemins (codes_diabete.yaml) des codes astérisques obligatoires par type de complication
-CHEMINS_ASTERISQUES_DIABETE <- c(
-  "2" = "renal/asterisques_obligatoires",
-  "3" = "oculaire/asterisques_obligatoires",
-  "4" = "neurologique/asterisques_obligatoires",
-  "5" = "vasculaire_peripherique/asterisques_obligatoires",
-  "6" = "autres_precisees/asterisques_obligatoires"
-)
-
-# Tirage de la complication (4e caractère) d'un diabète : distribution empirique
-# ref_comp_diabete (cage, diabete, comp, nb), repli toutes classes d'âge si strate vide,
-# repli "9" si aucune information. comp "8" (non précisées) -> "9" ; comp "7" (multiples)
-# -> 3 à 4 complications distinctes parmi 2:6 (v7 : utils.R l.350-358, v7.2 l.373-385).
-tirer_comp_diabete <- function(diabete_, cage_, ref_comp_diabete, comp_forcee = NULL){
-  if(!is.null(comp_forcee)){
-    comp <- as.character(comp_forcee)
-  } else {
-    ok <- !is.na(ref_comp_diabete$nb) & ref_comp_diabete$nb > 0 & ref_comp_diabete$diabete == diabete_
-    prep_diab <- ref_comp_diabete[ok & ref_comp_diabete$cage == cage_, ]
-    if(nrow(prep_diab) == 0) prep_diab <- ref_comp_diabete[ok, ]
-    if(nrow(prep_diab) == 0) return(list(comp = "9", comps = "9"))
-    comp <- as.character(prep_diab$comp[sample.int(nrow(prep_diab), 1, prob = prep_diab$nb)])
-  }
-  if(comp == "8") comp <- "9"
-  comps <- comp
-  if(comp == "7") comps <- sample(c("2", "3", "4", "5", "6"), sample(3:4, 1))
-  list(comp = comp, comps = comps)
-}
-
-# Codes CIM-10 à insérer pour un néo-code diabète : code E10x / E11xx + astérisques
-# obligatoires pour chaque complication 2:6 (utils.R l.345-382, signature explicite §5.2).
-# codes_diab : tibble (code, chemin) issu de lire_codes_diabete().
-get_codes_diabete_from_neo <- function(diabete_, cage_, ref_comp_diabete, codes_diab, comp_forcee = NULL){
-  tc <- tirer_comp_diabete(diabete_, cage_, ref_comp_diabete, comp_forcee)
-  code_diabete_sample <- retro_code_diabete(diabete_, tc$comp)
-  comp_diag <- character(0)
-  for(c_ in tc$comps){
-    if(!c_ %in% names(CHEMINS_ASTERISQUES_DIABETE)) next
-    candidats <- codes_diab$code[grepl(CHEMINS_ASTERISQUES_DIABETE[[c_]], codes_diab$chemin)]
-    if(length(candidats) == 0) next
-    comp_diag <- c(comp_diag, candidats[sample.int(length(candidats), 1)])
-  }
-  c(comp_diag, code_diabete_sample)
-}
-
-# Insertion de I10 quand le patient est hypertendu et qu'aucun code hta_autres n'est
-# présent (v7.2 l.365). I10 n'est jamais gardé en plus d'un code hta_autres.
-ajoute_hta <- function(das, hta_flag, hta_autres){
-  das <- das[das != "I10"]
-  if(!is.na(hta_flag) && hta_flag != "N" && length(intersect(hta_autres, das)) == 0) das <- c("I10", das)
-  das
-}
-
-# Regroupement des objets de référence passés aux fonctions de tirage (§5.2 : plus de
-# variable globale implicite).
-construire_refs <- function(comp_diabete, codes_diab, codes_comp_sat_diab, hta_autres,
-                            code_did, code_dnid_ins, code_dnid, neo_codes, paires_exclues = list()){
-  stopifnot(is.data.frame(comp_diabete), all(c("cage", "diabete", "comp", "nb") %in% names(comp_diabete)),
-            is.data.frame(codes_diab), all(c("code", "chemin") %in% names(codes_diab)),
-            is.character(hta_autres), is.character(neo_codes), is.list(paires_exclues))
-  list(comp_diabete = comp_diabete, codes_diab = codes_diab, codes_comp_sat_diab = codes_comp_sat_diab,
-       hta_autres = hta_autres, code_did = code_did, code_dnid_ins = code_dnid_ins, code_dnid = code_dnid,
-       neo_codes = neo_codes, paires_exclues = paires_exclues)
-}
-
-# Table de prévalence chronique en deux niveaux : strate (diag2, cage, sexe) et repli (cage, sexe) (§6.2)
-prep_ref_chronique <- function(ref_das_chronique){
-  list(
-    strate = ref_das_chronique |> dplyr::summarise(nb_das = sum(nb_das), .by = c(diag2, das, sexe, cage)),
-    repli  = ref_das_chronique |> dplyr::summarise(nb_das = sum(nb_das), .by = c(das, sexe, cage))
-  )
-}
-
-# Codes candidats d'une strate, avec repli si moins de seuil_ref codes (§6.2)
-candidats_chroniques <- function(diag, sexe_, cage_, ref_chro, seuil_ref){
-  tmp <- ref_chro$strate |> dplyr::filter(diag2 == diag, sexe == sexe_, cage == cage_)
-  source <- "strate"
-  if(nrow(tmp) < seuil_ref){
-    tmp <- ref_chro$repli |> dplyr::filter(sexe == sexe_, cage == cage_)
-    source <- "repli"
-  }
-  list(tmp = tmp, source = source)
-}
-
-# Nombre cible de DAS chroniques : distribution empirique (cage, sexe, nb_chro, nb) sinon
-# cible dégradée uniforme dans cibles_defaut[[cage]] (§6.2)
-tirer_nb_chroniques <- function(cage_, sexe_, ref_nb_chro, cibles_defaut = list()){
-  tmp <- ref_nb_chro[ref_nb_chro$cage == cage_ & ref_nb_chro$sexe == sexe_ & !is.na(ref_nb_chro$nb) & ref_nb_chro$nb > 0, ]
-  if(nrow(tmp) > 0) return(as.integer(tmp$nb_chro[sample.int(nrow(tmp), 1, prob = tmp$nb)]))
-  b <- cibles_defaut[[cage_]]
-  if(is.null(b)) return(0L)
-  v <- seq.int(b[1], b[2])
-  as.integer(v[sample.int(length(v), 1)])
-}
-
-# Filtre GHM en C (v7.1.2 l.131-133) : exclut R2630, F0x et F1x sauf F17.
-# v7.1.2 écrivait substr(das,1,2)!="F10" (2 caractères comparés à 3 : toujours vrai, F1x
-# jamais exclu) ; corrigé en substr(das,1,2)!="F1" (MODIFICATIONS_V8.md, écart H2).
-filtre_das_ghm_c <- function(tmp, ghm2_){
-  if(substr(ghm2_,3,3)=="C"){
-    tmp<-tmp |> dplyr::filter(das !="R2630", substr(das,1,2)!="F0", ( substr(das,1,2)!="F1"  | substr(das,1,3)=="F17") )
-  }
-  tmp
-}
-
-# Cœur de tirage des séjours courts (§6.2). Source : v7.1.2 l.117-164 (sample_das), refondu :
-# nb de DAS tiré dans ref_nb_chro (plus de boucle 2:4), repli de strate, dedup_categorie,
-# diabète/HTA, nb_tirages variantes. Retourne NULL si la strate est vide.
-sample_das_court <- function(mode_hospit, sexe, cage, ghm2, diag2, duree, nb = NA,
-                             ref_chro, ref_nb_chro, refs,
-                             nb_tirages = 1, seuil_ref = 20, cibles_defaut = list(), age_max = 95){
-  mode_hospit_ = as.character(mode_hospit)
-  sexe_ = as.character(sexe)
-  cage_ = as.character(cage)
-  ghm2_ = as.character(ghm2)
-  diag = as.character(diag2)
-  duree_ = as.integer(duree)
-  poids_ = as.numeric(nb)
-  
-  cand <- candidats_chroniques(diag, sexe_, cage_, ref_chro, seuil_ref)
-  tmp <- filtre_das_ghm_c(cand$tmp, ghm2_)
-  if(nrow(tmp) < 1) return(NULL)
-  
-  diabete_dp <- neo_code_de_diag(diag, refs$code_did, refs$code_dnid_ins, refs$code_dnid)
-  
-  df_tmp <- NULL
-  for(i in seq_len(nb_tirages)){
-    nb_cible <- tirer_nb_chroniques(cage_, sexe_, ref_nb_chro, cibles_defaut)
-    age_i <- sample_age_ligne(cage_, age_max)
-    das_samples <- character(0)
-    if(nb_cible > 0){
-      das_samples <- sample(x = tmp$das, prob = tmp$nb_das, size = min(nb_cible, nrow(tmp)))
-    }
-    das_samples <- dedup_categorie(das_samples, refs$paires_exclues)
-    
-    # Diabète : flag issu du DP, sinon d'un néo-code tiré ; néo-codes remplacés par les codes réels
-    diabete_ <- diabete_dp
-    neo_tires <- intersect(refs$neo_codes, das_samples)
-    if(diabete_ == "N" && length(neo_tires) > 0) diabete_ <- neo_tires[1]
-    das_samples <- das_samples[!das_samples %in% refs$neo_codes]
-    codes_diabete <- character(0)
-    if(diabete_ != "N") codes_diabete <- get_codes_diabete_from_neo(diabete_, cage_, refs$comp_diabete, refs$codes_diab)
-    
-    # HTA : flag porté par un I10 tiré ; I10 retiré si un code hta_autres est présent
-    hta_ <- if("I10" %in% das_samples) "I10" else "N"
-    das_final <- dedup_categorie(c(codes_diabete, ajoute_hta(das_samples, hta_, refs$hta_autres)), refs$paires_exclues)
-    
-    tibble::tibble(mode_hospit = mode_hospit_, sexe = sexe_, cage = cage_, ghm2 = ghm2_, diag2 = diag,
-                   duree = duree_, poids = poids_, variante = i, age = age_i,
-                   source_ref = cand$source, nb_cible = nb_cible, nb_das = length(das_final),
-                   diabete_scenario = diabete_, hta_scenario = hta_,
-                   diagnostic_associes = paste(das_final, collapse = " ")) |>
-      dplyr::bind_rows(df_tmp) -> df_tmp
-  }
-  
-  return(df_tmp)
-}
-
-# Cœur de tirage des séjours longs (§6.3). Source : v7.2 l.330-422 (sample_das), corrigé :
-# §5.1 sexe == sexe_ ; §5.2 age en argument ; §5.4 dedup_categorie ; §5.5 codes_diab ;
-# tables de référence en argument. Retourne NULL si la strate est vide.
-sample_das_long <- function(mode_hospit, sexe, age, cage, racine, ghm2, diabete, hta, diag2, nbda,
-                            diagnostic_associes, type_unite = NA, prep_sc = NA, poids = NA,
-                            ref_das_aigu, refs, nb_tirage = 1){
-  
-  mode_hospit_ = as.character(mode_hospit)
-  sexe_ = as.character(sexe)
-  age_ = as.character(age)
-  cage_ = as.character(cage)
-  racine_ = as.character(racine)
-  ghm2_ = as.character(ghm2)
-  type_unite_ = as.character(type_unite)
-  prep_sc_ = as.numeric(prep_sc)
-  poids_ = as.numeric(poids)
-  
-  da = unlist(stringr::str_split(diagnostic_associes," "))
-  da = da[!is.na(da) & nzchar(da)]
-  diag = as.character(diag2)
-  diabete_ = as.character(diabete)
-  diabete_ = neo_code_de_diag(diag, refs$code_did, refs$code_dnid_ins, refs$code_dnid, defaut = diabete_)
-  hta_ = as.character(hta)
-  
-  nbda_ = as.integer(nbda)
-  
-  ref_das_aigu |> dplyr::filter(diag2 == diag,mode_hospit == mode_hospit_, sexe == sexe_, cage== cage_,ghm2==ghm2_,!das%in%da )  -> tmp   # §5.1 (ex sexe_ ==sexe_)
-  
-  if(nrow(tmp)<1) return(NULL)
-  
-  df_tmp<-NULL
-  
-  nb_max = min(nbda_,nrow(tmp))
-  
-  for(i in seq_len(nb_tirage)){
-    
-    sample(x= tmp$das,prob = tmp$n,size = nb_max)->das_samples
-    
-    das_samples <- dedup_categorie(c(da, das_samples), refs$paires_exclues)   # §5.4 (ex filter_chap) ; la graine passe en premier
-    
-    das_samples <- ajoute_hta(das_samples, hta_, refs$hta_autres)
-    
-    #Pour le diabète :
-    # - Vérification des DAS finalement choisis :
-    #   * Si complication en lien avec diabète = complication multiples
-    #   * Sinon : répartition en fonction de l'âge et du diabète
-    if(diabete_ != "N"){
-      comp_forcee <- if(length(intersect(c(diag, das_samples), refs$codes_comp_sat_diab)) != 0) "7" else NULL
-      codes_diabete <- get_codes_diabete_from_neo(diabete_, cage_, refs$comp_diabete, refs$codes_diab, comp_forcee)
-      das_samples <- dedup_categorie(c(da, codes_diabete, das_samples), refs$paires_exclues)
-    }
-    
-    tibble::tibble(mode_hospit = mode_hospit_, sexe = sexe_, age = age_, cage = cage_, racine = racine_,
-                   ghm2 = ghm2_, diabete = as.character(diabete), hta = hta_, diag2 = diag, nbda = nbda_,
-                   type_unite = type_unite_, prep_sc = prep_sc_, poids = poids_, variante = i,
-                   graine = paste(da, collapse = " "), diabete_scenario = diabete_,
-                   nb_das = length(das_samples),
-                   diagnostic_associes = paste(das_samples, collapse = " ")) |>
-      dplyr::bind_rows(df_tmp) -> df_tmp
-    
-  }
-  
-  return(df_tmp)
-  
-}
-
-# Codes CIM-10 dont le libellé indique « sans précision » (§7.5) ; codes sans point.
-codes_imprecis_de_cim <- function(cim, motif = "sans précision|non précisé"){
-  stopifnot(all(c("code", "libelle") %in% names(cim)))
-  code <- gsub(".", "", as.character(cim$code), fixed = TRUE)
-  unique(code[grepl(motif, enc2utf8(as.character(cim$libelle)), ignore.case = TRUE, perl = TRUE)])
-}
-
-# --- Helpers du rapport de contrôle (§8.2) ---
-split_das <- function(x){
-  x <- ifelse(is.na(x), "", as.character(x))
-  lapply(strsplit(x, " ", fixed = TRUE), function(v) v[nzchar(v)])
-}
-
-# Vérifications programmatiques d'un jeu de scénarios. Retourne une liste de compteurs
-# (0 attendu partout). NA si la colonne nécessaire est absente.
-controler_scenarios <- function(df, hta_autres, seuil_pivot){
-  n <- nrow(df)
-  res <- list(n = n, doublons_categorie = NA, diabete_hors_flag = NA, i10_avec_hta_autres = NA, poids_sous_seuil = NA)
-  if("poids" %in% names(df)) res$poids_sous_seuil <- sum(!(df$poids > seuil_pivot), na.rm = TRUE)
-  if(!"diagnostic_associes" %in% names(df) || n == 0) return(res)
-  das <- split_das(df$diagnostic_associes)
-  res$doublons_categorie <- sum(vapply(das, function(v) any(duplicated(substr(v, 1, 3))), logical(1)))
-  res$i10_avec_hta_autres <- sum(vapply(das, function(v) "I10" %in% v && length(intersect(v, hta_autres)) > 0, logical(1)))
-  if("diabete_scenario" %in% names(df)){
-    a_diab <- vapply(das, function(v) any(substr(v, 1, 3) %in% c("E10", "E11")), logical(1))
-    res$diabete_hors_flag <- sum(a_diab & df$diabete_scenario == "N")
-  }
-  res
-}
-
-# Distribution du nombre de DAS par classe d'âge (comptes)
-distribution_nb_das <- function(df){
-  if(!"diagnostic_associes" %in% names(df) || nrow(df) == 0) return(NULL)
-  df |>
-    dplyr::mutate(nb_das = lengths(split_das(diagnostic_associes))) |>
-    dplyr::summarise(n = dplyr::n(), moy = round(mean(nb_das), 2), min = min(nb_das),
-                     q50 = stats::median(nb_das), max = max(nb_das), .by = cage) |>
-    dplyr::arrange(cage)
-}
-
-# Taux de DAS « sans précision » parmi les DAS de sortie (mesuré, pas corrigé)
-taux_imprecis <- function(df, codes_imprecis){
-  if(!"diagnostic_associes" %in% names(df) || nrow(df) == 0) return(NA_real_)
-  v <- unlist(split_das(df$diagnostic_associes))
-  if(length(v) == 0) return(NA_real_)
-  round(mean(v %in% codes_imprecis), 4)
-}
-
-## ---- 5. Branche chirurgie ambulatoire (supprimée) ----
-# La branche chirurgie ambulatoire (v7.1.2 l.259-272, durée 0, jointure df_dp_das et
-# df_ref_specialite) n'est pas reprise : partie obsolète et seul consommateur de df_dp_das,
-# référentiel absent du dépôt (MODIFICATIONS_V8.md, section 5 et Q1). Les colonnes raac et
-# cage2 de prep_data, ajoutées pour ses pivots, restent en place (inertes).
-
-# Objets de référence communs aux branches 6 et 7 (§5.2 : plus de variable globale implicite)
-REFS <- construire_refs(comp_diabete = df_res_epi_comp_diabete, codes_diab = codes_diab,
-                        codes_comp_sat_diab = codes_comp_sat_diab, hta_autres = hta_autres,
-                        code_did = code_did, code_dnid_ins = code_dnid_ins, code_dnid = code_dnid,
-                        neo_codes = neo_codes_diabete, paires_exclues = PAIRES_EXCLUES)
-
-## ---- 6. Branche séjours courts ----
-# Durée < 3, saturation en DAS chroniques (§6.2). Sources : v7.1.2 l.217-221 (pivots),
-# l.232-234 (df_v_admin), l.228 / l.238-256 (tirage, habillage) — bloc B8.
-
-df_cases_courts <- pRatihque::atihble(conn, 'prep_data_' %+% AN_REF ) |>
-  dplyr::filter(duree%in%DUREE_COURTS) |> dplyr::summarise(nb=dplyr::n(),.by=dplyr::all_of(PIVOTS_COURTS)) |> dplyr::filter(nb>SEUIL_PIVOT) |> 
-  dplyr::collect()
-
-df_v_admin_courts <- pRatihque::atihble(conn, 'prep_data_' %+% AN_REF ) |> 
-  dplyr::distinct(mode_hospit,mode_entree,mode_sortie,sexe,cage,ghm2,diag2,mdp,duree) |> 
-  dplyr::collect()
-
-ref_chro <- prep_ref_chronique(df_das_chronique)
-
-df_courts_tirage <- purrr::pmap(df_cases_courts[, c(PIVOTS_COURTS, "nb")], sample_das_court,
-                                ref_chro = ref_chro, ref_nb_chro = df_nb_chroniques, refs = REFS,
-                                nb_tirages = NB_TIRAGES_COURTS, seuil_ref = SEUIL_REF_DAS,
-                                cibles_defaut = CIBLES_NB_CHRONIQUES, age_max = AGE_MAX_OUVERT) |>
-  purrr::list_rbind()
-
-# Habillage admin : NB_VARIANTES_ADMIN_COURTS variantes tirées au sort par scénario (§5.9b)
-df_courts <- df_courts_tirage |> 
-  dplyr::left_join(df_v_admin_courts,relationship = "many-to-many") |> 
-  dplyr::group_by(dplyr::across(-dplyr::any_of(COLS_ADMIN))) |> 
-  dplyr::slice_sample(n = NB_VARIANTES_ADMIN_COURTS) |> 
-  dplyr::ungroup()
-
-print("- Nombre de lignes séjours courts (tirage) = " %+% nrow(df_courts_tirage))
-print("- Nombre de lignes séjours courts (final) = " %+% nrow(df_courts))
-
-## ---- 7. Branche séjours longs ----
-# Durée 3-100, graine de K_GRAINE_LONGS DAS réels, agrégation ANS_HISTORIQUE × TYPES_ETBS_LONGS.
-# Sources : v7.2 l.278-327 (prep_scenarios2), l.483-534 (catalogue), l.542-558 (tirage,
-# habillage) — blocs B9, B10.
-
+## ---- 4. prep_scenarios2 (définition) ----
+# Source : v7.2 l.278-327 (bloc B8 de MODIFICATIONS_V8.md), déplacé tel quel.
 #----------------------------- Prépa DAS  -------------------------------#
 prep_scenarios2<-function(an,type_etbs,nb_journees_aut,nbda_aut,nb_assoc_das,pivots){
   
@@ -1023,127 +526,118 @@ prep_scenarios2<-function(an,type_etbs,nb_journees_aut,nbda_aut,nb_assoc_das,piv
   
 }
 
-# Catalogue : agrégation v7.2 l.489-510 (CHR/U pour AN_REF puis 17:(AN_REF-1), puis CH pour
-# 17:AN_REF). Ordre reproduit : TYPES_ETBS_LONGS × ANS_HISTORIQUE (l'ordre des années n'a
-# pas d'effet, la somme est commutative).
-construire_catalogue_longs <- function(){
+## ---- 5. Exécution ----
+# 5a. prep_data UNIQUEMENT pour les années nécessaires (itérations manquantes + AN_REF si une
+#     ref manque) ; prep_das_chronique UNIQUEMENT si une ref chronique manque. Toute table
+#     temporaire créée ici n'est consommée que par un produit dont l'absence l'a exigée.
+for(an_ in plan$annees_a_preparer){
+  cat("prep_data(", an_, ")\n", sep = "")
+  prep_data(an_)
+  gc()
+}
+if(plan$prep_das_chronique) prep_das_chronique(AN_REF)
+
+# 5b. Tables de référence : chacune SAUTÉE si son parquet existe (sauf FORCER_REFS).
+#     pivots_courts / v_admin_* : chaînes v7.1.2 l.219-221, l.232-234 / v7.2 l.551-553
+#     (blocs B6, B7, B10), déplacées telles quelles dans des fabriques sans argument.
+fabrique_pivots_courts <- function(){
+  df_cases_courts <- pRatihque::atihble(conn, 'prep_data_' %+% AN_REF ) |>
+    dplyr::filter(duree%in%DUREE_COURTS) |> dplyr::summarise(nb=dplyr::n(),.by=dplyr::all_of(PIVOTS_COURTS)) |> dplyr::filter(nb>SEUIL_PIVOT) |> 
+    dplyr::collect()
+  df_cases_courts
+}
+fabrique_v_admin_courts <- function(){
+  df_v_admin_courts <- pRatihque::atihble(conn, 'prep_data_' %+% AN_REF ) |> 
+    dplyr::distinct(mode_hospit,mode_entree,mode_sortie,sexe,cage,ghm2,diag2,mdp,duree) |> 
+    dplyr::collect()
+  df_v_admin_courts
+}
+fabrique_v_admin_longs <- function(){
+  df_v_admin_longs <- pRatihque::atihble(conn, 'prep_data_' %+% AN_REF ) |> 
+    dplyr::distinct(mode_hospit,mode_entree,mode_sortie,sexe,age,cage,ghm2,diag2,mdp,nbda,duree) |> 
+    dplyr::collect()
+  df_v_admin_longs
+}
+FABRIQUES_REFS <- list(
+  ref_das_aigu                      = function() ref_das_aigu(AN_REF),
+  ref_das_chronique                 = function() ref_das_chronique(AN_REF),
+  ref_nb_chroniques                 = function() ref_nb_chroniques(AN_REF),
+  ref_comp_diabete                  = function() ref_comp_diabete(AN_REF),   # effectifs bruts ; pénalisation .9 côté tirage
+  pivots_courts                     = fabrique_pivots_courts,
+  v_admin_courts                    = fabrique_v_admin_courts,
+  v_admin_longs                     = fabrique_v_admin_longs,
+  referentiel_substitution_imprecis = function() ref_substitution_imprecis(AN_REF, codes_imprecis_de_cim(cim, MOTIF_IMPRECIS)),
+  referentiel_paires_chroniques     = function() ref_paires_chroniques(AN_REF)
+)
+stopifnot(setequal(names(FABRIQUES_REFS), NOMS_REFS))
+for(i in seq_len(nrow(plan$refs))){
+  nom <- plan$refs$nom[i]
+  fichier <- file.path(EXPORTS_DIR, plan$refs$fichier[i])
+  if(!plan$refs$a_faire[i]){ cat("ref ", nom, " : présente, sautée\n", sep = ""); next }
+  cat("ref ", nom, " : calcul\n", sep = "")
+  df_ref <- FABRIQUES_REFS[[nom]]()
+  arrow::write_parquet(df_ref, fichier)
+  cat("  -> ", nrow(df_ref), " lignes -> ", fichier, "\n", sep = "")
+  rm(df_ref); gc()
+}
+
+# 5c. Catalogue longs par partiels : chaque itération (etbs, an) écrit
+#     PARTIELS_DIR/catalogue_partiel_<etbs>_<an>.parquet et est sautée si le fichier existe.
+#     Chaîne base de l'itération (prep_scenarios2) inchangée ; seul l'enrobage R bouge.
+#     Instrumentation : apports marginaux imprimés + diagnostic_apports.csv (EXPORTS_DIR).
+construire_catalogue_longs <- function(plan){
   df_cases <- NULL
-  for(type_etbs in TYPES_ETBS_LONGS){
-    for(an_ in ANS_HISTORIQUE){
+  apports <- NULL
+  it <- plan$iterations
+  for(i in seq_len(nrow(it))){
+    type_etbs <- it$etbs[i]; an_ <- it$an[i]
+    fichier <- file.path(PARTIELS_DIR, it$fichier[i])
+    if(file.exists(fichier)){
+      df_cases_tmp <- arrow::read_parquet(fichier)
+      statut <- "relu"
+    } else {
       df_cases_tmp<-prep_scenarios2(an_,type_etbs,DUREE_LONGS,NBDA_MAX,K_GRAINE_LONGS,PIVOTS_LONGS)
       gc()
-      df_cases <- dplyr::bind_rows(df_cases,df_cases_tmp) |> 
-        dplyr::summarise(n =sum(n),.by=dplyr::all_of(c(PIVOTS_LONGS,"diagnostic_associes")))
-      rm(df_cases_tmp)
+      arrow::write_parquet(df_cases_tmp, fichier)
+      statut <- "calculé"
     }
+    diag2_avant <- if(is.null(df_cases)) character(0) else unique(df_cases$diag2)
+    df_cases <- dplyr::bind_rows(df_cases,df_cases_tmp) |> 
+      dplyr::summarise(n =sum(n),.by=dplyr::all_of(c(PIVOTS_LONGS,"diagnostic_associes")))
+    ligne <- apports_iteration(type_etbs, an_, statut, df_cases_tmp, df_cases, diag2_avant)
+    apports <- rbind(apports, ligne)
+    cat(sprintf("  %-6s %s [%-7s] partiel = %8d lignes ; cumul = %9d lignes ; diag2 cumul = %5d (+%d nouveaux)\n",
+                type_etbs, an_, statut, ligne$nb_lignes_partiel, ligne$nb_lignes_cumul, ligne$nb_diag2_cumul, ligne$nb_diag2_nouveaux))
+    rm(df_cases_tmp)
   }
+  utils::write.csv(apports, file.path(EXPORTS_DIR, "diagnostic_apports.csv"), row.names = FALSE)
   df_cases
 }
 
-df_catalogue_brut <- construire_catalogue_longs()
-print("- Nombre de lignes catalogue brut = " %+% nrow(df_catalogue_brut))
+cat("== Catalogue longs (partiels) ==\n")
+df_prep_scenarios <- construire_catalogue_longs(plan)
+cat("- Nombre de lignes catalogue brut (df_prep_scenarios) = ", nrow(df_prep_scenarios), "\n", sep = "")
 
+## ---- 6. Agrégation + seuil + exports ----
 # Seuil de divulgation au niveau des pivots (v7.2 l.526-530 ; §2.2 : nb > SEUIL_PIVOT,
-# le n par combinaison est sommé puis abandonné)
-df_catalogue_longs <- df_catalogue_brut |>  dplyr::inner_join(df_catalogue_brut |> 
-                                                                dplyr::summarise(nb=sum(n),
-                                                                                 .by =dplyr::all_of(PIVOTS_LONGS_SEUIL) )  ) |> 
+# le n par combinaison est sommé puis abandonné). Relit UNIQUEMENT les partiels du profil
+# courant (ANS_HISTORIQUE × TYPES_ETBS_LONGS) : la production ré-agrège sans requête base.
+df_prep_scenarios_seuil <- df_prep_scenarios |>  dplyr::inner_join(df_prep_scenarios |> 
+                                                                      dplyr::summarise(nb=sum(n),
+                                                                                       .by =dplyr::all_of(PIVOTS_LONGS_SEUIL) )  ) |> 
   dplyr::filter(nb>SEUIL_PIVOT) |> dplyr::select(-n) |>
   dplyr::rename(poids = nb)
-rm(df_catalogue_brut)
+rm(df_prep_scenarios); gc()
+cat("- Nombre de lignes catalogue éligible (df_prep_scenarios_seuil) = ", nrow(df_prep_scenarios_seuil), "\n", sep = "")
 
-print("- Nombre de lignes catalogue éligible = " %+% nrow(df_catalogue_longs))
-
-# Tirage : tout le catalogue (§6.3), ou MAX_SCENARIOS_LONGS tirés au poids (pas de seuil dur)
-df_cases_longs <- df_catalogue_longs
-if(!is.na(MAX_SCENARIOS_LONGS) && nrow(df_cases_longs) > MAX_SCENARIOS_LONGS){
-  df_cases_longs <- df_cases_longs |> dplyr::slice_sample(n = MAX_SCENARIOS_LONGS, weight_by = poids)
-}
-
-df_longs_tirage <- purrr::pmap(df_cases_longs |> dplyr::select(dplyr::all_of(c(PIVOTS_LONGS, "diagnostic_associes", "poids"))),
-                               sample_das_long, ref_das_aigu = df_das_ref, refs = REFS, nb_tirage = NB_TIRAGES_LONGS) |>
-  purrr::list_rbind()
-
-#Ajout des modes entrée/sortie (v7.2 l.550-555)
-df_v_admin_longs <- pRatihque::atihble(conn, 'prep_data_' %+% AN_REF ) |> 
-  dplyr::distinct(mode_hospit,mode_entree,mode_sortie,sexe,age,cage,ghm2,diag2,mdp,nbda,duree) |> 
-  dplyr::collect()
-
-df_longs <- df_longs_tirage |> dplyr::left_join(df_v_admin_longs,relationship = "many-to-many")
-if(!is.na(NB_VARIANTES_ADMIN_LONGS)){
-  df_longs <- df_longs |>
-    dplyr::group_by(dplyr::across(-dplyr::any_of(c(COLS_ADMIN, "duree")))) |>
-    dplyr::slice_sample(n = NB_VARIANTES_ADMIN_LONGS) |>
-    dplyr::ungroup()
-}
-
-print("- Nombre de lignes séjours longs (tirage) = " %+% nrow(df_longs_tirage))
-print("- Nombre de lignes séjours longs (final) = " %+% nrow(df_longs))
-
-## ---- 8. Exports ----
-if(!dir.exists(PATH_RESULTS)) dir.create(PATH_RESULTS, recursive = TRUE)
-chemin_export <- function(nom) PATH_RESULTS %+% nom %+% "_v8_" %+% DATE_TAG %+% ".parquet"
-
-arrow::write_parquet(df_courts,          chemin_export("scenarios_courts"))
-arrow::write_parquet(df_catalogue_longs, chemin_export("scenarios_longs_catalogue"))
-arrow::write_parquet(df_longs,           chemin_export("scenarios_longs_tirage"))
-
-# §7.5 : référentiel de substitution des codes « sans précision » (aucune substitution ici)
-codes_imprecis <- codes_imprecis_de_cim(cim, MOTIF_IMPRECIS)
-df_ref_imprecis <- ref_substitution_imprecis(AN_REF, codes_imprecis)
-arrow::write_parquet(df_ref_imprecis, chemin_export("referentiel_substitution_imprecis"))
-
-# §7.6 : paires de DAS chroniques co-occurrentes (mesure a posteriori, aucun usage dans le tirage)
-df_ref_paires <- ref_paires_chroniques(AN_REF)
-arrow::write_parquet(df_ref_paires, chemin_export("referentiel_paires_chroniques"))
-
-## ---- 9. Rapport de contrôle ----
-branches <- list("sejours_courts" = df_courts,
-                 "sejours_longs_catalogue" = df_catalogue_longs,
-                 "sejours_longs_tirage" = df_longs)
-pivots_branches <- list("sejours_courts" = PIVOTS_COURTS,
-                        "sejours_longs_catalogue" = PIVOTS_LONGS,
-                        "sejours_longs_tirage" = PIVOTS_LONGS)
-
-lignes <- c("RAPPORT DE CONTROLE — extraction_associations_codes_v8.R — " %+% DATE_TAG,
-            "SEED = " %+% SEED %+% " ; AN_REF = " %+% AN_REF %+% " ; ANS_HISTORIQUE = " %+% paste(range(ANS_HISTORIQUE), collapse = "-"),
-            "SEUIL_PIVOT = " %+% SEUIL_PIVOT %+% " ; SEUIL_REF_DAS = " %+% SEUIL_REF_DAS %+% " ; K_GRAINE_LONGS = " %+% K_GRAINE_LONGS,
-            "")
-
-lignes <- c(lignes, "== 1. Volumétrie par branche ==")
-for(b in names(branches)){
-  df_b <- branches[[b]]
-  piv <- intersect(pivots_branches[[b]], names(df_b))
-  n_piv <- if(length(piv) > 0) nrow(dplyr::distinct(df_b[, piv])) else NA
-  lignes <- c(lignes, sprintf("%-26s lignes = %8d ; pivots distincts = %8s", b, nrow(df_b), format(n_piv)))
-}
-lignes <- c(lignes, "catalogue longs brut -> éligible : voir prints de la section 7", "")
-
-lignes <- c(lignes, "== 2. Distribution du nombre de DAS par classe d'âge (à comparer aux cibles de saturation) ==")
-for(b in names(branches)){
-  d <- distribution_nb_das(branches[[b]])
-  lignes <- c(lignes, "-- " %+% b)
-  if(is.null(d)) lignes <- c(lignes, "   (pas de colonne diagnostic_associes)") else lignes <- c(lignes, "   " %+% utils::capture.output(print(as.data.frame(d), row.names = FALSE)))
-}
-lignes <- c(lignes, "-- cibles dégradées CIBLES_NB_CHRONIQUES :",
-            "   " %+% names(CIBLES_NB_CHRONIQUES) %+% " : " %+% vapply(CIBLES_NB_CHRONIQUES, function(x) paste(x, collapse = "-"), character(1)), "")
-
-lignes <- c(lignes, "== 3. Taux de codes « sans précision » parmi les DAS de sortie (mesuré, non corrigé) ==")
-for(b in names(branches)){
-  lignes <- c(lignes, sprintf("%-26s taux = %s", b, format(taux_imprecis(branches[[b]], codes_imprecis))))
-}
-lignes <- c(lignes, "")
-
-lignes <- c(lignes, "== 4. Vérifications programmatiques (0 attendu ; NA = non applicable) ==")
-controles <- lapply(branches, controler_scenarios, hta_autres = hta_autres, seuil_pivot = SEUIL_PIVOT)
-for(b in names(controles)){
-  cc <- controles[[b]]
-  lignes <- c(lignes, sprintf("%-26s doublons_categorie = %s ; diabete_hors_flag = %s ; i10_avec_hta_autres = %s ; poids_sous_seuil = %s",
-                              b, format(cc$doublons_categorie), format(cc$diabete_hors_flag),
-                              format(cc$i10_avec_hta_autres), format(cc$poids_sous_seuil)))
-}
-anomalies <- sum(unlist(lapply(controles, function(cc) unlist(cc[c("doublons_categorie", "diabete_hors_flag", "i10_avec_hta_autres", "poids_sous_seuil")]))), na.rm = TRUE)
-lignes <- c(lignes, "TOTAL anomalies = " %+% anomalies, "")
-
-writeLines(lignes, PATH_RESULTS %+% "rapport_v8_" %+% DATE_TAG %+% ".txt")
-cat(lignes, sep = "\n")
+arrow::write_parquet(df_prep_scenarios_seuil, file.path(EXPORTS_DIR, "catalogue_longs_seuil.parquet"))
+meta_catalogue <- c(list(produit = "catalogue_longs_seuil", date = as.character(Sys.Date()),
+                         nb_lignes = nrow(df_prep_scenarios_seuil),
+                         nb_diag2_distincts = length(unique(df_prep_scenarios_seuil$diag2)),
+                         plan_annees_preparees = as.list(plan$annees_a_preparer),
+                         plan_iterations_calculees = sum(plan$iterations$a_faire),
+                         plan_refs_calculees = sum(plan$refs$a_faire)),
+                    valeurs_effectives_config())
+yaml::write_yaml(meta_catalogue, file.path(EXPORTS_DIR, "catalogue_longs_seuil_meta.yaml"))
+cat("Exports écrits dans ", EXPORTS_DIR, " : catalogue_longs_seuil.parquet (+ meta.yaml), diagnostic_apports.csv, refs.\n", sep = "")
+cat("Extraction terminée. Étape suivante : tirage_scenarios_v8.R (aucune connexion base).\n")

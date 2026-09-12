@@ -1,20 +1,19 @@
 ###############################################################################
-# tests/test_helpers.R — tests unitaires hors base des helpers purs du v8 (SPEC §8.1)
-# Exécution : Rscript tests/test_helpers.R   (depuis la racine du dépôt ou tests/)
-# Ne charge QUE la section "## ---- 4. Helpers purs" de extraction_associations_codes_v8.R :
-# aucune connexion base, aucune dépendance à utils.R / referentiels.R.
+# tests/test_helpers.R — tests unitaires hors base des helpers purs (SPEC §8.1 + brief
+# industrialisation §8). Exécution : Rscript tests/test_helpers.R (racine du dépôt ou tests/).
+# Source config_v8.R (constantes, sans effet de bord) puis helpers_v8.R : aucune connexion
+# base, aucune dépendance à utils.R / referentiels.R. arrow optionnel (repli saveRDS/readRDS
+# pour pmap_chunks, dans le test uniquement).
 ###############################################################################
 suppressPackageStartupMessages({library(dplyr); library(tibble); library(stringr)})
 for(loc in c("fr_FR.UTF-8", "en_US.UTF-8", "C.UTF-8")) if(!is.na(suppressWarnings(Sys.setlocale("LC_CTYPE", loc))) && Sys.getlocale("LC_CTYPE") == loc) break
+lib_test <- Sys.getenv("R_LIBS_TEST", unset = ""); if(nzchar(lib_test)) .libPaths(c(lib_test, .libPaths()))
 
-fichier_v8 <- c("extraction_associations_codes_v8.R", "../extraction_associations_codes_v8.R")
-fichier_v8 <- fichier_v8[file.exists(fichier_v8)][1]
-stopifnot(!is.na(fichier_v8))
-lignes <- readLines(fichier_v8, encoding = "UTF-8")
-deb <- grep("^## ---- 4\\. Helpers purs", lignes)
-fin <- grep("^## ---- 5\\. Branche chirurgie ambulatoire", lignes)
-stopifnot(length(deb) == 1, length(fin) == 1, fin > deb)
-eval(parse(text = lignes[deb:(fin - 1)], encoding = "UTF-8"), envir = globalenv())
+racine <- c(".", "..")[file.exists(c("config_v8.R", "../config_v8.R"))][1]
+stopifnot(!is.na(racine))
+Sys.unsetenv("SCENARIOS_PMSI_SURCHARGE")
+source(file.path(racine, "config_v8.R"))
+source(file.path(racine, "helpers_v8.R"))
 
 `%+%` <- function(x, y) paste0(x, y)
 n_ok <- 0
@@ -251,5 +250,122 @@ run_all <- function(){
        purrr::map(1:5, ~ sample_das_long("HC", "1", "ge_18", "[60-70[", "04M05", "04M053", "E11i", "I10", "J449", 4, "I500", ref_das_aigu = ref_aigu_fx, refs = refs_fx)) |> purrr::list_rbind())
 }
 ok("deux exécutions sous le même seed donnent le même résultat", identical(run_all(), run_all()))
+
+
+# =========================================================== industrialisation ==
+cat("\n# pmap_chunks\n")
+a_arrow <- requireNamespace("arrow", quietly = TRUE)
+ecrire_t <- if(a_arrow) arrow::write_parquet else function(x, f) saveRDS(x, f)
+lire_t   <- if(a_arrow) arrow::read_parquet  else readRDS
+ext_t    <- if(a_arrow) ".parquet" else ".rds"
+cat("   (écriture des chunks :", if(a_arrow) "arrow" else "repli RDS (test uniquement)", ")\n")
+f_test <- function(id, k){ if(k == 0) return(NULL); tibble::tibble(id = id, k = k, u = round(stats::runif(1), 6), s = sample(letters, 1)) }
+df_in <- tibble::tibble(id = 1:23, k = c(rep(1L, 10), 0L, rep(2L, 12)))
+run_chunks <- function(dossier, ...) pmap_chunks(df_in, f_test, chunk_size = 5, dossier = dossier, prefixe = "t", seed_base = 100,
+                                                 ecrire = ecrire_t, lire = lire_t, ext = ext_t, verbose = FALSE, ...)
+d1 <- file.path(tempdir(), "chunks1"); unlink(d1, recursive = TRUE)
+r1 <- run_chunks(d1)
+ok("découpage exact : 23 lignes / 5 -> 5 chunks", length(list.files(d1, pattern = "^t_chunk_\\d{4}")) == 5 && all(sprintf("t_chunk_%04d%s", 1:5, ext_t) %in% list.files(d1)))
+ok("lignes NULL ignorées : 22 lignes en sortie, ordre conservé", nrow(r1) == 22 && identical(r1$id, setdiff(1:23, 11L)))
+unlink(file.path(d1, sprintf("t_chunk_%04d%s", 3, ext_t)))
+r2 <- run_chunks(d1)
+ok("reprise : chunk du milieu supprimé, relance -> identité bit à bit avec le run complet", identical(r1, r2))
+d2 <- file.path(tempdir(), "chunks2"); unlink(d2, recursive = TRUE)
+ok("déterminisme : second run complet dans un autre dossier identique", identical(r1, run_chunks(d2)))
+d3 <- file.path(tempdir(), "chunks3"); unlink(d3, recursive = TRUE)
+df_null <- tibble::tibble(id = 1:7, k = 0L)
+r3 <- pmap_chunks(df_null, f_test, chunk_size = 3, dossier = d3, prefixe = "n", seed_base = 1, ecrire = ecrire_t, lire = lire_t, ext = ext_t, verbose = FALSE)
+ok("chunk dont f retourne NULL : chunks écrits, sortie vide sans colonne .chunk_vide", length(list.files(d3)) == 3 && nrow(r3) == 0 && !".chunk_vide" %in% names(r3))
+d4 <- file.path(tempdir(), "chunks4"); unlink(d4, recursive = TRUE)
+r4 <- pmap_chunks(df_in, f_test, chunk_size = 5, dossier = d4, prefixe = "g", seed_base = 100, garder_chunks = FALSE, ecrire = ecrire_t, lire = lire_t, ext = ext_t, verbose = FALSE)
+ok("garder_chunks = FALSE : chunks supprimés, résultat identique", length(list.files(d4)) == 0 && identical(r4, r1))
+ok("df vide -> tibble vide", nrow(pmap_chunks(df_in[0, ], f_test, 5, file.path(tempdir(), "chunks5"), "v", 1, ecrire = ecrire_t, lire = lire_t, ext = ext_t, verbose = FALSE)) == 0)
+
+cat("\n# sélection longs\n")
+cat_fx <- tibble::tibble(diag2 = rep(c("J449", "I500", "K802"), c(10, 4, 2)),
+                         type_unite = c(rep("HC", 6), rep("SC", 3), "GERIATRIE", rep("HC", 3), "UHCD", "HC", "HC"),
+                         poids = c(50, 40, 30, 20, 15, 12, 11, 11, 11, 11, 20, 20, 20, 20, 30, 30),
+                         mode_hospit = "HC", diagnostic_associes = "I10 E785")
+ok("repartir_equitable : plus forts restes, priorité", identical(repartir_equitable(7L, c("a", "b", "c"), priorite = c(1, 3, 2)), c(a = 2L, b = 3L, c = 2L)))
+ok("repartir_equitable : sans priorité -> ordre alphabétique", identical(repartir_equitable(4L, c("z", "y", "x")), c(z = 1L, y = 1L, x = 2L)))
+set.seed(11)
+sq <- selection_quota_dp(cat_fx, budget = 30, quota_min_par_unite = 5L)
+ok("quota_dp : X = ceiling(30/3) = 10, nb_dp = 3", sq$quota_par_dp == 10L && sq$nb_dp == 3L)
+cnt <- table(sq$selection$diag2)
+ok("quota exact par diag2 (10 chacun, total 30)", all(cnt == 10) && nrow(sq$selection) == 30)
+sel_j <- sq$selection |> dplyr::filter(diag2 == "J449")
+ok("J449 : 3 types × 5 >= 10 -> répartition équitable 4/3/3, plus fort poids (HC) servi en premier",
+   { t <- table(sel_j$type_unite); t[["HC"]] == 4 && t[["SC"]] == 3 && t[["GERIATRIE"]] == 3 && all(grepl("^plancher_", sel_j$origine)) })
+sel_i <- sq$selection |> dplyr::filter(diag2 == "I500")
+ok("I500 : 2 types × 5 < 10 -> plancher 5 par type (dont UHCD, 1 seule ligne, avec remise) + 0 libre",
+   { t <- table(sel_i$type_unite); t[["UHCD"]] == 5 && t[["HC"]] == 5 && !"libre" %in% sel_i$origine })
+sel_k <- sq$selection |> dplyr::filter(diag2 == "K802")
+ok("K802 : 1 type × 5 < 10 -> 5 plancher + 5 libre, avec remise sur 2 lignes",
+   sum(sel_k$origine == "plancher_HC") == 5 && sum(sel_k$origine == "libre") == 5 && nrow(sel_k) == 10)
+ok("colonne id_selection unique", identical(sq$selection$id_selection, 1:30))
+ok("plancher : type absent du catalogue du DP jamais sélectionné", !any(sel_k$type_unite != "HC"))
+set.seed(11); sq2 <- selection_quota_dp(cat_fx, 30, 5L)
+ok("déterminisme de la sélection sous seed", identical(sq$selection, sq2$selection))
+ok("effectifs_selection : total par DP = quota", all(effectifs_selection(sq$selection)$total == 10))
+sc <- selection_catalogue_complet(cat_fx, budget = 40)
+ok("catalogue_complet : NB_VARIANTES = ceiling(40/16) = 3, volume = 48", sc$nb_variantes == 3L && sc$volume_attendu == 48 && sc$nrow == 16)
+ok("catalogue_complet : budget < nrow -> 1 variante", selection_catalogue_complet(cat_fx, 5)$nb_variantes == 1L)
+
+cat("\n# résolution des besoins\n")
+refs_all <- NOMS_REFS
+plan0 <- resoudre_besoins(c("CHR/U", "CH"), 17:19, 26L, character(0), character(0), FALSE, refs_all, REFS_CHRONIQUES)
+ok("rien de présent : 6 itérations, 9 refs, années 17,18,19,26, prep_das_chronique",
+   sum(plan0$iterations$a_faire) == 6 && all(plan0$refs$a_faire) && identical(plan0$annees_a_preparer, c(17:19, 26L)) && plan0$prep_das_chronique && !plan0$rien_a_faire)
+ok("ordre des itérations = types × années", identical(plan0$iterations$etbs, rep(c("CHR/U", "CH"), each = 3)) && identical(plan0$iterations$fichier[1], "catalogue_partiel_CHRU_17.parquet"))
+plan1 <- resoudre_besoins(c("CHR/U", "CH"), 17:19, 26L,
+                          fichiers_partiels = nom_partiel(rep(c("CHR/U", "CH"), each = 3), rep(17:19, 2))[-4],
+                          fichiers_exports = nom_ref(refs_all), FALSE, refs_all, REFS_CHRONIQUES)
+ok("un seul partiel manquant (CH,17), refs présentes : 1 itération, années = 17, pas de prep_das_chronique",
+   sum(plan1$iterations$a_faire) == 1 && plan1$iterations$an[plan1$iterations$a_faire] == 17 && !any(plan1$refs$a_faire) &&
+     identical(plan1$annees_a_preparer, 17L) && !plan1$prep_das_chronique && !plan1$rien_a_faire)
+plan2 <- resoudre_besoins(c("CHR/U", "CH"), 17:19, 26L, nom_partiel(rep(c("CHR/U", "CH"), each = 3), rep(17:19, 2)), nom_ref(refs_all), FALSE, refs_all, REFS_CHRONIQUES)
+ok("tout présent : rien à faire, aucune année", plan2$rien_a_faire && length(plan2$annees_a_preparer) == 0)
+plan3 <- resoudre_besoins(c("CHR/U", "CH"), 17:19, 26L, nom_partiel(rep(c("CHR/U", "CH"), each = 3), rep(17:19, 2)), nom_ref(refs_all)[-2], FALSE, refs_all, REFS_CHRONIQUES)
+ok("seule ref_das_chronique manque : année AN_REF, prep_das_chronique", identical(plan3$annees_a_preparer, 26L) && plan3$prep_das_chronique && sum(plan3$refs$a_faire) == 1)
+plan4 <- resoudre_besoins(c("CHR/U", "CH"), 17:19, 26L, nom_partiel(rep(c("CHR/U", "CH"), each = 3), rep(17:19, 2)), nom_ref(refs_all)[-1], FALSE, refs_all, REFS_CHRONIQUES)
+ok("seule ref_das_aigu manque : année AN_REF, pas de prep_das_chronique", identical(plan4$annees_a_preparer, 26L) && !plan4$prep_das_chronique)
+plan5 <- resoudre_besoins(c("CHR/U", "CH"), 17:19, 26L, nom_partiel(rep(c("CHR/U", "CH"), each = 3), rep(17:19, 2)), nom_ref(refs_all), TRUE, refs_all, REFS_CHRONIQUES)
+ok("FORCER_REFS : toutes les refs à faire, année AN_REF", all(plan5$refs$a_faire) && identical(plan5$annees_a_preparer, 26L) && plan5$prep_das_chronique)
+ok("chemins complets acceptés (basename)", !any(resoudre_besoins("CH", 17L, 26L, "/x/y/catalogue_partiel_CH_17.parquet", file.path("/z", nom_ref(refs_all)), FALSE, refs_all, REFS_CHRONIQUES)$iterations$a_faire))
+ok("imprimer_plan renvoie le plan", identical(utils::capture.output(p <- imprimer_plan(plan1)) |> length() > 0, TRUE) && identical(p, plan1))
+
+cat("\n# partiels : méta et apports\n")
+mc <- meta_partiels_courant(2L, 25L, 3:100, PIVOTS_LONGS, "v8-test")
+ok("meta courant", mc$K_GRAINE_LONGS == 2L && identical(mc$DUREE_LONGS, c(3L, 100L)))
+rt <- yaml::yaml.load(yaml::as.yaml(mc))
+ok("aller-retour yaml compatible", is.null(verifier_partiels_meta(rt, mc)$erreur) && length(verifier_partiels_meta(rt, mc)$avertissements) == 0)
+ok("K différent -> erreur", grepl("K_GRAINE_LONGS", verifier_partiels_meta(rt, meta_partiels_courant(3L, 25L, 3:100, PIVOTS_LONGS, "v8-test"))$erreur))
+ok("NBDA_MAX différent -> avertissement seulement", { v <- verifier_partiels_meta(rt, meta_partiels_courant(2L, 20L, 3:100, PIVOTS_LONGS, "v8-test")); is.null(v$erreur) && length(v$avertissements) == 1 })
+ok("pas de méta existante -> rien", is.null(verifier_partiels_meta(NULL, mc)$erreur))
+ap <- apports_iteration("CH", 17L, "calculé", tibble::tibble(diag2 = c("A", "B")), tibble::tibble(diag2 = c("A", "B", "C")), "C")
+ok("apports_iteration", ap$nb_lignes_partiel == 2 && ap$nb_lignes_cumul == 3 && ap$nb_diag2_cumul == 3 && ap$nb_diag2_nouveaux == 2)
+ok("verifier_meta_tirage : identique -> NULL ; différent -> message", is.null(verifier_meta_tirage(list(a = 1L, b = "x"), list(a = 1L, b = "x"), c("a", "b"))) &&
+     grepl("b", verifier_meta_tirage(list(a = 1L, b = "x"), list(a = 1L, b = "y"), c("a", "b"))))
+
+cat("\n# tirage : pénalisation et livrables\n")
+pen <- penaliser_comp_diabete(comp_diabete_fx, CAGE_PED, CAGE_AGES, 0.2, 0.5)
+ok("penaliser_comp_diabete : .9 = 20 % du total chez [60-70[, 50 % chez [30-40[, autres inchangés",
+   pen$nb[pen$cage == "[60-70[" & pen$diabete == "E11i" & pen$comp == "9"] == 0.2 * 38 &&
+     pen$nb[pen$cage == "[30-40[" & pen$comp == "9"] == 0.5 * 36 && all(pen$nb[pen$comp != "9"] == comp_diabete_fx$nb[comp_diabete_fx$comp != "9"]))
+lib <- libelles_cim(tibble::tibble(code = c("J44.9", "I10", "J44.9"), libelle = c("BPCO sp", "HTA", "doublon")))
+ok("libelles_cim : codes sans point, premier libellé conservé", identical(lib, c(J449 = "BPCO sp", I10 = "HTA")))
+df_rev <- tibble::tibble(ghm2 = c(rep("04M053", 6), rep("05M093", 2), "06C041"), sexe = "1", age = 70, cage = "[60-70[", duree = 5,
+                         diag2 = "J449", diagnostic_associes = c(rep("I10 E785", 8), "N189"), graine = c(rep("I10", 8), ""), hta = "I10",
+                         cmd = substr(c(rep("04M053", 6), rep("05M093", 2), "06C041"), 1, 2))
+set.seed(12); e <- echantillonner_revue(df_rev, 5)
+ok("echantillonner_revue : 5 lignes, chaque CMD représentée (round-robin)", nrow(e) == 5 && all(c("04", "05", "06") %in% e$cmd))
+fr <- formater_revue(e, "longs", lib)
+ok("formater_revue : libellés et marque [G] sur la graine", all(grepl("I10 \\(HTA\\) \\[G\\]", fr$das_libelles[fr$dp == "J449" & fr$nb_das == 2])) && all(fr$dp_libelle == "BPCO sp") && all(fr$branche == "longs"))
+ok("formater_revue : branche courts (hta_scenario, sans graine) -> colonne hta reprise, pas de [G]",
+   { fc <- formater_revue(df_rev |> dplyr::select(-graine, -hta) |> dplyr::mutate(hta_scenario = "I10"), "courts", lib)
+     nrow(fc) == nrow(df_rev) && all(fc$hta == "I10") && !any(grepl("\\[G\\]", fc$das_libelles)) })
+ok("formater_revue : code inconnu -> ?", any(grepl("N189 \\(\\?\\)", formater_revue(df_rev, "longs", lib)$das_libelles)))
+td <- top_das_par_cmd(df_rev, 1)
+ok("top_das_par_cmd : 1 par CMD, rang 1", nrow(td) == 3 && all(td$rang == 1) && td$das[td$cmd == "04"] == "E785")
 
 cat("\nTOUS LES TESTS SONT VERTS :", n_ok, "assertions\n")
