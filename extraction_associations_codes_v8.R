@@ -540,6 +540,25 @@ if(plan$prep_das_chronique) prep_das_chronique(AN_REF)
 # 5b. Tables de référence : chacune SAUTÉE si son parquet existe (sauf FORCER_REFS).
 #     pivots_courts / v_admin_* : chaînes v7.1.2 l.219-221, l.232-234 / v7.2 l.551-553
 #     (blocs B6, B7, B10), déplacées telles quelles dans des fabriques sans argument.
+#     Conversion E669 -> E660 (CONVERSION_E669) : post-collect, dans les fabriques, JAMAIS dans
+#     les chaînes. Ordre impératif : conversion -> ré-agrégation -> seuil. La distribution E660x
+#     de référence est calculée sur les comptes BRUTS de ref_das_chronique (avant sa conversion)
+#     et exportée (distribution_e660.parquet) pour les autres refs et le catalogue.
+CACHE_E669 <- new.env()
+charger_dist_e660 <- function(){
+  f <- file.path(EXPORTS_DIR, "distribution_e660.parquet")
+  if(!file.exists(f)) stop("distribution_e660.parquet absent de " %+% EXPORTS_DIR %+% " (calculé avec ref_das_chronique ; FORCER_REFS <- TRUE)")
+  arrow::read_parquet(f)
+}
+ref_das_chronique_brute <- function(){
+  if(!exists("brute", envir = CACHE_E669)) assign("brute", ref_das_chronique(AN_REF), envir = CACHE_E669)
+  get("brute", envir = CACHE_E669)
+}
+codes_imprecis_extraction <- function(){
+  codes <- codes_imprecis_de_cim(cim, MOTIF_IMPRECIS)
+  if(CONVERSION_E669) codes <- codes[!grepl("^E669", codes)]   # E669 traité en amont par la conversion
+  codes
+}
 fabrique_pivots_courts <- function(){
   df_cases_courts <- pRatihque::atihble(conn, 'prep_data_' %+% AN_REF ) |>
     dplyr::filter(duree%in%DUREE_COURTS) |> dplyr::summarise(nb=dplyr::n(),.by=dplyr::all_of(PIVOTS_COURTS)) |> dplyr::filter(nb>SEUIL_PIVOT) |> 
@@ -559,15 +578,67 @@ fabrique_v_admin_longs <- function(){
   df_v_admin_longs
 }
 FABRIQUES_REFS <- list(
-  ref_das_aigu                      = function() ref_das_aigu(AN_REF),
-  ref_das_chronique                 = function() ref_das_chronique(AN_REF),
-  ref_nb_chroniques                 = function() ref_nb_chroniques(AN_REF),
-  ref_comp_diabete                  = function() ref_comp_diabete(AN_REF),   # effectifs bruts ; pénalisation .9 côté tirage
-  pivots_courts                     = fabrique_pivots_courts,
-  v_admin_courts                    = fabrique_v_admin_courts,
-  v_admin_longs                     = fabrique_v_admin_longs,
-  referentiel_substitution_imprecis = function() ref_substitution_imprecis(AN_REF, codes_imprecis_de_cim(cim, MOTIF_IMPRECIS)),
-  referentiel_paires_chroniques     = function() ref_paires_chroniques(AN_REF)
+  ref_das_chronique = function(){
+    brute <- ref_das_chronique_brute()
+    if(!CONVERSION_E669) return(brute)
+    dist <- distribution_e660(brute, "das", "nb_das")
+    brute |>
+      convertir_e669_comptes("diag2", c("das", "sexe", "cage", "niveau", "type_liste", "caract"), "nb_das", dist, BARE_E669_DEFAUT) |>
+      convertir_e669_comptes("das", c("diag2", "sexe", "cage", "niveau", "type_liste", "caract"), "nb_das", dist, BARE_E669_DEFAUT)
+  },
+  distribution_e660 = function() distribution_e660(ref_das_chronique_brute(), "das", "nb_das"),
+  ref_das_aigu = function(){
+    df <- ref_das_aigu(AN_REF)
+    if(!CONVERSION_E669) return(df)
+    dist <- charger_dist_e660()
+    df |>
+      convertir_e669_comptes("diag2", c("mode_hospit", "sexe", "cage", "racine", "ghm2", "das"), "n", dist, BARE_E669_DEFAUT) |>
+      convertir_e669_comptes("das", c("mode_hospit", "sexe", "cage", "racine", "ghm2", "diag2"), "n", dist, BARE_E669_DEFAUT)
+  },
+  ref_nb_chroniques = function() ref_nb_chroniques(AN_REF),                 # aucun code : intact
+  ref_comp_diabete  = function() ref_comp_diabete(AN_REF),                  # effectifs bruts ; pénalisation .9 côté tirage
+  pivots_courts = function(){
+    # Le seuil nb > SEUIL_PIVOT est appliqué EN BASE par la chaîne v7.1.2 (non modifiée) :
+    # conversion + ré-agrégation sur le collecté, sans re-seuil (perte conservatrice : classes
+    # E669 sous le seuil individuellement ne sont jamais vues ; cf. MODIFICATIONS_V8.md §12).
+    df <- fabrique_pivots_courts()
+    if(!CONVERSION_E669) return(df)
+    convertir_e669_comptes(df, "diag2", setdiff(PIVOTS_COURTS, "diag2"), "nb", charger_dist_e660(), BARE_E669_DEFAUT)
+  },
+  v_admin_courts = function(){
+    df <- fabrique_v_admin_courts()
+    if(!CONVERSION_E669) return(df)
+    convertir_e669_distinct(df, "diag2", charger_dist_e660(), BARE_E669_DEFAUT)
+  },
+  v_admin_longs = function(){
+    df <- fabrique_v_admin_longs()
+    if(!CONVERSION_E669) return(df)
+    convertir_e669_distinct(df, "diag2", charger_dist_e660(), BARE_E669_DEFAUT)
+  },
+  referentiel_substitution_imprecis = function(){
+    codes_imprecis <- codes_imprecis_extraction()
+    df <- ref_substitution_imprecis(AN_REF, codes_imprecis)
+    if(!CONVERSION_E669) return(df)
+    # niveau conservé comme attribut du code brut (strate) ; imprecis recalculé après conversion
+    df |>
+      dplyr::select(-imprecis) |>
+      convertir_e669_comptes("code", c("cat", "cage", "sexe", "niveau"), "nb", charger_dist_e660(), BARE_E669_DEFAUT) |>
+      dplyr::mutate(imprecis = code %in% codes_imprecis) |>
+      dplyr::arrange(cat, code, cage, sexe)
+  },
+  referentiel_paires_chroniques = function(){
+    df <- ref_paires_chroniques(AN_REF)
+    if(!CONVERSION_E669) return(df)
+    dist <- charger_dist_e660()
+    df |>
+      convertir_e669_comptes("das_a", c("das_b", "cage", "sexe"), "nb", dist, BARE_E669_DEFAUT) |>
+      convertir_e669_comptes("das_b", c("das_a", "cage", "sexe"), "nb", dist, BARE_E669_DEFAUT) |>
+      dplyr::mutate(a = pmin(das_a, das_b), b = pmax(das_a, das_b)) |>
+      dplyr::filter(a != b) |>
+      dplyr::select(-das_a, -das_b) |> dplyr::rename(das_a = a, das_b = b) |>
+      reagreger(c("das_a", "das_b", "cage", "sexe"), "nb") |>
+      dplyr::filter(nb >= SEUIL_REF_PAIRES)
+  }
 )
 stopifnot(setequal(names(FABRIQUES_REFS), NOMS_REFS))
 for(i in seq_len(nrow(plan$refs))){
@@ -618,6 +689,25 @@ cat("== Catalogue longs (partiels) ==\n")
 df_prep_scenarios <- construire_catalogue_longs(plan)
 cat("- Nombre de lignes catalogue brut (df_prep_scenarios) = ", nrow(df_prep_scenarios), "\n", sep = "")
 
+# 5d. Conversion E669 -> E660 du catalogue agrégé (partiels relus en codes BRUTS) : diag2 puis
+#     graines, ré-agrégation sum(n), PUIS seuil (section 6). Mesure d'impact avant/après.
+impact_e669 <- NULL
+if(CONVERSION_E669){
+  dist_e660 <- charger_dist_e660()
+  avant <- df_prep_scenarios
+  df_prep_scenarios <- df_prep_scenarios |>
+    convertir_e669_comptes("diag2", c(setdiff(PIVOTS_LONGS, "diag2"), "diagnostic_associes"), "n", dist_e660, BARE_E669_DEFAUT) |>
+    convertir_e669_combo("diagnostic_associes", PIVOTS_LONGS, "n", dist_e660, BARE_E669_DEFAUT)
+  impact_e669 <- impact_conversion_catalogue(avant, df_prep_scenarios, PIVOTS_LONGS_SEUIL, SEUIL_PIVOT, "n")
+  # niveau CMA : mesurable seulement si ref_das_chronique a été calculée dans cette exécution (comptes bruts en cache)
+  impact_e669$niveau_cma <- if(exists("brute", envir = CACHE_E669)) impact_niveau_cma(get("brute", envir = CACHE_E669), "das", "niveau", "nb_das") else
+    list(effectif_e669 = "non mesuré (ref_das_chronique relue, déjà convertie)", niveau_change = NA, cible_inconnue = NA)
+  impact_e669$e660_resultant <- effectifs_e660(df_prep_scenarios |> dplyr::mutate(n = as.integer(n)), c("diag2", "diagnostic_associes"))
+  rm(avant)
+  cat("- Conversion E669 : ", impact_e669$lignes_avant, " -> ", impact_e669$lignes_apres, " lignes (", impact_e669$lignes_fusionnees,
+      " fusionnées) ; sum(n) ", impact_e669$n_total_avant, " -> ", impact_e669$n_total_apres, "\n", sep = "")
+}
+
 ## ---- 6. Agrégation + seuil + exports ----
 # Seuil de divulgation au niveau des pivots (v7.2 l.526-530 ; §2.2 : nb > SEUIL_PIVOT,
 # le n par combinaison est sommé puis abandonné). Relit UNIQUEMENT les partiels du profil
@@ -636,8 +726,35 @@ meta_catalogue <- c(list(produit = "catalogue_longs_seuil", date = as.character(
                          nb_diag2_distincts = length(unique(df_prep_scenarios_seuil$diag2)),
                          plan_annees_preparees = as.list(plan$annees_a_preparer),
                          plan_iterations_calculees = sum(plan$iterations$a_faire),
-                         plan_refs_calculees = sum(plan$refs$a_faire)),
+                         plan_refs_calculees = sum(plan$refs$a_faire),
+                         conversion_e669_lignes_fusionnees = if(is.null(impact_e669)) NA else impact_e669$lignes_fusionnees,
+                         conversion_e669_profils_entres = if(is.null(impact_e669)) NA else impact_e669$profils_entres),
                     valeurs_effectives_config())
 yaml::write_yaml(meta_catalogue, file.path(EXPORTS_DIR, "catalogue_longs_seuil_meta.yaml"))
+
+# Rapport d'extraction : plan, apports, mesure d'impact de la conversion E669 (§6 du chantier)
+fmt_df <- function(d) if(is.null(d) || nrow(d) == 0) "   (vide)" else "   " %+% utils::capture.output(print(as.data.frame(d), row.names = FALSE))
+lignes_rx <- c("RAPPORT D'EXTRACTION — extraction_associations_codes_v8.R — " %+% DATE_TAG %+% " — PROFIL = " %+% PROFIL,
+               "", "== 1. Plan ==", utils::capture.output(imprimer_plan(plan)),
+               "", "== 2. Catalogue ==",
+               sprintf("catalogue éligible : %d lignes ; %d diag2 distincts ; SEUIL_PIVOT = %s", nrow(df_prep_scenarios_seuil), length(unique(df_prep_scenarios_seuil$diag2)), SEUIL_PIVOT),
+               "", "== 3. Conversion E669 -> E660 (CONVERSION_E669 = " %+% CONVERSION_E669 %+% ") ==")
+if(CONVERSION_E669){
+  lignes_rx <- c(lignes_rx,
+    "-- distribution E660x de référence (comptes bruts de ref_das_chronique, AN_REF) :", fmt_df(dist_e660),
+    "-- catalogue agrégé (avant seuil) :",
+    sprintf("   effectif E669 converti : diag2 suffixé = %s ; diag2 nu = %s ; graine suffixé = %s ; graine nu = %s",
+            impact_e669$e669_diag2_suffixe, impact_e669$e669_diag2_nu, impact_e669$e669_graine_suffixe, impact_e669$e669_graine_nu),
+    sprintf("   sum(n) avant = %s ; après = %s (conservé : %s)", impact_e669$n_total_avant, impact_e669$n_total_apres, impact_e669$n_total_avant == impact_e669$n_total_apres),
+    sprintf("   lignes avant = %d ; après = %d ; fusionnées = %d", impact_e669$lignes_avant, impact_e669$lignes_apres, impact_e669$lignes_fusionnees),
+    sprintf("   profils (pivots) > seuil : avant = %d ; après = %d ; ENTRÉS par fusion = %d ; sortis = %d  [écart de volumétrie assumé par doctrine]",
+            impact_e669$profils_seuil_avant, impact_e669$profils_seuil_apres, impact_e669$profils_entres, impact_e669$profils_sortis),
+    sprintf("   niveau CMA (ref_das_chronique brute) : effectif E669x = %s ; conversions changeant le niveau = %s ; cible E660x non observée = %s",
+            impact_e669$niveau_cma$effectif_e669, impact_e669$niveau_cma$niveau_change, impact_e669$niveau_cma$cible_inconnue),
+    "-- distribution E660x résultante dans le catalogue (diag2 + graines, en lignes) :", fmt_df(impact_e669$e660_resultant))
+}
+FICHIER_RAPPORT_EXTRACTION <- file.path(EXPORTS_DIR, "rapport_extraction_v8_" %+% DATE_TAG %+% ".txt")
+writeLines(lignes_rx, FICHIER_RAPPORT_EXTRACTION)
+cat("Rapport d'extraction : ", FICHIER_RAPPORT_EXTRACTION, "\n", sep = "")
 cat("Exports écrits dans ", EXPORTS_DIR, " : catalogue_longs_seuil.parquet (+ meta.yaml), diagnostic_apports.csv, refs.\n", sep = "")
 cat("Extraction terminée. Étape suivante : tirage_scenarios_v8.R (aucune connexion base).\n")

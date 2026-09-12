@@ -56,7 +56,10 @@ REFS <- construire_refs(comp_diabete = df_res_epi_comp_diabete, codes_diab = cod
                         code_did = code_did, code_dnid_ins = code_dnid_ins, code_dnid = code_dnid,
                         neo_codes = neo_codes_diabete, paires_exclues = PAIRES_EXCLUES)
 ref_chro       <- prep_ref_chronique(df_das_chronique)
+# Conversion E669 : aucune ici (entrées déjà converties par l'extraction) ; seul contrôle en sortie.
+CONVERSION_E669_ENTREE <- isTRUE(meta_catalogue$CONVERSION_E669)
 codes_imprecis <- codes_imprecis_de_cim(cim, MOTIF_IMPRECIS)
+if(CONVERSION_E669_ENTREE) codes_imprecis <- codes_imprecis[!grepl("^E669", codes_imprecis)]
 lib_cim        <- libelles_cim(cim)
 
 chemin_export <- function(nom) file.path(EXPORTS_DIR, nom %+% "_v8_" %+% DATE_TAG %+% ".parquet")
@@ -88,7 +91,9 @@ cat("- Séjours courts : ", nrow(df_scenarios), " lignes -> ", chemin_export("sc
 rapport$courts <- list(n = nrow(df_scenarios), pivots = nrow(dplyr::distinct(df_scenarios[, PIVOTS_COURTS])),
                        distribution = distribution_nb_das(df_scenarios), top_das = top_das_par_cmd(df_scenarios, 30),
                        taux_imprecis = taux_imprecis(df_scenarios, codes_imprecis),
-                       controles = controler_scenarios(df_scenarios, hta_autres, SEUIL_PIVOT))
+                       controles = controler_scenarios(df_scenarios, hta_autres, SEUIL_PIVOT),
+                       e669_residuels = compter_e669(df_scenarios, c("diag2", "diagnostic_associes")),
+                       e660 = effectifs_e660(df_scenarios, c("diag2", "diagnostic_associes")))
 set.seed(SEED + 2e6)
 revue$courts <- formater_revue(echantillonner_revue(df_scenarios |> dplyr::mutate(cmd = substr(ghm2, 1, 2)), 25), "courts", lib_cim)
 rm(df_scenarios); gc()
@@ -167,7 +172,9 @@ cat("- Séjours longs : ", nrow(df_scenarios), " lignes -> ", chemin_export("sce
 rapport$longs <- list(n = nrow(df_scenarios), pivots = nrow(dplyr::distinct(df_scenarios[, PIVOTS_LONGS])),
                       distribution = distribution_nb_das(df_scenarios), top_das = top_das_par_cmd(df_scenarios, 30),
                       taux_imprecis = taux_imprecis(df_scenarios, codes_imprecis),
-                      controles = controler_scenarios(df_scenarios, hta_autres, SEUIL_PIVOT))
+                      controles = controler_scenarios(df_scenarios, hta_autres, SEUIL_PIVOT),
+                      e669_residuels = compter_e669(df_scenarios, c("diag2", "graine", "diagnostic_associes")),
+                      e660 = effectifs_e660(df_scenarios, c("diag2", "diagnostic_associes")))
 set.seed(SEED + 5e6)
 revue$longs <- formater_revue(echantillonner_revue(df_scenarios |> dplyr::mutate(cmd = substr(ghm2, 1, 2)), 25), "longs", lib_cim)
 rm(df_scenarios); gc()
@@ -214,6 +221,11 @@ for(b in c("courts", "longs")){
                               b, format(cc$doublons_categorie), format(cc$diabete_hors_flag), format(cc$i10_avec_hta_autres), format(cc$poids_sous_seuil)))
   anomalies <- anomalies + sum(unlist(cc[c("doublons_categorie", "diabete_hors_flag", "i10_avec_hta_autres", "poids_sous_seuil")]), na.rm = TRUE)
 }
+lignes <- c(lignes, "-- conversion E669 (meta.yaml CONVERSION_E669 = " %+% CONVERSION_E669_ENTREE %+% ") : ^E669 résiduels attendus = 0",
+            sprintf("sejours_courts  e669_residuels = %d%s", rapport$courts$e669_residuels, if(CONVERSION_E669_ENTREE && rapport$courts$e669_residuels > 0) "  <- ANOMALIE" else ""),
+            sprintf("sejours_longs   e669_residuels = %d%s", rapport$longs$e669_residuels, if(CONVERSION_E669_ENTREE && rapport$longs$e669_residuels > 0) "  <- ANOMALIE" else ""))
+if(CONVERSION_E669_ENTREE) anomalies <- anomalies + rapport$courts$e669_residuels + rapport$longs$e669_residuels
+lignes <- c(lignes, "-- effectifs E660x par classe (diag2 + DAS) :", "   courts :", fmt_df(rapport$courts$e660), "   longs :", fmt_df(rapport$longs$e660))
 lignes <- c(lignes, "TOTAL anomalies = " %+% anomalies, "",
             "Livrables : echantillon_revue.csv (" %+% nrow(df_revue) %+% " scénarios), top30_das_par_cmd.csv, meta_tirage.yaml" %+%
               if(MODE_SELECTION == "quota_dp") ", selection_longs.parquet, selection_longs_effectifs.csv" else "")

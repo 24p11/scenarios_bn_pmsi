@@ -330,7 +330,7 @@ ok("catalogue_complet : budget < nrow -> 1 variante", selection_catalogue_comple
 cat("\n# résolution des besoins\n")
 refs_all <- NOMS_REFS
 plan0 <- resoudre_besoins(c("CHR/U", "CH"), 17:19, 26L, character(0), character(0), FALSE, refs_all, REFS_CHRONIQUES)
-ok("rien de présent : 6 itérations, 9 refs, années 17,18,19,26, prep_das_chronique",
+ok("rien de présent : 6 itérations, 10 refs, années 17,18,19,26, prep_das_chronique",
    sum(plan0$iterations$a_faire) == 6 && all(plan0$refs$a_faire) && identical(plan0$annees_a_preparer, c(17:19, 26L)) && plan0$prep_das_chronique && !plan0$rien_a_faire)
 ok("ordre des itérations = types × années", identical(plan0$iterations$etbs, rep(c("CHR/U", "CH"), each = 3)) && identical(plan0$iterations$fichier[1], "catalogue_partiel_CHRU_17.parquet"))
 plan1 <- resoudre_besoins(c("CHR/U", "CH"), 17:19, 26L,
@@ -341,12 +341,13 @@ ok("un seul partiel manquant (CH,17), refs présentes : 1 itération, années = 
      identical(plan1$annees_a_preparer, 17L) && !plan1$prep_das_chronique && !plan1$rien_a_faire)
 plan2 <- resoudre_besoins(c("CHR/U", "CH"), 17:19, 26L, nom_partiel(rep(c("CHR/U", "CH"), each = 3), rep(17:19, 2)), nom_ref(refs_all), FALSE, refs_all, REFS_CHRONIQUES)
 ok("tout présent : rien à faire, aucune année", plan2$rien_a_faire && length(plan2$annees_a_preparer) == 0)
-plan3 <- resoudre_besoins(c("CHR/U", "CH"), 17:19, 26L, nom_partiel(rep(c("CHR/U", "CH"), each = 3), rep(17:19, 2)), nom_ref(refs_all)[-2], FALSE, refs_all, REFS_CHRONIQUES)
+plan3 <- resoudre_besoins(c("CHR/U", "CH"), 17:19, 26L, nom_partiel(rep(c("CHR/U", "CH"), each = 3), rep(17:19, 2)), nom_ref(setdiff(refs_all, "ref_das_chronique")), FALSE, refs_all, REFS_CHRONIQUES)
 ok("seule ref_das_chronique manque : année AN_REF, prep_das_chronique", identical(plan3$annees_a_preparer, 26L) && plan3$prep_das_chronique && sum(plan3$refs$a_faire) == 1)
-plan4 <- resoudre_besoins(c("CHR/U", "CH"), 17:19, 26L, nom_partiel(rep(c("CHR/U", "CH"), each = 3), rep(17:19, 2)), nom_ref(refs_all)[-1], FALSE, refs_all, REFS_CHRONIQUES)
+plan4 <- resoudre_besoins(c("CHR/U", "CH"), 17:19, 26L, nom_partiel(rep(c("CHR/U", "CH"), each = 3), rep(17:19, 2)), nom_ref(setdiff(refs_all, "ref_das_aigu")), FALSE, refs_all, REFS_CHRONIQUES)
 ok("seule ref_das_aigu manque : année AN_REF, pas de prep_das_chronique", identical(plan4$annees_a_preparer, 26L) && !plan4$prep_das_chronique)
 plan5 <- resoudre_besoins(c("CHR/U", "CH"), 17:19, 26L, nom_partiel(rep(c("CHR/U", "CH"), each = 3), rep(17:19, 2)), nom_ref(refs_all), TRUE, refs_all, REFS_CHRONIQUES)
 ok("FORCER_REFS : toutes les refs à faire, année AN_REF", all(plan5$refs$a_faire) && identical(plan5$annees_a_preparer, 26L) && plan5$prep_das_chronique)
+ok("ordre des refs : ref_das_chronique puis distribution_e660 avant toute ref convertie", identical(plan0$refs$nom[1:2], c("ref_das_chronique", "distribution_e660")) && "distribution_e660" %in% REFS_CHRONIQUES)
 ok("chemins complets acceptés (basename)", !any(resoudre_besoins("CH", 17L, 26L, "/x/y/catalogue_partiel_CH_17.parquet", file.path("/z", nom_ref(refs_all)), FALSE, refs_all, REFS_CHRONIQUES)$iterations$a_faire))
 ok("imprimer_plan renvoie le plan", identical(utils::capture.output(p <- imprimer_plan(plan1)) |> length() > 0, TRUE) && identical(p, plan1))
 
@@ -388,5 +389,69 @@ ok("formater_revue : branche courts (hta_scenario, sans graine) -> colonne hta r
 ok("formater_revue : code inconnu -> ?", any(grepl("N189 \\(\\?\\)", formater_revue(df_rev, "longs", lib)$das_libelles)))
 td <- top_das_par_cmd(df_rev, 1)
 ok("top_das_par_cmd : 1 par CMD, rang 1", nrow(td) == 3 && all(td$rang == 1) && td$das[td$cmd == "04"] == "E785")
+
+
+# ============================================================ conversion E669 ==
+cat("\n# convertir_e669\n")
+ok("suffixes conservés : E6690 -> E6600, E6692 -> E6602, E66920 -> E66020, E6691 -> E6601",
+   identical(convertir_e669(c("E6690", "E6692", "E66920", "E6691")), c("E6600", "E6602", "E66020", "E6601")))
+ok("E669 nu inchangé à ce niveau", convertir_e669("E669") == "E669")
+ok("NA-sûre", is.na(convertir_e669(NA)) && identical(convertir_e669(c(NA, "E6690")), c(NA, "E6600")))
+ok("E661/E662/E668 et E660 intacts", identical(convertir_e669(c("E6610", "E6620", "E6680", "E6600", "E66")), c("E6610", "E6620", "E6680", "E6600", "E66")))
+ok("codes non E66 intacts, vecteur vide", identical(convertir_e669(c("I10", "J449", "K6690")), c("I10", "J449", "K6690")) && length(convertir_e669(character(0))) == 0)
+ok("repartir_proportionnel : sum conservée, plus forts restes", identical(repartir_proportionnel(10, c(0.5, 0.3, 0.2)), c(5, 3, 2)) &&
+     identical(repartir_proportionnel(7, c(1, 1, 1)), c(3, 2, 2)) && sum(repartir_proportionnel(11, c(0.45, 0.35, 0.2))) == 11 && length(repartir_proportionnel(3, numeric(0))) == 0)
+
+cat("\n# distribution_e660 / classes_e660\n")
+ref_e660 <- tibble::tibble(diag2 = "J449", das = c("E6600", "E6601", "E6602", "E6600", "E6602", "E6690", "I10"),
+                           sexe = c("1", "1", "1", "2", "2", "1", "1"), cage = c(rep("[60-70[", 5), "[60-70[", "[60-70["),
+                           niveau = "1", type_liste = "Patho_chro", caract = "x", nb_das = c(60, 30, 10, 20, 20, 5, 100))
+dist <- distribution_e660(ref_e660)
+ok("distribution : E660x seulement (E6690 exclu), strates + globale", !any(dist$code == "E6690") && sum(is.na(dist$cage)) == 3 && nrow(dist) == 8)
+ok("parts par strate : (1) 0.6/0.3/0.1 ; (2) 0.5/0.5", { s1 <- dist[!is.na(dist$cage) & dist$sexe == "1", ]; s2 <- dist[!is.na(dist$cage) & dist$sexe == "2", ]
+   identical(round(s1$part[order(s1$code)], 3), c(0.6, 0.3, 0.1)) && identical(round(s2$part[order(s2$code)], 3), c(0.5, 0.5)) })
+ok("part globale : 80/30/30 sur 140", identical(round(dist$part[is.na(dist$cage)][order(dist$code[is.na(dist$cage)])], 4), round(c(80, 30, 30) / 140, 4)))
+ok("cascade : strate connue", identical(classes_e660(dist, "[60-70[", "2")$code, c("E6600", "E6602")))
+ok("cascade : strate inconnue -> globale", identical(classes_e660(dist, "[80-[", "1")$code, c("E6600", "E6601", "E6602")))
+ok("cascade : sans distribution -> défaut", identical(classes_e660(distribution_e660(ref_e660[0, ]), "[60-70[", "1", "0"), tibble::tibble(code = "E6600", part = 1)))
+ok("distribution vide sur table sans E660", nrow(distribution_e660(tibble::tibble(das = "I10", nb_das = 1, cage = "a", sexe = "1"))) == 0)
+
+cat("\n# repartir_e669_nu / convertir_e669_comptes\n")
+df_nu <- tibble::tibble(diag2 = "J449", das = c("E669", "E669", "E669", "I10"), sexe = c("1", "2", "1", "1"),
+                        cage = c("[60-70[", "[60-70[", "[80-[", "[60-70["), nb_das = c(100, 7, 10, 3))
+r <- repartir_e669_nu(df_nu, "das", c("diag2", "sexe", "cage"), "nb_das", dist)
+ok("proportionnalité exacte strate (1) : 100 -> 60/30/10", { x <- r[r$sexe == "1" & r$cage == "[60-70[" & grepl("^E660", r$das), ]; identical(x$nb_das[order(x$das)], c(60, 30, 10)) })
+ok("plus forts restes strate (2) : 7 -> 4/3, sum conservée", { x <- r[r$sexe == "2", ]; identical(x$nb_das[order(x$das)], c(4, 3)) })
+ok("cascade globale pour strate inconnue : 10 -> 6/2/2 (80/30/30 sur 140)", { x <- r[r$cage == "[80-[", ]; identical(x$nb_das[order(x$das)], c(6, 2, 2)) })
+ok("sum(n) conservée globalement, ligne I10 intacte, schéma préservé", sum(r$nb_das) == sum(df_nu$nb_das) && any(r$das == "I10" & r$nb_das == 3) && identical(names(r), names(df_nu)))
+ok("cascade défaut sans distribution", { x <- repartir_e669_nu(df_nu[1, ], "das", c("diag2", "sexe", "cage"), "nb_das", dist[0, ], "0"); x$das == "E6600" && x$nb_das == 100 })
+ok("sans E669 nu : df inchangé", identical(repartir_e669_nu(df_nu[4, ], "das", c("diag2", "sexe", "cage"), "nb_das", dist), df_nu[4, ]))
+df_c <- tibble::tibble(diag2 = c("J449", "J449", "J449", "E6690", "E669"), das = c("E6690", "E6600", "E669", "I10", "I10"),
+                       sexe = "1", cage = "[60-70[", nb_das = c(5, 10, 10, 2, 10))
+rc <- convertir_e669_comptes(df_c, "das", c("diag2", "sexe", "cage"), "nb_das", dist)
+ok("comptes : E6690 fusionné avec E6600, nu réparti, ré-agrégation, sum conservée",
+   sum(rc$nb_das) == sum(df_c$nb_das) && rc$nb_das[rc$diag2 == "J449" & rc$das == "E6600"] == 5 + 10 + 6 && !any(grepl("^E669", rc$das)) && identical(names(rc), names(df_c)))
+rc2 <- convertir_e669_comptes(rc, "diag2", c("das", "sexe", "cage"), "nb_das", dist)
+ok("comptes sur diag2 : E6690 -> E6600, E669 nu réparti (10 -> 6/3/1), aucun ^E669 résiduel",
+   !any(grepl("^E669", rc2$diag2)) && sum(rc2$nb_das) == sum(df_c$nb_das) && rc2$nb_das[rc2$diag2 == "E6600" & rc2$das == "I10"] == 2 + 6)
+
+cat("\n# convertir_e669_combo\n")
+df_g <- tibble::tibble(mode_hospit = "HC", sexe = "1", cage = "[60-70[", diag2 = "J449",
+                       diagnostic_associes = c("I10 N189", "E6690 I10", "E6600 I10", "E669 I10", "E6600 E669"), n = c(4, 3, 2, 10, 10))
+rg <- convertir_e669_combo(df_g, "diagnostic_associes", c("mode_hospit", "sexe", "cage", "diag2"), "n", dist)
+ok("combo : tri C et fusion E6690 -> E6600 avec la ligne existante", rg$n[rg$diagnostic_associes == "E6600 I10"] == 3 + 2 + 6)
+ok("combo : E669 nu éclaté en 3 lignes (6/3/1), totaux conservés", sum(rg$n) == sum(df_g$n) && rg$n[rg$diagnostic_associes == "E6601 I10"] == 3 && rg$n[rg$diagnostic_associes == "E6602 I10"] == 1)
+ok("combo : E6600 E669 -> E6600 seul (dédoublonné) 6, E6600 E6601 3, E6600 E6602 1", rg$n[rg$diagnostic_associes == "E6600"] == 6 && rg$n[rg$diagnostic_associes == "E6600 E6601"] == 3 && rg$n[rg$diagnostic_associes == "E6600 E6602"] == 1)
+ok("combo : aucun ^E669, schéma préservé, ligne sans E66 intacte", !any(grepl("E669", rg$diagnostic_associes)) && identical(names(rg), names(df_g)) && rg$n[rg$diagnostic_associes == "I10 N189"] == 4)
+ok("combo sans E669 : ré-agrégation seule", identical(convertir_e669_combo(df_g[1, ], "diagnostic_associes", c("mode_hospit", "sexe", "cage", "diag2"), "n", dist)$n, 4))
+ok("convertir_e669_distinct : nu -> une ligne par classe de la strate, suffixé converti, distinct",
+   { d <- tibble::tibble(sexe = "1", cage = "[60-70[", diag2 = c("E669", "E6690", "E6600", "I10"), mdp = "DP")
+     x <- convertir_e669_distinct(d, "diag2", dist); setequal(x$diag2, c("E6600", "E6601", "E6602", "I10")) && nrow(x) == 4 })
+ok("compter_e669 / effectifs_e660", compter_e669(df_g, c("diag2", "diagnostic_associes")) == 3 && identical(effectifs_e660(rg, "diagnostic_associes")$code, c("E6600", "E6601", "E6602")))
+imp <- impact_conversion_catalogue(df_g, rg, c("mode_hospit", "sexe", "cage", "diag2"), 5, "n")
+ok("impact_conversion_catalogue : totaux, lignes fusionnées, effectifs E669", imp$n_total_avant == imp$n_total_apres && imp$lignes_fusionnees == nrow(df_g) - nrow(rg) &&
+     imp$e669_graine_suffixe == 3 && imp$e669_graine_nu == 20 && imp$e669_diag2_nu == 0)
+ok("impact_niveau_cma : niveau différent compté", { r <- impact_niveau_cma(tibble::tibble(das = c("E6690", "E6600", "E6692"), niveau = c("2", "1", "2"), nb_das = c(5, 1, 3)))
+     r$effectif_e669 == 8 && r$niveau_change == 5 && r$cible_inconnue == 3 })
 
 cat("\nTOUS LES TESTS SONT VERTS :", n_ok, "assertions\n")

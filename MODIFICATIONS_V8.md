@@ -204,9 +204,9 @@ Tous dans les **helpers purs** (§0.3 : « là où tu peux écrire du code neuf 
 
 - `referentiels.R` : B11 ; `comp_sat_diab <- codes_comp_sat_diab` ; `neo_codes_diabete` (§5.10). Rien d'autre.
 - `referentiels/exclusions_paires.yaml` : créé (§6.4), 4 paires évidentes, structure `- [A, B]`.
-- `tests/test_helpers.R` : §8.1 + brief industrialisation §8, 150 assertions (`stopifnot`, sans testthat). Source `config_v8.R` puis `helpers_v8.R`. Repli arrow par paquet mock (section 11).
+- `tests/test_helpers.R` : §8.1 + briefs industrialisation §8 et conversion §7, 181 assertions (`stopifnot`, sans testthat). Source `config_v8.R` puis `helpers_v8.R`. Repli arrow par paquet mock (section 11).
 - `tests/test_chaines_sqlite.R` : les **scripts réels** (extraction puis tirage) sur SQLite **fichier**
-  avec un faux paquet `pRatihque` (mock interdit pendant le tirage), 55 assertions : chaînes dbplyr
+  avec un faux paquet `pRatihque` (mock interdit pendant le tirage), 66 assertions : chaînes dbplyr
   (§5.9a, B1-10, refs, §7.5/§7.6), sessions multiples et résolution des besoins, cache des partiels,
   reprise, FORCER_REFS, garde-fou `partiels_meta`, tirage sans base, reprise des chunks, identité
   parquet, livrables, mode `catalogue_complet`. Ne valide PAS le dialecte ni les colonnes réelles.
@@ -266,8 +266,8 @@ Tous dans les **helpers purs** (§0.3 : « là où tu peux écrire du code neuf 
 ```
 Rscript -e 'parse("extraction_associations_codes_v8.R")'        # syntaxe OK
 Rscript -e 'for(f in c("config_v8.R","helpers_v8.R","extraction_associations_codes_v8.R","tirage_scenarios_v8.R")) parse(f)'
-Rscript tests/test_helpers.R                                     # 150 assertions vertes (avec ou sans arrow)
-R_LIBS_TEST=<lib avec dbplyr/DBI/RSQLite[/arrow]> Rscript tests/test_chaines_sqlite.R   # 55 assertions vertes (avec ou sans arrow)
+Rscript tests/test_helpers.R                                     # 181 assertions vertes (avec ou sans arrow)
+R_LIBS_TEST=<lib avec dbplyr/DBI/RSQLite[/arrow]> Rscript tests/test_chaines_sqlite.R   # 66 assertions vertes (avec ou sans arrow)
 grep -n 'filter_chap\|sexe_ ==sexe_\|v2025\|slice(1:2)\|<<-\|distinct(.*\.keep_all' config_v8.R helpers_v8.R extraction_associations_codes_v8.R tirage_scenarios_v8.R
 grep -c 'pRatihque::' tirage_scenarios_v8.R                       # 0 attendu
 #  -> uniquement des commentaires, plus l'unique distinct(.keep_all) HTA commenté « déterministe » (B1 #5)
@@ -429,3 +429,88 @@ Aucun changement fonctionnel des scripts de production ; aucune chaîne base tou
 3. **RUN.md, étape 3.1** : condition de validité de la copie des refs diagnostic → production
    (`AN_REF`, `SEUIL_REF_DAS`, `SEUIL_REF_IMPRECIS`, `SEUIL_REF_PAIRES` identiques, sinon
    `FORCER_REFS <- TRUE`). Q13 traitée.
+
+---
+
+## 12. Chantier « conversion E669 -> E660 »
+
+**Doctrine et périmètre.** Les codes E669x (obésité/surpoids « sans précision ») de la base
+nationale sont tenus pour des erreurs de codage et convertis en E660x (« dus à un excès
+calorique ») sur toutes les surfaces : diag2 (DP/DR pivot), graines, DAS de complétion,
+référentiels. Périmètre STRICT `^E669` ; E661, E662, E668 intacts. Toggle `CONVERSION_E669`
+(config l.102, TRUE dans les deux profils), `BARE_E669_DEFAUT = "0"` (l.103) ; les deux sont
+écrits dans les meta.yaml (`NOMS_CONFIG_META`).
+
+**Zéro écart chaîne base.** Conversion entièrement post-collect, côté R : dans les fabriques de
+refs (extraction l.580-642, chaque fabrique = chaîne verbatim puis `if(!CONVERSION_E669) return`)
+et sur le catalogue agrégé (extraction 5d, l.692-709). Les diffs bloc à bloc de la section 10.3
+restent vides.
+
+**Règles (helpers section C, l.635-834, tous purs et testés).**
+- `convertir_e669` : E669 à suffixe → E660 + suffixe conservé (E6692 → E6602, E66920 → E66020),
+  jamais re-tiré ; E669 nu inchangé à ce niveau ; NA-sûre ; tout autre code intact.
+- `distribution_e660` : table (cage, sexe, code, n, part) par strate + lignes globales
+  (cage = sexe = NA), calculée UNE fois par exécution sur les comptes BRUTS de `ref_das_chronique`
+  (avant sa propre conversion) et exportée comme ref `distribution_e660.parquet`
+  (ajoutée à `NOMS_REFS`, en 2e position après `ref_das_chronique`, et à `REFS_CHRONIQUES`).
+- `repartir_e669_nu` : cascade strate (cage, sexe) → globale → `"E660" + BARE_E669_DEFAUT`,
+  répartition d'effectifs aux plus forts restes (`repartir_proportionnel`, sum(n) conservé
+  exactement, aucun aléa).
+- `convertir_e669_comptes` : conversion → répartition du nu → ré-agrégation sum(col_n) par
+  (cols_strate, col_code), schéma préservé.
+- `convertir_e669_combo` (graines) : conversion de chaque code, nu réparti par la même cascade
+  (ligne éclatée), codes re-triés en ordre C (comme `arrange(das)` de prep_scenarios2) et
+  dédoublonnés, ré-agrégation.
+- `convertir_e669_distinct` (v_admin, sans effectif) : nu remplacé par chaque classe de la cascade.
+- Mesure : `compter_e669`, `effectifs_e660`, `impact_conversion_catalogue`, `impact_niveau_cma`.
+
+**Ordre impératif partout : conversion → ré-agrégation → seuil.**
+
+| Surface | Application | Note |
+|---|---|---|
+| catalogue longs | 5d : diag2 (`comptes`, strate = autres pivots + graine) puis graines (`combo`, strate = pivots), sum(n), PUIS seuil (section 6) | partiels relus en codes BRUTS |
+| pivots_courts | conversion diag2 + ré-agrégation sum(nb) sur le collecté | **seuil déjà appliqué EN BASE** par la chaîne v7.1.2 (non modifiée) : pas de re-seuil possible ; perte conservatrice, les classes E669 sous le seuil individuellement ne sont jamais vues |
+| ref_das_chronique | diag2 puis das (`comptes`, strate incl. niveau/type_liste/caract) ; `distribution_e660` calculée AVANT | niveau/type_liste/caract conservés comme attributs du code brut (Q18) |
+| ref_das_aigu | diag2 puis das (`comptes`, strate mode_hospit, sexe, cage, racine, ghm2) | |
+| ref_nb_chroniques, ref_comp_diabete | intacts (aucun code E66) | |
+| referentiel_paires_chroniques | das_a puis das_b, `das_a < das_b` ré-imposé (`pmin`/`pmax`), paires identiques retirées, ré-agrégation, seuil `>= SEUIL_REF_PAIRES` | |
+| referentiel_substitution_imprecis | conversion sur `code` (strate cat, cage, sexe, niveau), `imprecis` recalculé ; E669 retiré de la détection des codes imprécis (`codes_imprecis_extraction`), aussi côté tirage quand le meta porte `CONVERSION_E669: TRUE` | |
+| v_admin_courts / v_admin_longs | `convertir_e669_distinct` sur diag2, `distinct()` | |
+| tirage | aucune conversion ; contrôle : `^E669` résiduels comptés (diag2, graine, DAS) → anomalie si > 0 quand le meta porte TRUE ; effectifs E660x par classe au rapport | |
+
+**Cache des partiels.** Les partiels restent en codes bruts ; la conversion n'est PAS une clé
+de `verifier_partiels_meta` (commentaire helpers section C, config, RUN.md). Basculer le toggle
+n'invalide pas `PARTIELS_DIR` mais impose `FORCER_REFS` et le vidage des chunks du tirage.
+
+**Mesure d'impact (rapport d'extraction `rapport_extraction_v8_<date>.txt`, section 3).**
+Distribution E660x de référence ; effectif E669 converti (diag2 / graine, suffixé / nu) ;
+sum(n) avant/après (conservé) ; lignes fusionnées ; profils (pivots) > seuil avant / après,
+ENTRÉS par fusion (clés > seuil après sans clé > seuil avant, clés avant exprimées avec diag2
+converti par suffixe) et sortis — **écart de volumétrie assumé par doctrine** ; conversions
+changeant le niveau CMA (niveau observé par code dans `ref_das_chronique` brute ; « non mesuré »
+si la ref a été relue déjà convertie). Résumé (`conversion_e669_lignes_fusionnees`,
+`conversion_e669_profils_entres`) dans `catalogue_longs_seuil_meta.yaml`.
+
+**Tests.** test_helpers.R : 31 assertions (convertir_e669, repartir_proportionnel,
+distribution/classes, repartir_e669_nu avec proportionnalité exacte et cascade, comptes, combo
+avec tri/éclatement/totaux, distinct, compteurs, impact). test_chaines_sqlite.R : pool enrichi
+(E6690, E6602, E6600, E669 nu, DP E6690), aucun ^E669 dans catalogue/refs/sorties tirage, sum(n)
+conservée, fixture de fusion sous-seuil → au-dessus (GHM 88M991, DP E6690 + E6600, n = 1 + 1 > 1),
+toggle FALSE dans un projet dédié (E669 présents, fusion absente), partiels bruts identiques dans
+les deux cas.
+
+### 12.1 Questions
+- **Q17 — pivots courts** : le seuil `nb > SEUIL_PIVOT` est dans la chaîne v7.1.2 (en base).
+  Pour un seuil après conversion, il faudrait déplacer le filtre post-collect (modification de
+  chaîne, interdite). Perte conservatrice consignée ; non fait.
+- **Q18 — attributs de code après conversion** : dans `ref_das_chronique` et
+  `referentiel_substitution_imprecis`, `niveau` (et type_liste/caract) restent ceux du code brut
+  E669x, portés par la strate ; une même clé (diag2, das, sexe, cage) peut donc apparaître avec
+  deux niveaux. Sans effet sur le tirage (`prep_ref_chronique` somme par diag2/das/sexe/cage).
+  Alternative : réassigner les attributs de la cible E660x observée.
+- **Q19 — distribution unique** : la cascade utilise la distribution E660x de `ref_das_chronique`
+  (DAS chroniques des séjours longs, AN_REF) pour toutes les surfaces, y compris diag2 et le
+  catalogue multi-années. Choix de simplicité (une distribution par exécution, §2c du brief).
+- **Q20 — partiels d'un run antérieur** : un `distribution_e660.parquet` absent d'un `EXPORTS_DIR`
+  ancien force le recalcul de `ref_das_chronique` (résolution des besoins) : une requête base
+  supplémentaire au premier lancement après ce chantier.

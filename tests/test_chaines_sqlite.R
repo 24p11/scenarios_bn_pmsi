@@ -105,9 +105,9 @@ lire_cat <- function(dir) arrange(as_tibble(arrow::read_parquet(file.path(dir, "
 set.seed(20260907)
 N <- 4000
 pool_das <- c("I10","I110","E1120","E1128","E102","E785","J449","N189","N185","F172","I48","G20","M199",
-              "R2630","F050","F102","N083","E1198","I509","I500","K802","J440","C189","Z511","D649","E669")
+              "R2630","F050","F102","N083","E1198","I509","I500","K802","J440","C189","Z511","D649","E669","E6690","E6602","E6600")
 pool_ghm <- c("04M053","05M093","06C041","10M021","03K021","14Z081","90Z001","06C042")
-pool_dp  <- c("J449","I500","E1120","E102","Z511","K802","I10")
+pool_dp  <- c("J449","I500","E1120","E102","Z511","K802","I10","E6690")
 conn0 <- DBI::dbConnect(RSQLite::SQLite(), db_file)
 gen_annee <- function(an){
   ident <- seq_len(N) + an * 100000
@@ -148,11 +148,21 @@ invisible(DBI::dbAppendTable(conn0, "PRD_VUE_MCOBL_2026.um", as.data.frame(tibbl
   rum = c(1L, 2L, 1L, 2L, 1L, 1L, 2L), finessgeo = "750100042", type_hospum_1 = "C",
   type_rum_1 = c("10", "01A", "10", "07A", "07A", "27", "01A")))))
 invisible(DBI::dbAppendTable(conn0, "PRD_VUE_MCOBL_2026.diag", as.data.frame(tibble::tibble(ident = rep(unname(IDENT_B110), each = 2), rum = 1L, diag = rep(c("I10", "E785"), 4), typ_diag = 5L))))
+# Fixture fusion E669 (chantier conversion) : deux séjours identiques sauf DP E6690 / E6600 sur un
+# GHM dédié 88M991 -> deux profils n = 1 (<= SEUIL_PIVOT = 1) qui fusionnent (n = 2 > seuil) après conversion.
+IDENT_FUSION <- c(2699101, 2699102)
+invisible(DBI::dbAppendTable(conn0, "PRD_VUE_MCOBL_2026.fixe", as.data.frame(tibble::tibble(
+  anonyme = 999101:999102, ident = IDENT_FUSION, dp = c("E6690", "E6600"), dr = NA_character_, age = 72, sexe = "2",
+  provenance = "8", modesortie = "8", destination = "1", duree = 6, rumdudp = 1L, nbda = 1L, ghm2 = "88M991",
+  passage_urg = "0", nbrum = 1L, raac = "0"))))
+invisible(DBI::dbAppendTable(conn0, "PRD_VUE_MCOBL_2026.um", as.data.frame(tibble::tibble(
+  ident = IDENT_FUSION, rum = 1L, finessgeo = "750100042", type_hospum_1 = "C", type_rum_1 = "10"))))
+invisible(DBI::dbAppendTable(conn0, "PRD_VUE_MCOBL_2026.diag", as.data.frame(tibble::tibble(ident = IDENT_FUSION, rum = 1L, diag = "I48", typ_diag = 5L))))
 DBI::dbWriteTable(conn0, "nomgen.finessgeo", data.frame(finessgeo = c("750100042","750100075","920100013"), categ_pmsi = c("CHR/U","CHR/U","CH")), overwrite = TRUE)
 DBI::dbWriteTable(conn0, "prd_vue_nompmsi.mco_diag_niveau",
                   data.frame(code = pool_das, v2021 = sample(1:4, length(pool_das), TRUE), v2023 = sample(1:4, length(pool_das), TRUE), v2025 = sample(1:4, length(pool_das), TRUE)), overwrite = TRUE)
 DBI::dbWriteTable(conn0, "prd_vue_nompmsi.all_cim10_caract_patient",
-                  data.frame(code = pool_das, type_liste = ifelse(pool_das %in% c("I10","I110","E1120","E1128","E102","E785","J449","N189","N185","F172","I48","G20","M199","E1198","I509","I500","J440","C189","E669"), "Patho_chro", "Aigu"),
+                  data.frame(code = pool_das, type_liste = ifelse(pool_das %in% c("I10","I110","E1120","E1128","E102","E785","J449","N189","N185","F172","I48","G20","M199","E1198","I509","I500","J440","C189","E669","E6690","E6602","E6600"), "Patho_chro", "Aigu"),
                              caract = "x"), overwrite = TRUE)
 DBI::dbDisconnect(conn0)
 sortie <- function(expr) utils::capture.output(expr, type = "output")
@@ -161,7 +171,7 @@ sortie <- function(expr) utils::capture.output(expr, type = "output")
 cat("\n# session 1 : extraction partielle (années 17 et 26, CHR/U et CH)\n")
 surcharger("ANS_HISTORIQUE <- c(17L, 26L)")
 log1 <- sortie(lancer("extraction_associations_codes_v8.R"))
-ok("plan session 1 : 4 itérations, 9 refs, années 17 et 26, prep_das_chronique",
+ok("plan session 1 : 4 itérations, 10 refs, années 17 et 26, prep_das_chronique",
    sum(plan$iterations$a_faire) == 4 && all(plan$refs$a_faire) && identical(plan$annees_a_preparer, c(17L, 26L)) && plan$prep_das_chronique)
 tt <- temp_tables(conn)
 ok("tables temporaires créées : prep_data_17, prep_data_26, prep_das_chro_26 ; pas de prep_data_20",
@@ -180,7 +190,7 @@ pd17 <- pRatihque::atihble(conn, "prep_data_17") |> dplyr::collect()
 ok("millésime 17 : mêmes colonnes, raac NA, une ligne par ident", identical(names(pd17), names(pd)) && all(is.na(pd17$raac)) && !any(duplicated(pd17$ident)))
 ok("partiels écrits : 4 parquet + partiels_meta.yaml",
    setequal(list.files(PARTIELS_DIR), c("catalogue_partiel_CHRU_17.parquet", "catalogue_partiel_CHRU_26.parquet", "catalogue_partiel_CH_17.parquet", "catalogue_partiel_CH_26.parquet", "partiels_meta.yaml")))
-ok("exports : 9 refs + catalogue + meta + diagnostic_apports.csv",
+ok("exports : 10 refs + catalogue + meta + diagnostic_apports.csv",
    all(c(nom_ref(NOMS_REFS), "catalogue_longs_seuil.parquet", "catalogue_longs_seuil_meta.yaml", "diagnostic_apports.csv") %in% list.files(EXPORTS_DIR)))
 ap1 <- utils::read.csv(file.path(EXPORTS_DIR, "diagnostic_apports.csv"))
 ok("diagnostic_apports : 4 lignes calculées, cumuls croissants, ordre types × années",
@@ -208,6 +218,24 @@ ok("catalogue seuil : poids > SEUIL_PIVOT, pas de colonne n, graine <= K sans di
 meta1 <- yaml::read_yaml(file.path(EXPORTS_DIR, "catalogue_longs_seuil_meta.yaml"))
 ok("meta.yaml cohérent avec le profil et la surcharge", meta1$PROFIL == "diagnostic" && identical(unlist(meta1$ANS_HISTORIQUE), c(17L, 26L)) && meta1$SEUIL_PIVOT == 1 &&
      meta1$nb_lignes == nrow(cat1) && meta1$MODE_SELECTION == "quota_dp" && meta1$K_GRAINE_LONGS == K_GRAINE_LONGS && meta1$plan_iterations_calculees == 4)
+# --- conversion E669 -> E660 (CONVERSION_E669 = TRUE par défaut)
+sans_e669 <- function(df, cols) compter_e669(df, cols) == 0
+ok("conversion : aucun ^E669 dans le catalogue (diag2, graines)", CONVERSION_E669 && sans_e669(cat1, c("diag2", "diagnostic_associes")) && any(grepl("^E660", cat1$diag2)))
+ok("conversion : aucun ^E669 dans les refs (aigu, chronique, paires, imprécis, pivots, v_admin)",
+   sans_e669(df_das_ref, c("diag2", "das")) && sans_e669(df_chro, c("diag2", "das")) && sans_e669(df_pair, c("das_a", "das_b")) &&
+     sans_e669(df_imp, "code") && sans_e669(df_pc, "diag2") &&
+     sans_e669(arrow::read_parquet(file.path(EXPORTS_DIR, "v_admin_courts.parquet")), "diag2") && sans_e669(arrow::read_parquet(file.path(EXPORTS_DIR, "v_admin_longs.parquet")), "diag2"))
+ok("conversion : somme des n inchangée sur le catalogue agrégé, distribution E660x exportée",
+   impact_e669$n_total_avant == impact_e669$n_total_apres && impact_e669$e669_diag2_suffixe + impact_e669$e669_graine_suffixe > 0 &&
+     file.exists(file.path(EXPORTS_DIR, "distribution_e660.parquet")) && nrow(arrow::read_parquet(file.path(EXPORTS_DIR, "distribution_e660.parquet"))) > 0)
+ok("conversion : les partiels restent en codes BRUTS (E669 présents)",
+   any(vapply(list.files(PARTIELS_DIR, pattern = "_26\\.parquet$", full.names = TRUE), function(f){ d <- arrow::read_parquet(f); compter_e669(d, c("diag2", "diagnostic_associes")) > 0 }, logical(1))))
+ok("conversion : cas de fusion sous-seuil -> au-dessus (GHM 88M991, DP E6690 + E6600 -> E6600, n = 2 > 1)",
+   { f <- cat1[cat1$ghm2 == "88M991", ]; nrow(f) == 1 && f$diag2 == "E6600" && f$poids == 2 && impact_e669$profils_entres >= 1 })
+ok("conversion : paires das_a < das_b, aucune paire identique", all(df_pair$das_a < df_pair$das_b))
+ok("conversion : meta.yaml porte CONVERSION_E669 et BARE_E669_DEFAUT, rapport d'extraction écrit",
+   isTRUE(meta1$CONVERSION_E669) && meta1$BARE_E669_DEFAUT == "0" && file.exists(file.path(EXPORTS_DIR, "rapport_extraction_v8_" %+% DATE_TAG %+% ".txt")) &&
+     any(grepl("ENTRÉS par fusion", readLines(file.path(EXPORTS_DIR, "rapport_extraction_v8_" %+% DATE_TAG %+% ".txt")))))
 ok("aucune ligne niveau séjour exportée (pas de colonne ident dans les parquets d'exports)",
    !any(vapply(list.files(EXPORTS_DIR, pattern = "\\.parquet$", full.names = TRUE), function(f) "ident" %in% names(arrow::read_parquet(f, as_data_frame = FALSE)), logical(1))))
 fermer()
@@ -275,6 +303,25 @@ ok("un partiel supprimé -> 1 itération, année 20", sum(plan$iterations$a_fair
 ok("catalogue identique après reprise", identical(lire_cat(EXPORTS_DIR), cat_multi))
 fermer()
 
+# ------------------------------------------------ CONVERSION_E669 = FALSE (toggle effectif) --
+cat("\n# CONVERSION_E669 = FALSE : E669 présents, partiels bruts identiques\n")
+proj3 <- creer_projet("projet_v8_noconv"); Sys.setenv(SCENARIOS_PMSI_PATH = proj3)
+surcharger("ANS_HISTORIQUE <- c(17L, 26L)", "CONVERSION_E669 <- FALSE")
+invisible(sortie(lancer("extraction_associations_codes_v8.R")))
+cat_nc <- lire_cat(EXPORTS_DIR)
+ok("toggle FALSE : ^E669 présents dans le catalogue et les refs", compter_e669(cat_nc, c("diag2", "diagnostic_associes")) > 0 &&
+     compter_e669(arrow::read_parquet(file.path(EXPORTS_DIR, "ref_das_chronique.parquet")), "das") > 0 && !isTRUE(yaml::read_yaml(file.path(EXPORTS_DIR, "catalogue_longs_seuil_meta.yaml"))$CONVERSION_E669))
+ok("toggle FALSE : le cas de fusion n'entre pas au catalogue (deux profils n = 1 <= seuil)", !any(cat_nc$ghm2 == "88M991"))
+ok("toggle FALSE : partiels bruts identiques à ceux du projet converti (cache indépendant du toggle)",
+   identical(arrow::read_parquet(file.path(PARTIELS_DIR, "catalogue_partiel_CHRU_26.parquet")),
+             arrow::read_parquet(file.path(proj, "results", "partiels", "catalogue_partiel_CHRU_26.parquet"))) &&
+     compter_e669(arrow::read_parquet(file.path(PARTIELS_DIR, "catalogue_partiel_CHRU_26.parquet")), c("diag2", "diagnostic_associes")) > 0)
+fermer()
+Sys.setenv(SCENARIOS_PMSI_PATH = proj)
+surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)")
+invisible(sortie(lancer("extraction_associations_codes_v8.R")))   # replace la config du projet principal (plan : rien à faire)
+fermer()
+
 # =============================================================== TIRAGE (sans base) ==
 cat("\n# tirage : phase sans base (mock interdit)\n")
 options(pmsi_mock_interdit = TRUE)
@@ -292,6 +339,9 @@ sel <- arrow::read_parquet(file.path(EXPORTS_DIR, "selection_longs.parquet"))
 mt <- yaml::read_yaml(file.path(EXPORTS_DIR, "meta_tirage.yaml"))
 ok("quota_dp : quota exact par diag2, origine renseignée", all(table(sel$diag2) == mt$quota_par_dp) && all(grepl("^plancher_|^libre$", sel$origine)) && nrow(sel) == mt$volume_attendu)
 ok("meta_tirage.yaml cohérent avec le profil", mt$PROFIL == "diagnostic" && mt$MODE_SELECTION == "quota_dp" && mt$BUDGET_TOTAL_LONGS == 120 && mt$CHUNK_SIZE == 40 && mt$nrow_catalogue == nrow(cat_multi))
+ok("tirage : aucun ^E669 dans les sorties (diag2, graine, DAS), effectifs E660x au rapport",
+   rapport$courts$e669_residuels == 0 && rapport$longs$e669_residuels == 0 && sans_e669(sc_courts, c("diag2", "diagnostic_associes")) &&
+     sans_e669(sc_longs, c("diag2", "graine", "diagnostic_associes")) && any(grepl("effectifs E660x par classe", rap <- readLines(file.path(EXPORTS_DIR, "rapport_v8_" %+% DATE_TAG %+% ".txt")))))
 ok("contrôles §8.2 à zéro sur les deux branches", { cc <- rapport$courts$controles; cl <- rapport$longs$controles
    cc$doublons_categorie == 0 && cc$diabete_hors_flag == 0 && cc$i10_avec_hta_autres == 0 && cc$poids_sous_seuil == 0 &&
      cl$doublons_categorie == 0 && cl$diabete_hors_flag == 0 && cl$i10_avec_hta_autres == 0 && cl$poids_sous_seuil == 0 })

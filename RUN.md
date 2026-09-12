@@ -20,6 +20,14 @@ Arborescence des résultats (`PATH_RESULTS = <projet>/results/`) :
 Aucune table n'est persistée en base : `prep_data_<an>` et `prep_das_chro_<an>` sont des
 tables **temporaires**, recréées à la demande par la résolution des besoins.
 
+Conversion E669 → E660 (`CONVERSION_E669 <- TRUE` dans les deux profils) : doctrine DIM, les
+codes E669x « sans précision » sont convertis en E660x sur toutes les surfaces (DP/DR pivot,
+graines, DAS de complétion, référentiels), entièrement **après** collecte, côté R, sans
+toucher aux chaînes base. Suffixe conservé (E6692 → E6602) ; un E669 nu est réparti sur les
+classes E660x observées (strate cage × sexe, sinon global, sinon `E660` + `BARE_E669_DEFAUT`).
+Le rapport d'extraction (`rapport_extraction_v8_<date>.txt`) mesure l'impact (effectifs
+convertis, lignes fusionnées, profils entrés au catalogue par fusion, changements de niveau CMA).
+
 ---
 
 ## Étape 1 — profil diagnostic
@@ -34,8 +42,10 @@ la complétion DAS sur petit volume (1 000 scénarios longs, mode `quota_dp`).
    Le script imprime d'abord le **plan** (itérations à faire / sautées, refs à faire / sautées,
    années préparées), puis une ligne d'apport par itération.
    Critères de passage : plan cohérent ; `results/partiels/` contient un parquet par
-   (etbs, an) ; `exports_diagnostic/` contient les 9 refs, `catalogue_longs_seuil.parquet`,
-   `catalogue_longs_seuil_meta.yaml`, `diagnostic_apports.csv`.
+   (etbs, an) ; `exports_diagnostic/` contient les 10 refs (dont `distribution_e660.parquet`),
+   `catalogue_longs_seuil.parquet`, `catalogue_longs_seuil_meta.yaml`, `diagnostic_apports.csv`,
+   `rapport_extraction_v8_<date>.txt` (section 3 : impact de la conversion E669, écart de
+   volumétrie assumé par doctrine).
 2. Lecture de `exports_diagnostic/diagnostic_apports.csv` : colonnes `etbs, an, statut,
    nb_lignes_partiel, nb_lignes_cumul, nb_diag2_cumul, nb_diag2_nouveaux` dans l'ordre
    d'exécution (CHR/U 17…AN_REF puis CH 17…AN_REF). Repérer à partir de quelle année / quelle
@@ -47,8 +57,9 @@ la complétion DAS sur petit volume (1 000 scénarios longs, mode `quota_dp`).
    Produit dans `exports_diagnostic/` : `scenarios_courts_v8_<date>.parquet`,
    `scenarios_longs_tirage_v8_<date>.parquet`, `selection_longs.parquet` (+ `_effectifs.csv`),
    `meta_tirage.yaml`, `rapport_v8_<date>.txt`, `echantillon_revue.csv`, `top30_das_par_cmd.csv`.
-   Critères de passage : rapport section 5 « TOTAL anomalies = 0 » ; distribution du nombre
-   de DAS par classe d'âge conforme aux cibles ; taux « sans précision » acceptable.
+   Critères de passage : rapport section 5 « TOTAL anomalies = 0 » (inclut les ^E669 résiduels,
+   attendus à 0 quand `CONVERSION_E669: TRUE` dans le meta) ; distribution du nombre de DAS par
+   classe d'âge conforme aux cibles ; taux « sans précision » acceptable.
 4. Revue humaine de `echantillon_revue.csv` (50 scénarios : 25 courts + 25 longs, répartis
    sur les CMD, libellés CIM, graine marquée `[G]`). Critère : validation DIM de la
    vraisemblance des associations avant toute production.
@@ -67,10 +78,11 @@ Ne pas toucher à `K_GRAINE_LONGS` sans vider `results/partiels/` (voir règles 
    ```
    Si le diagnostic a déjà tout extrait, le plan indique « 0 itération à faire » ; seules les
    9 refs sont calculées dans `exports/` (elles sont propres au profil, donc `prep_data(AN_REF)`
-   est recréée une fois). Pour ne pas les recalculer, copier les `ref_*.parquet`, `pivots_courts`,
-   `v_admin_*`, `referentiel_*` de `exports_diagnostic/` vers `exports/` : copie sûre **si et
-   seulement si** `AN_REF`, `SEUIL_REF_DAS`, `SEUIL_REF_IMPRECIS` et `SEUIL_REF_PAIRES` sont
-   identiques entre les deux profils ; sinon `FORCER_REFS <- TRUE` et recalcul.
+   est recréée une fois). Pour ne pas les recalculer, copier les `ref_*.parquet`, `distribution_e660`,
+   `pivots_courts`, `v_admin_*`, `referentiel_*` de `exports_diagnostic/` vers `exports/` : copie sûre
+   **si et seulement si** `AN_REF`, `SEUIL_REF_DAS`, `SEUIL_REF_IMPRECIS`, `SEUIL_REF_PAIRES`,
+   `CONVERSION_E669` et `BARE_E669_DEFAUT` sont identiques entre les deux profils ; sinon
+   `FORCER_REFS <- TRUE` et recalcul.
    Critères : `catalogue_longs_seuil_meta.yaml` porte `PROFIL: production` et le périmètre choisi.
 2. Tirage par paliers, en surchargeant `BUDGET_TOTAL_LONGS` sans éditer la config :
    ```
@@ -93,7 +105,12 @@ Ne pas toucher à `K_GRAINE_LONGS` sans vider `results/partiels/` (voir règles 
   `DUREE_LONGS` ou `PIVOTS_LONGS` différent → `stop()` demandant de vider le dossier ;
   `VERSION_SCRIPT` différent → avertissement. Vider le dossier (`rm results/partiels/*`) après
   tout changement de `prep_data` / `prep_scenarios2` ou de l'une de ces clés.
-- **Refs (`exports*/`)** : sautées si le parquet existe. Après un changement d'`AN_REF` ou une
+- **Conversion E669** : les partiels sont stockés en **codes bruts** ; la conversion s'applique à
+  la ré-agrégation. Basculer `CONVERSION_E669` ne nécessite donc PAS de vider `results/partiels/`
+  (ce n'est pas une clé de `partiels_meta.yaml`), mais il faut recalculer les refs du profil
+  (`FORCER_REFS <- TRUE`) et vider chunks / sélection / `meta_tirage.yaml` du tirage.
+- **Refs (`exports*/`)** : sautées si le parquet existe. `distribution_e660.parquet` (distribution
+  E660x de référence, calculée sur les comptes bruts de `ref_das_chronique`) est une ref comme les autres. Après un changement d'`AN_REF` ou une
   correction amont, passer `FORCER_REFS <- TRUE` (config ou surcharge) une fois, puis remettre
   `FALSE`.
 - **Chunks et sélection (`exports*/chunks/`, `selection_longs.parquet`, `meta_tirage.yaml`)** :

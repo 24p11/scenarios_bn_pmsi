@@ -631,3 +631,204 @@ top_das_par_cmd <- function(df, n_top = 30){
     dplyr::mutate(rang = dplyr::row_number(), .by = cmd) |>
     dplyr::filter(rang <= n_top)
 }
+
+## ---- C. Conversion E669 -> E660 (doctrine : E669x = erreur de codage) ----
+# Périmètre STRICT : ^E669 uniquement (E661, E662, E668 intacts). Conversion entièrement
+# post-collect ; les partiels restent en codes bruts (la conversion n'est pas une clé de
+# verifier_partiels_meta : elle s'applique à la ré-agrégation).
+# Règles : (a) E669 à suffixe -> E660 + suffixe conservé (déterministe) ;
+#          (b) E669 NU -> effectifs répartis selon la distribution observée des E660x, en cascade
+#              strate (cage, sexe) -> toutes strates -> "E660" + defaut, plus forts restes
+#              (sum(n) conservé exactement, aucun aléa).
+
+convertir_e669 <- function(codes){
+  codes <- as.character(codes)
+  suff <- !is.na(codes) & grepl("^E669.", codes)
+  codes[suff] <- paste0("E660", substring(codes[suff], 5))
+  codes
+}
+
+est_e669_nu <- function(codes) !is.na(codes) & codes == "E669"
+
+# Répartition d'un effectif n selon des parts (normalisées), arrondi aux plus forts restes :
+# sum(résultat) == n exactement. Égalité de reste -> ordre des parts.
+repartir_proportionnel <- function(n, parts){
+  if(length(parts) == 0) return(numeric(0))
+  parts <- parts / sum(parts)
+  brut <- n * parts
+  base <- floor(brut)
+  reste <- round(n - sum(base))
+  if(reste > 0){
+    ordre <- order(-(brut - base), seq_along(parts))
+    base[ordre[seq_len(reste)]] <- base[ordre[seq_len(reste)]] + 1
+  }
+  base
+}
+
+# Distribution de référence des E660x : lignes par strate (cage, sexe, code, n, part) puis
+# lignes globales (cage = sexe = NA). Calculée AVANT toute conversion de df_ref.
+distribution_e660 <- function(df_ref, col_code = "das", col_n = "nb_das"){
+  vide <- tibble::tibble(cage = character(0), sexe = character(0), code = character(0), n = numeric(0), part = numeric(0))
+  if(!all(c(col_code, col_n) %in% names(df_ref))) return(vide)
+  d <- df_ref[!is.na(df_ref[[col_code]]) & grepl("^E660", df_ref[[col_code]]), , drop = FALSE]
+  if(nrow(d) == 0) return(vide)
+  d <- tibble::tibble(cage = if("cage" %in% names(d)) as.character(d$cage) else NA_character_,
+                      sexe = if("sexe" %in% names(d)) as.character(d$sexe) else NA_character_,
+                      code = as.character(d[[col_code]]), n = as.numeric(d[[col_n]]))
+  globale <- d |> dplyr::summarise(n = sum(n), .by = code) |> dplyr::mutate(cage = NA_character_, sexe = NA_character_, part = n / sum(n))
+  strate <- d[!is.na(d$cage) & !is.na(d$sexe), ]
+  if(nrow(strate) > 0){
+    strate <- strate |> dplyr::summarise(n = sum(n), .by = c(cage, sexe, code)) |> dplyr::mutate(part = n / sum(n), .by = c(cage, sexe))
+  } else strate <- vide
+  dplyr::bind_rows(strate, globale) |> dplyr::select(cage, sexe, code, n, part) |> dplyr::arrange(!is.na(cage), cage, sexe, code)
+}
+
+# Classes cibles d'un E669 nu, cascade strate -> globale -> défaut. Retourne tibble(code, part).
+classes_e660 <- function(dist, cage_ = NA, sexe_ = NA, defaut = "0"){
+  if(nrow(dist) > 0 && !is.na(cage_) && !is.na(sexe_)){
+    s <- dist[!is.na(dist$cage) & dist$cage == cage_ & dist$sexe == sexe_, , drop = FALSE]
+    if(nrow(s) > 0) return(s[order(s$code), c("code", "part")])
+  }
+  g <- dist[is.na(dist$cage), , drop = FALSE]
+  if(nrow(g) > 0) return(g[order(g$code), c("code", "part")])
+  tibble::tibble(code = paste0("E660", defaut), part = 1)
+}
+
+# Éclate les lignes dont col_code == "E669" (nu) en autant de lignes que de classes E660x
+# (cascade sur cage/sexe si présentes), effectifs col_n répartis aux plus forts restes.
+# cols_strate : colonnes conservées telles quelles. Même schéma en sortie.
+repartir_e669_nu <- function(df, col_code, cols_strate, col_n, dist, defaut = "0"){
+  nu <- est_e669_nu(df[[col_code]])
+  if(!any(nu)) return(df)
+  garde <- df[!nu, , drop = FALSE]
+  lignes <- df[nu, , drop = FALSE]
+  a_cage <- "cage" %in% names(df); a_sexe <- "sexe" %in% names(df)
+  out <- vector("list", nrow(lignes))
+  for(i in seq_len(nrow(lignes))){
+    cl <- classes_e660(dist, if(a_cage) as.character(lignes$cage[i]) else NA, if(a_sexe) as.character(lignes$sexe[i]) else NA, defaut)
+    alloc <- repartir_proportionnel(lignes[[col_n]][i], cl$part)
+    k <- which(alloc > 0)
+    if(length(k) == 0) next
+    l <- lignes[rep(i, length(k)), , drop = FALSE]
+    l[[col_code]] <- cl$code[k]
+    l[[col_n]] <- alloc[k]
+    out[[i]] <- l
+  }
+  dplyr::bind_rows(garde, dplyr::bind_rows(out))
+}
+
+reagreger <- function(df, cols, col_n){
+  res <- df |> dplyr::summarise(.n_tmp = sum(.data[[col_n]]), .by = dplyr::all_of(cols))
+  names(res)[names(res) == ".n_tmp"] <- col_n
+  res[, intersect(names(df), names(res)), drop = FALSE]
+}
+
+# Table de comptes : conversion suffixée, répartition du nu, ré-agrégation sum(col_n) par
+# (cols_strate, col_code). Schéma de sortie = cols_strate + col_code + col_n (ordre d'origine).
+convertir_e669_comptes <- function(df, col_code, cols_strate, col_n, dist, defaut = "0"){
+  df[[col_code]] <- convertir_e669(df[[col_code]])
+  df <- repartir_e669_nu(df, col_code, cols_strate, col_n, dist, defaut)
+  reagreger(df, c(cols_strate, col_code), col_n)
+}
+
+# Combinaisons de codes séparés par un espace (graines) : conversion de chaque code, E669 nu
+# réparti par la cascade (ligne éclatée en autant de lignes que de classes), codes re-triés
+# (ordre C, comme dplyr::arrange(das) dans prep_scenarios2) et dédoublonnés, ré-agrégation.
+convertir_e669_combo <- function(df, col_combo, cols_strate, col_n, dist, defaut = "0"){
+  combos <- lapply(split_das(df[[col_combo]]), convertir_e669)
+  norm <- function(v) paste(sort(unique(v), method = "radix"), collapse = " ")
+  df[[col_combo]] <- vapply(combos, norm, character(1), USE.NAMES = FALSE)
+  a_nu <- vapply(combos, function(v) "E669" %in% v, logical(1))
+  if(!any(a_nu)) return(reagreger(df, c(cols_strate, col_combo), col_n))
+  garde <- df[!a_nu, , drop = FALSE]
+  lignes <- df[a_nu, , drop = FALSE]; combos_nu <- combos[a_nu]
+  a_cage <- "cage" %in% names(df); a_sexe <- "sexe" %in% names(df)
+  out <- vector("list", nrow(lignes))
+  for(i in seq_len(nrow(lignes))){
+    cl <- classes_e660(dist, if(a_cage) as.character(lignes$cage[i]) else NA, if(a_sexe) as.character(lignes$sexe[i]) else NA, defaut)
+    alloc <- repartir_proportionnel(lignes[[col_n]][i], cl$part)
+    k <- which(alloc > 0)
+    if(length(k) == 0) next
+    l <- lignes[rep(i, length(k)), , drop = FALSE]
+    l[[col_combo]] <- vapply(cl$code[k], function(cd) norm(replace(combos_nu[[i]], combos_nu[[i]] == "E669", cd)), character(1), USE.NAMES = FALSE)
+    l[[col_n]] <- alloc[k]
+    out[[i]] <- l
+  }
+  reagreger(dplyr::bind_rows(garde, dplyr::bind_rows(out)), c(cols_strate, col_combo), col_n)
+}
+
+# Tables sans effectif (v_admin) : conversion suffixée ; E669 nu remplacé par CHAQUE classe de
+# la cascade (une ligne par classe) ; dédoublonnage.
+convertir_e669_distinct <- function(df, col_code, dist, defaut = "0"){
+  df[[col_code]] <- convertir_e669(df[[col_code]])
+  nu <- est_e669_nu(df[[col_code]])
+  if(any(nu)){
+    garde <- df[!nu, , drop = FALSE]; lignes <- df[nu, , drop = FALSE]
+    a_cage <- "cage" %in% names(df); a_sexe <- "sexe" %in% names(df)
+    out <- vector("list", nrow(lignes))
+    for(i in seq_len(nrow(lignes))){
+      cl <- classes_e660(dist, if(a_cage) as.character(lignes$cage[i]) else NA, if(a_sexe) as.character(lignes$sexe[i]) else NA, defaut)
+      l <- lignes[rep(i, nrow(cl)), , drop = FALSE]; l[[col_code]] <- cl$code
+      out[[i]] <- l
+    }
+    df <- dplyr::bind_rows(garde, dplyr::bind_rows(out))
+  }
+  dplyr::distinct(df)
+}
+
+# Comptage des ^E669 résiduels dans des colonnes de codes (scalaires ou combinaisons)
+compter_e669 <- function(df, cols){
+  cols <- intersect(cols, names(df))
+  if(length(cols) == 0 || nrow(df) == 0) return(0L)
+  sum(vapply(cols, function(cc) sum(grepl("^E669", unlist(split_das(df[[cc]])))), integer(1), USE.NAMES = FALSE))
+}
+
+# Effectifs E660x par classe dans des colonnes de codes
+effectifs_e660 <- function(df, cols){
+  cols <- intersect(cols, names(df))
+  if(length(cols) == 0 || nrow(df) == 0) return(tibble::tibble(code = character(0), n = integer(0)))
+  v <- unname(unlist(lapply(cols, function(cc) unlist(split_das(df[[cc]])))))
+  v <- v[grepl("^E660", v)]
+  if(length(v) == 0) return(tibble::tibble(code = character(0), n = integer(0)))
+  tibble::tibble(code = v) |> dplyr::count(code, name = "n") |> dplyr::arrange(code)
+}
+
+# Mesure d'impact de la conversion sur le catalogue agrégé (avant / après, avant seuil).
+# Profils « entrés » : clés pivot > seuil après conversion sans clé > seuil avant (clés
+# avant comparées après conversion suffixée de diag2) ; « sortis » : l'inverse.
+impact_conversion_catalogue <- function(avant, apres, pivots_seuil, seuil, col_n = "n"){
+  # clés pivot > seuil, sommées sur les codes TELS QUELS ; les clés retenues sont ensuite
+  # exprimées avec diag2 converti (suffixe) pour être comparables avant / après
+  seuil_cles <- function(d){
+    s <- d |> dplyr::summarise(nb = sum(.data[[col_n]]), .by = dplyr::all_of(pivots_seuil)) |> dplyr::filter(nb > seuil)
+    do.call(paste, c(lapply(pivots_seuil, function(p) if(p == "diag2") convertir_e669(s[[p]]) else as.character(s[[p]])), sep = "\r"))
+  }
+  k_avant <- unique(seuil_cles(avant)); k_apres <- unique(seuil_cles(apres))
+  diag2_e669 <- grepl("^E669", avant$diag2)
+  das_e669 <- vapply(split_das(avant$diagnostic_associes), function(v) sum(grepl("^E669", v)), integer(1))
+  list(n_total_avant = sum(avant[[col_n]]), n_total_apres = sum(apres[[col_n]]),
+       lignes_avant = nrow(avant), lignes_apres = nrow(apres), lignes_fusionnees = nrow(avant) - nrow(apres),
+       e669_diag2_suffixe = sum(avant[[col_n]][diag2_e669 & avant$diag2 != "E669"]),
+       e669_diag2_nu = sum(avant[[col_n]][avant$diag2 == "E669"]),
+       e669_graine_suffixe = sum(avant[[col_n]] * vapply(split_das(avant$diagnostic_associes), function(v) sum(grepl("^E669.", v)), integer(1))),
+       e669_graine_nu = sum(avant[[col_n]] * vapply(split_das(avant$diagnostic_associes), function(v) sum(v == "E669"), integer(1))),
+       profils_seuil_avant = length(k_avant), profils_seuil_apres = length(k_apres),
+       profils_entres = length(setdiff(k_apres, k_avant)), profils_sortis = length(setdiff(k_avant, k_apres)))
+}
+
+# Conversions changeant le niveau CMA : niveau par code observé dans une table (code, niveau)
+# brute ; compte les effectifs E669x dont le niveau diffère de celui de la cible E660x
+# (cible non observée -> "inconnu"). Mesure, ne bloque pas.
+impact_niveau_cma <- function(df_raw, col_code = "das", col_niveau = "niveau", col_n = "nb_das"){
+  vide <- list(effectif_e669 = 0, niveau_change = 0, cible_inconnue = 0)
+  if(!all(c(col_code, col_niveau, col_n) %in% names(df_raw))) return(vide)
+  niv <- df_raw |> dplyr::distinct(.data[[col_code]], .data[[col_niveau]]) |> dplyr::distinct(.data[[col_code]], .keep_all = TRUE)
+  niv <- stats::setNames(as.character(niv[[col_niveau]]), as.character(niv[[col_code]]))
+  e <- df_raw[grepl("^E669.", df_raw[[col_code]]), , drop = FALSE]
+  if(nrow(e) == 0) return(vide)
+  cible <- convertir_e669(e[[col_code]])
+  niv_cible <- unname(niv[cible])
+  list(effectif_e669 = sum(e[[col_n]]),
+       niveau_change = sum(e[[col_n]][!is.na(niv_cible) & niv_cible != as.character(e[[col_niveau]])]),
+       cible_inconnue = sum(e[[col_n]][is.na(niv_cible)]))
+}

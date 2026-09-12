@@ -95,6 +95,13 @@ COLS_ADMIN         <- c("mode_entree", "mode_sortie", "mdp")                    
 # Export §7.5 : motif de repérage des libellés « sans précision »
 MOTIF_IMPRECIS <- "sans précision|non précisé"
 
+# Conversion E669 -> E660 (doctrine : E669x = erreur de codage, cf. helpers section C).
+# Post-collect uniquement, sur toutes les surfaces (diag2, graines, DAS, référentiels).
+# Les partiels restent en codes bruts : la conversion s'applique à la ré-agrégation et
+# n'est PAS une clé de verifier_partiels_meta.
+CONVERSION_E669  <- TRUE     # les deux profils ; écrit dans meta.yaml
+BARE_E669_DEFAUT <- "0"      # ultime repli pour un E669 nu sans distribution E660x observée (-> E6600)
+
 # Millésime de la table des niveaux de CMA (mco_diag_niveau, colonnes v20xx) selon
 # l'année de données (v7.2 l.280-282). Utilisé partout à la place de v2025 (§5.8).
 anseqta_de <- function(an){
@@ -106,10 +113,12 @@ DATE_TAG <- format(Sys.Date(), "%Y%m%d")
 
 # Produits de référence exportés par l'extraction (EXPORTS_DIR/<nom>.parquet) ; l'absence
 # d'un produit déclenche sa (re)création. Les REFS_CHRONIQUES exigent prep_das_chronique.
-NOMS_REFS <- c("ref_das_aigu", "ref_das_chronique", "ref_nb_chroniques", "ref_comp_diabete",
+# Ordre = ordre de calcul : ref_das_chronique puis distribution_e660 (calculée sur ses comptes
+# bruts) avant toute ref convertie.
+NOMS_REFS <- c("ref_das_chronique", "distribution_e660", "ref_das_aigu", "ref_nb_chroniques", "ref_comp_diabete",
                "pivots_courts", "v_admin_courts", "v_admin_longs",
                "referentiel_substitution_imprecis", "referentiel_paires_chroniques")
-REFS_CHRONIQUES <- c("ref_das_chronique", "ref_nb_chroniques", "referentiel_paires_chroniques")
+REFS_CHRONIQUES <- c("ref_das_chronique", "distribution_e660", "ref_nb_chroniques", "referentiel_paires_chroniques")
 
 ## ---- Bloc PROFIL ----
 if(PROFIL == "diagnostic"){
@@ -152,7 +161,8 @@ NOMS_CONFIG_META <- c("PROFIL", "VERSION_SCRIPT", "AN_REF", "ANS_HISTORIQUE", "T
                       "DUREE_COURTS", "DUREE_LONGS", "DUREE_MIN_REF", "NBDA_MAX", "K_GRAINE_LONGS",
                       "NB_TIRAGES_COURTS", "NB_VARIANTES_ADMIN_COURTS", "NB_VARIANTES_ADMIN_LONGS",
                       "MODE_SELECTION", "BUDGET_TOTAL_LONGS", "QUOTA_MIN_PAR_UNITE", "CHUNK_SIZE",
-                      "GARDER_CHUNKS", "FORCER_REFS", "EXPORTS_DIR", "PARTIELS_DIR", "PIVOTS_LONGS")
+                      "GARDER_CHUNKS", "FORCER_REFS", "EXPORTS_DIR", "PARTIELS_DIR", "PIVOTS_LONGS",
+                      "CONVERSION_E669", "BARE_E669_DEFAUT")
 valeurs_effectives_config <- function(env = globalenv()){
   v <- mget(NOMS_CONFIG_META, envir = env)
   lapply(v, function(x) if(is.numeric(x) && length(x) > 1) as.integer(x) else x)
