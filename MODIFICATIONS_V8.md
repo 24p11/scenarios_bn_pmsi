@@ -70,7 +70,7 @@ même classe avec la règle « mineur >14 ans en GHM C ».
 orphelin, vestigial, est supprimé (§5.3). Écarts :
 - `categ_pmsi=="CHR/U"` → `categ_pmsi==TYPE_ETBS_REF_DIABETE` (config).
 - `dplyr::collect() ->df_res_epi_diabete_chu` → `dplyr::collect()`.
-- Post-collect (R, v7.1.2 l.207-214), désormais côté tirage dans `penaliser_comp_diabete()` (helpers l.554-562 ; l'export `ref_comp_diabete.parquet` contient les effectifs bruts) : `cage_ped`/`cage_ages` → `CAGE_PED`/`CAGE_AGES`, `0.2`/`0.5` → `PENALITE_9_AGES`/`PENALITE_9_AUTRES` (config).
+- Post-collect (R, v7.1.2 l.207-214), désormais côté tirage dans `penaliser_comp_diabete()` (helpers l.559-567 ; l'export `ref_comp_diabete.parquet` contient les effectifs bruts) : `cage_ped`/`cage_ages` → `CAGE_PED`/`CAGE_AGES`, `0.2`/`0.5` → `PENALITE_9_AGES`/`PENALITE_9_AUTRES` (config).
 
 ### B5 — Sélection chirurgie ambulatoire — **supprimé à la relecture**
 Bloc v7.1.2 l.261-269 initialement repris en v8 (section 5). Retiré avec toute la branche :
@@ -204,7 +204,7 @@ Tous dans les **helpers purs** (§0.3 : « là où tu peux écrire du code neuf 
 
 - `referentiels.R` : B11 ; `comp_sat_diab <- codes_comp_sat_diab` ; `neo_codes_diabete` (§5.10). Rien d'autre.
 - `referentiels/exclusions_paires.yaml` : créé (§6.4), 4 paires évidentes, structure `- [A, B]`.
-- `tests/test_helpers.R` : §8.1 + brief industrialisation §8, 146 assertions (`stopifnot`, sans testthat). Source `config_v8.R` puis `helpers_v8.R`.
+- `tests/test_helpers.R` : §8.1 + brief industrialisation §8, 150 assertions (`stopifnot`, sans testthat). Source `config_v8.R` puis `helpers_v8.R`. Repli arrow par paquet mock (section 11).
 - `tests/test_chaines_sqlite.R` : les **scripts réels** (extraction puis tirage) sur SQLite **fichier**
   avec un faux paquet `pRatihque` (mock interdit pendant le tirage), 55 assertions : chaînes dbplyr
   (§5.9a, B1-10, refs, §7.5/§7.6), sessions multiples et résolution des besoins, cache des partiels,
@@ -266,8 +266,8 @@ Tous dans les **helpers purs** (§0.3 : « là où tu peux écrire du code neuf 
 ```
 Rscript -e 'parse("extraction_associations_codes_v8.R")'        # syntaxe OK
 Rscript -e 'for(f in c("config_v8.R","helpers_v8.R","extraction_associations_codes_v8.R","tirage_scenarios_v8.R")) parse(f)'
-Rscript tests/test_helpers.R                                     # 146 assertions vertes
-R_LIBS_TEST=<lib avec dbplyr/DBI/RSQLite/arrow> Rscript tests/test_chaines_sqlite.R   # 55 assertions vertes
+Rscript tests/test_helpers.R                                     # 150 assertions vertes (avec ou sans arrow)
+R_LIBS_TEST=<lib avec dbplyr/DBI/RSQLite[/arrow]> Rscript tests/test_chaines_sqlite.R   # 55 assertions vertes (avec ou sans arrow)
 grep -n 'filter_chap\|sexe_ ==sexe_\|v2025\|slice(1:2)\|<<-\|distinct(.*\.keep_all' config_v8.R helpers_v8.R extraction_associations_codes_v8.R tirage_scenarios_v8.R
 grep -c 'pRatihque::' tirage_scenarios_v8.R                       # 0 attendu
 #  -> uniquement des commentaires, plus l'unique distinct(.keep_all) HTA commenté « déterministe » (B1 #5)
@@ -376,7 +376,7 @@ pour `annees_a_preparer` ; tout-à-jour -> message et passage direct à l'agrég
 temporaires ne sont consommées que par des produits dont l'absence a déclenché leur création
 (vérifié par le test : session 2 ne crée que `prep_data_20`, session 3 aucune table).
 `partiels_meta.yaml` : K différent -> `stop()` ; `NBDA_MAX`/`DUREE_LONGS`/`PIVOTS_LONGS`/
-`VERSION_SCRIPT` différents -> avertissement (le brief n'exige que K ; le reste est signalé, pas bloqué).
+`VERSION_SCRIPT` différents -> avertissement (rendus bloquants sauf `VERSION_SCRIPT` par les finitions, section 11).
 `diagnostic_apports.csv` : une ligne par itération dans l'ordre d'exécution (statut `calculé`/`relu`).
 
 ### 10.6 Tirage
@@ -389,13 +389,43 @@ sauté. Habillage admin et échantillons de revue sous seeds dédiés (`SEED + 1
 reprise reste bit à bit identique. Ordre v7.2 conservé dans `sample_das_*`.
 
 ### 10.7 Questions (industrialisation)
-- **Q13 — refs propres au profil** : `EXPORTS_DIR` distincts ⇒ les 9 refs sont recalculées une fois par
-  profil (elles dépendent d'`AN_REF`, pas du profil). Copier les parquets `ref_*`, `pivots_courts`,
-  `v_admin_*`, `referentiel_*` de `exports_diagnostic/` vers `exports/` évite la requête (RUN.md).
+- **Q13 — refs propres au profil (TRAITÉE, finitions)** : `EXPORTS_DIR` distincts ⇒ les 9 refs sont
+  recalculées une fois par profil. Copier les parquets `ref_*`, `pivots_courts`, `v_admin_*`, `referentiel_*`
+  de `exports_diagnostic/` vers `exports/` évite la requête, **si et seulement si** `AN_REF`, `SEUIL_REF_DAS`,
+  `SEUIL_REF_IMPRECIS` et `SEUIL_REF_PAIRES` sont identiques entre les deux profils ; sinon
+  `FORCER_REFS <- TRUE` et recalcul. Règle reportée dans RUN.md (étape 3.1).
 - **Q14 — `quota_dp` avec remise** : le brief impose le tirage avec remise ; pour des DP à gros catalogue
   cela produit des doublons de pivots (complétions différentes par le seed). Sans remise quand
   `nrow >= quota` serait plus divers ; non fait.
-- **Q15 — `partiels_meta`** : avertissement (non bloquant) pour `NBDA_MAX`, `DUREE_LONGS`, `PIVOTS_LONGS`,
-  `VERSION_SCRIPT`. Si l'on veut bloquer aussi, passer ces clés en erreur dans `verifier_partiels_meta()`.
+- **Q15 — `partiels_meta` (SOLDÉE, finitions)** : `NBDA_MAX`, `DUREE_LONGS`, `PIVOTS_LONGS` sont désormais
+  bloquants au même titre que `K_GRAINE_LONGS` (`CLES_PARTIELS_BLOQUANTES`, helpers l.522) ; seule
+  `VERSION_SCRIPT` reste en avertissement (`CLES_PARTIELS_AVERTISSEMENT`, l.523).
 - **Q16 — `top_das_par_cmd` et `echantillon_revue`** portent sur les scénarios habillés (après
   habillage admin), donc pondérés par le nombre de variantes admin. Mesure indicative.
+
+---
+
+## 11. Finitions avant espace sécurisé (relecture)
+
+Aucun changement fonctionnel des scripts de production ; aucune chaîne base touchée.
+
+1. **Repli arrow dans les tests** (`tests/test_chaines_sqlite.R`, `tests/test_helpers.R`) : si
+   `requireNamespace("arrow")` échoue, un paquet mock `arrow` est construit et installé à la volée
+   dans `tempdir()` (même mécanique que le mock `pRatihque`), exposant `write_parquet = saveRDS`
+   et `read_parquet = readRDS`, puis placé en tête de `.libPaths()`. Limite documentée en
+   commentaire : les fichiers du mock sont des RDS nommés `.parquet`, valables parce que relus par
+   le même mock. Les scripts de production continuent d'exiger le vrai arrow. L'ancien
+   `stop("Paquet manquant : arrow")` et le repli `ecrire/lire` de test_helpers.R sont retirés.
+   Les deux suites ont été lancées AVEC arrow (`R_LIBS_TEST` = bibliothèque contenant arrow) et
+   SANS arrow (`R_LIBS_TEST` = bibliothèque ne contenant que dbplyr/DBI/RSQLite et leurs
+   dépendances) : 150 et 55 assertions vertes dans les quatre cas ; la ligne finale du test SQLite
+   indique `arrow = mock RDS` ou `arrow = réel`.
+2. **`verifier_partiels_meta` bloquant** (helpers l.517-547) : `NBDA_MAX`, `DUREE_LONGS`,
+   `PIVOTS_LONGS` promus bloquants (`stop()` demandant de vider `PARTIELS_DIR`, toutes les clés
+   divergentes listées dans le message) au même titre que `K_GRAINE_LONGS` ; `VERSION_SCRIPT` reste
+   en avertissement. Motif : ces paramètres agissent en amont de l'écriture des partiels (filtres
+   des séjours, grain des comptes). Tests : un cas bloquant par clé promue, un cas multi-clés, le
+   cas `VERSION_SCRIPT` non bloquant. RUN.md (règles de cache) mis à jour. Q15 soldée.
+3. **RUN.md, étape 3.1** : condition de validité de la copie des refs diagnostic → production
+   (`AN_REF`, `SEUIL_REF_DAS`, `SEUIL_REF_IMPRECIS`, `SEUIL_REF_PAIRES` identiques, sinon
+   `FORCER_REFS <- TRUE`). Q13 traitée.

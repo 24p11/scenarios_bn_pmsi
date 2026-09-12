@@ -11,12 +11,30 @@
 # garde-fou partiels_meta, phase tirage sans base (mock interdit), reprise des chunks,
 # identité parquet, livrables. Ne valide PAS le dialecte ni les colonnes de la base réelle.
 #
-# Prérequis : dbplyr, DBI, RSQLite, arrow, yaml. Exécution : Rscript tests/test_chaines_sqlite.R
+# Prérequis : dbplyr, DBI, RSQLite, yaml (arrow : mock RDS de repli si absent). Exécution : Rscript tests/test_chaines_sqlite.R
 # [R_LIBS_TEST=<lib supplémentaire>]
 ###############################################################################
 lib_test <- Sys.getenv("R_LIBS_TEST", unset = "")
 if(nzchar(lib_test)) .libPaths(c(lib_test, .libPaths()))
-for(p in c("dbplyr", "DBI", "RSQLite", "arrow", "yaml", "tidyr", "readr")) if(!requireNamespace(p, quietly = TRUE)) stop("Paquet manquant : ", p)
+for(p in c("dbplyr", "DBI", "RSQLite", "yaml", "tidyr", "readr")) if(!requireNamespace(p, quietly = TRUE)) stop("Paquet manquant : ", p)
+# Repli arrow (tests UNIQUEMENT) : si arrow est absent, un paquet mock `arrow` est installé dans
+# tempdir (même mécanique que le mock pRatihque), dont write_parquet/read_parquet sont
+# saveRDS/readRDS. Limite : les fichiers produits sont des RDS nommés .parquet, valables
+# seulement parce qu'ils sont relus par le même mock dans cette session. Les scripts de
+# production continuent d'exiger le vrai arrow.
+ARROW_MOCK <- !requireNamespace("arrow", quietly = TRUE)
+if(ARROW_MOCK){
+  lib_mock_arrow <- file.path(tempdir(), "lib_mock_arrow"); dir.create(lib_mock_arrow, showWarnings = FALSE)
+  pkg_arrow <- file.path(tempdir(), "arrow"); dir.create(file.path(pkg_arrow, "R"), recursive = TRUE, showWarnings = FALSE)
+  writeLines(c("Package: arrow", "Version: 0.0.0.9000", "Title: Mock", "Description: Mock arrow (RDS) pour tests hors base.",
+               "License: MIT", "Encoding: UTF-8"), file.path(pkg_arrow, "DESCRIPTION"))
+  writeLines("export(write_parquet, read_parquet)", file.path(pkg_arrow, "NAMESPACE"))
+  writeLines(c("write_parquet <- function(x, sink, ...) saveRDS(x, sink)",
+               "read_parquet  <- function(file, ...)  readRDS(file)"), file.path(pkg_arrow, "R", "mock.R"))
+  utils::install.packages(pkg_arrow, repos = NULL, type = "source", lib = lib_mock_arrow, quiet = TRUE)
+  .libPaths(c(lib_mock_arrow, .libPaths()))
+  stopifnot(requireNamespace("arrow", quietly = TRUE))
+}
 suppressPackageStartupMessages({library(dplyr); library(tibble); library(stringr); library(dbplyr)})
 for(loc in c("fr_FR.UTF-8", "en_US.UTF-8", "C.UTF-8")) if(!is.na(suppressWarnings(Sys.setlocale("LC_CTYPE", loc))) && Sys.getlocale("LC_CTYPE") == loc) break
 `%+%` <- function(x, y) paste0(x, y)
@@ -307,4 +325,4 @@ ok("rapport catalogue_complet : ligne nrow / NB_VARIANTES / volume", any(grepl("
 ok("la phase tirage n'a jamais touché la base (mock interdit resté silencieux)", isTRUE(getOption("pmsi_mock_interdit")))
 options(pmsi_mock_interdit = FALSE)
 
-cat("\nSIMULATION SQLITE (scripts réels, sessions multiples) VERTE :", n_ok, "assertions\n")
+cat("\nSIMULATION SQLITE (scripts réels, sessions multiples) VERTE :", n_ok, "assertions ; arrow =", if(ARROW_MOCK) "mock RDS" else "réel", "\n")

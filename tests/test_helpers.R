@@ -9,6 +9,25 @@ suppressPackageStartupMessages({library(dplyr); library(tibble); library(stringr
 for(loc in c("fr_FR.UTF-8", "en_US.UTF-8", "C.UTF-8")) if(!is.na(suppressWarnings(Sys.setlocale("LC_CTYPE", loc))) && Sys.getlocale("LC_CTYPE") == loc) break
 lib_test <- Sys.getenv("R_LIBS_TEST", unset = ""); if(nzchar(lib_test)) .libPaths(c(lib_test, .libPaths()))
 
+# Repli arrow (tests UNIQUEMENT) : si arrow est absent, un paquet mock `arrow` est installé dans
+# tempdir, dont write_parquet/read_parquet sont saveRDS/readRDS. Limite : les fichiers produits
+# sont des RDS nommés .parquet, valables seulement parce qu'ils sont relus par le même mock.
+# Les scripts de production continuent d'exiger le vrai arrow.
+installer_mock_arrow <- function(){
+  lib_mock <- file.path(tempdir(), "lib_mock_arrow"); dir.create(lib_mock, showWarnings = FALSE)
+  pkg <- file.path(tempdir(), "arrow"); dir.create(file.path(pkg, "R"), recursive = TRUE, showWarnings = FALSE)
+  writeLines(c("Package: arrow", "Version: 0.0.0.9000", "Title: Mock", "Description: Mock arrow (RDS) pour tests hors base.",
+               "License: MIT", "Encoding: UTF-8"), file.path(pkg, "DESCRIPTION"))
+  writeLines("export(write_parquet, read_parquet)", file.path(pkg, "NAMESPACE"))
+  writeLines(c("write_parquet <- function(x, sink, ...) saveRDS(x, sink)",
+               "read_parquet  <- function(file, ...)  readRDS(file)"), file.path(pkg, "R", "mock.R"))
+  utils::install.packages(pkg, repos = NULL, type = "source", lib = lib_mock, quiet = TRUE)
+  .libPaths(c(lib_mock, .libPaths()))
+  stopifnot(requireNamespace("arrow", quietly = TRUE))
+}
+ARROW_MOCK <- !requireNamespace("arrow", quietly = TRUE)
+if(ARROW_MOCK) installer_mock_arrow()
+
 racine <- c(".", "..")[file.exists(c("config_v8.R", "../config_v8.R"))][1]
 stopifnot(!is.na(racine))
 Sys.unsetenv("SCENARIOS_PMSI_SURCHARGE")
@@ -254,11 +273,8 @@ ok("deux exécutions sous le même seed donnent le même résultat", identical(r
 
 # =========================================================== industrialisation ==
 cat("\n# pmap_chunks\n")
-a_arrow <- requireNamespace("arrow", quietly = TRUE)
-ecrire_t <- if(a_arrow) arrow::write_parquet else function(x, f) saveRDS(x, f)
-lire_t   <- if(a_arrow) arrow::read_parquet  else readRDS
-ext_t    <- if(a_arrow) ".parquet" else ".rds"
-cat("   (écriture des chunks :", if(a_arrow) "arrow" else "repli RDS (test uniquement)", ")\n")
+ecrire_t <- arrow::write_parquet; lire_t <- arrow::read_parquet; ext_t <- ".parquet"
+cat("   (écriture des chunks :", if(ARROW_MOCK) "mock arrow = RDS (test uniquement)" else "arrow", ")\n")
 f_test <- function(id, k){ if(k == 0) return(NULL); tibble::tibble(id = id, k = k, u = round(stats::runif(1), 6), s = sample(letters, 1)) }
 df_in <- tibble::tibble(id = 1:23, k = c(rep(1L, 10), 0L, rep(2L, 12)))
 run_chunks <- function(dossier, ...) pmap_chunks(df_in, f_test, chunk_size = 5, dossier = dossier, prefixe = "t", seed_base = 100,
@@ -339,8 +355,13 @@ mc <- meta_partiels_courant(2L, 25L, 3:100, PIVOTS_LONGS, "v8-test")
 ok("meta courant", mc$K_GRAINE_LONGS == 2L && identical(mc$DUREE_LONGS, c(3L, 100L)))
 rt <- yaml::yaml.load(yaml::as.yaml(mc))
 ok("aller-retour yaml compatible", is.null(verifier_partiels_meta(rt, mc)$erreur) && length(verifier_partiels_meta(rt, mc)$avertissements) == 0)
-ok("K différent -> erreur", grepl("K_GRAINE_LONGS", verifier_partiels_meta(rt, meta_partiels_courant(3L, 25L, 3:100, PIVOTS_LONGS, "v8-test"))$erreur))
-ok("NBDA_MAX différent -> avertissement seulement", { v <- verifier_partiels_meta(rt, meta_partiels_courant(2L, 20L, 3:100, PIVOTS_LONGS, "v8-test")); is.null(v$erreur) && length(v$avertissements) == 1 })
+bloque <- function(courant, cle){ v <- verifier_partiels_meta(rt, courant); !is.null(v$erreur) && grepl(cle, v$erreur) && grepl("PARTIELS_DIR", v$erreur) }
+ok("K_GRAINE_LONGS différent -> bloquant", bloque(meta_partiels_courant(3L, 25L, 3:100, PIVOTS_LONGS, "v8-test"), "K_GRAINE_LONGS"))
+ok("NBDA_MAX différent -> bloquant", bloque(meta_partiels_courant(2L, 20L, 3:100, PIVOTS_LONGS, "v8-test"), "NBDA_MAX"))
+ok("DUREE_LONGS différent -> bloquant", bloque(meta_partiels_courant(2L, 25L, 3:60, PIVOTS_LONGS, "v8-test"), "DUREE_LONGS"))
+ok("PIVOTS_LONGS différent -> bloquant", bloque(meta_partiels_courant(2L, 25L, 3:100, setdiff(PIVOTS_LONGS, "prep_sc"), "v8-test"), "PIVOTS_LONGS"))
+ok("plusieurs clés différentes -> toutes listées dans le message", { v <- verifier_partiels_meta(rt, meta_partiels_courant(3L, 20L, 3:100, PIVOTS_LONGS, "v8-test")); grepl("K_GRAINE_LONGS", v$erreur) && grepl("NBDA_MAX", v$erreur) })
+ok("VERSION_SCRIPT différent -> avertissement seulement, non bloquant", { v <- verifier_partiels_meta(rt, meta_partiels_courant(2L, 25L, 3:100, PIVOTS_LONGS, "v8-autre")); is.null(v$erreur) && length(v$avertissements) == 1 && grepl("VERSION_SCRIPT", v$avertissements) })
 ok("pas de méta existante -> rien", is.null(verifier_partiels_meta(NULL, mc)$erreur))
 ap <- apports_iteration("CH", 17L, "calculé", tibble::tibble(diag2 = c("A", "B")), tibble::tibble(diag2 = c("A", "B", "C")), "C")
 ok("apports_iteration", ap$nb_lignes_partiel == 2 && ap$nb_lignes_cumul == 3 && ap$nb_diag2_cumul == 3 && ap$nb_diag2_nouveaux == 2)

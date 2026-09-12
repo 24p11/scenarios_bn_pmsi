@@ -516,27 +516,32 @@ imprimer_plan <- function(plan){
 
 # --- B4. Partiels : méta et instrumentation --------------------------------------------
 # Les partiels dépendent de K_GRAINE_LONGS et de la logique amont (prep_data, prep_scenarios2,
-# NBDA_MAX, DUREE_LONGS, PIVOTS_LONGS), PAS du seuil > SEUIL_PIVOT ni du périmètre d'années.
+# NBDA_MAX, DUREE_LONGS, PIVOTS_LONGS : filtres des séjours et grain des comptes), PAS du seuil
+# > SEUIL_PIVOT ni du périmètre d'années. Toute différence sur ces clés rend les partiels
+# invalides -> stop() ; VERSION_SCRIPT différent -> avertissement seulement.
+CLES_PARTIELS_BLOQUANTES <- c("K_GRAINE_LONGS", "NBDA_MAX", "DUREE_LONGS", "PIVOTS_LONGS")
+CLES_PARTIELS_AVERTISSEMENT <- c("VERSION_SCRIPT")
+
 meta_partiels_courant <- function(k, nbda_max, duree_longs, pivots, version){
   list(K_GRAINE_LONGS = as.integer(k), NBDA_MAX = as.integer(nbda_max),
        DUREE_LONGS = as.integer(range(duree_longs)), PIVOTS_LONGS = as.character(pivots),
        VERSION_SCRIPT = as.character(version), date = as.character(Sys.Date()))
 }
 
-# Retourne list(erreur = message ou NULL, avertissements = character()). K différent -> erreur.
+# Retourne list(erreur = message ou NULL, avertissements = character()).
 verifier_partiels_meta <- function(existant, courant){
   if(is.null(existant)) return(list(erreur = NULL, avertissements = character(0)))
   meme <- function(ch) identical(as.character(unlist(existant[[ch]])), as.character(unlist(courant[[ch]])))
+  detail <- function(ch) sprintf("%s (partiels : %s ; courant : %s)", ch,
+                                 paste(unlist(existant[[ch]]), collapse = ","), paste(unlist(courant[[ch]]), collapse = ","))
+  bloquantes <- CLES_PARTIELS_BLOQUANTES[!vapply(CLES_PARTIELS_BLOQUANTES, meme, logical(1))]
   erreur <- NULL
-  if(!meme("K_GRAINE_LONGS")){
-    erreur <- sprintf("partiels_meta.yaml : K_GRAINE_LONGS des partiels (%s) != courant (%s). Vider PARTIELS_DIR avant de relancer.",
-                      paste(unlist(existant$K_GRAINE_LONGS), collapse = ","), paste(unlist(courant$K_GRAINE_LONGS), collapse = ","))
+  if(length(bloquantes) > 0){
+    erreur <- sprintf("partiels_meta.yaml : %s. Les partiels ont été construits avec d'autres paramètres amont : vider PARTIELS_DIR avant de relancer.",
+                      paste(vapply(bloquantes, detail, character(1)), collapse = " ; "))
   }
   av <- character(0)
-  for(ch in c("NBDA_MAX", "DUREE_LONGS", "PIVOTS_LONGS", "VERSION_SCRIPT")){
-    if(!meme(ch)) av <- c(av, sprintf("partiels_meta.yaml : %s différent (partiels : %s ; courant : %s)", ch,
-                                      paste(unlist(existant[[ch]]), collapse = ","), paste(unlist(courant[[ch]]), collapse = ",")))
-  }
+  for(ch in CLES_PARTIELS_AVERTISSEMENT) if(!meme(ch)) av <- c(av, "partiels_meta.yaml : " %+% detail(ch))
   list(erreur = erreur, avertissements = av)
 }
 

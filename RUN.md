@@ -68,7 +68,9 @@ Ne pas toucher à `K_GRAINE_LONGS` sans vider `results/partiels/` (voir règles 
    Si le diagnostic a déjà tout extrait, le plan indique « 0 itération à faire » ; seules les
    9 refs sont calculées dans `exports/` (elles sont propres au profil, donc `prep_data(AN_REF)`
    est recréée une fois). Pour ne pas les recalculer, copier les `ref_*.parquet`, `pivots_courts`,
-   `v_admin_*`, `referentiel_*` de `exports_diagnostic/` vers `exports/`.
+   `v_admin_*`, `referentiel_*` de `exports_diagnostic/` vers `exports/` : copie sûre **si et
+   seulement si** `AN_REF`, `SEUIL_REF_DAS`, `SEUIL_REF_IMPRECIS` et `SEUIL_REF_PAIRES` sont
+   identiques entre les deux profils ; sinon `FORCER_REFS <- TRUE` et recalcul.
    Critères : `catalogue_longs_seuil_meta.yaml` porte `PROFIL: production` et le périmètre choisi.
 2. Tirage par paliers, en surchargeant `BUDGET_TOTAL_LONGS` sans éditer la config :
    ```
@@ -87,9 +89,10 @@ Ne pas toucher à `K_GRAINE_LONGS` sans vider `results/partiels/` (voir règles 
 
 - **`results/partiels/`** : dépend de `K_GRAINE_LONGS` et de la logique amont (`prep_data`,
   `prep_scenarios2`, `NBDA_MAX`, `DUREE_LONGS`, `PIVOTS_LONGS`), **pas** de `SEUIL_PIVOT` ni du
-  périmètre d'années. `partiels_meta.yaml` mémorise ces valeurs : K différent → `stop()`
-  demandant de vider le dossier ; autre différence → avertissement. Vider le dossier
-  (`rm results/partiels/*`) après tout changement de `prep_data` / `prep_scenarios2` / K.
+  périmètre d'années. `partiels_meta.yaml` mémorise ces valeurs : `K_GRAINE_LONGS`, `NBDA_MAX`,
+  `DUREE_LONGS` ou `PIVOTS_LONGS` différent → `stop()` demandant de vider le dossier ;
+  `VERSION_SCRIPT` différent → avertissement. Vider le dossier (`rm results/partiels/*`) après
+  tout changement de `prep_data` / `prep_scenarios2` ou de l'une de ces clés.
 - **Refs (`exports*/`)** : sautées si le parquet existe. Après un changement d'`AN_REF` ou une
   correction amont, passer `FORCER_REFS <- TRUE` (config ou surcharge) une fois, puis remettre
   `FALSE`.
