@@ -102,6 +102,14 @@ MOTIF_IMPRECIS <- "sans précision|non précisé"
 CONVERSION_E669  <- TRUE     # les deux profils ; écrit dans meta.yaml
 BARE_E669_DEFAUT <- "0"      # ultime repli pour un E669 nu sans distribution E660x observée (-> E6600)
 
+# Mémoire (plateforme sécurisée : 15 GiB). Doctrine : ne collecter que des agrégats, le plus
+# tard possible, libérer immédiatement ; le niveau séjour ne quitte jamais la base.
+COLLECT_PAR_MORCEAUX <- TRUE  # prep_scenarios2 : un collect par modalité de cage depuis la table temporaire top-k
+SEUIL_ALERTE_GO      <- 10    # diagnostic_memoire.csv : avertissement visible si le pic gc() dépasse ce seuil (Go)
+# Recouvrement entre deux partiels d'une même catégorie d'établissements (etbs, anA, anB) :
+# mesure de déduplication pour la décision de périmètre (recouvrement.csv). Extensible.
+PAIRES_RECOUVREMENT  <- list(c("CHR/U", 24, 25))
+
 # Millésime de la table des niveaux de CMA (mco_diag_niveau, colonnes v20xx) selon
 # l'année de données (v7.2 l.280-282). Utilisé partout à la place de v2025 (§5.8).
 anseqta_de <- function(an){
@@ -162,7 +170,7 @@ NOMS_CONFIG_META <- c("PROFIL", "VERSION_SCRIPT", "AN_REF", "ANS_HISTORIQUE", "T
                       "NB_TIRAGES_COURTS", "NB_VARIANTES_ADMIN_COURTS", "NB_VARIANTES_ADMIN_LONGS",
                       "MODE_SELECTION", "BUDGET_TOTAL_LONGS", "QUOTA_MIN_PAR_UNITE", "CHUNK_SIZE",
                       "GARDER_CHUNKS", "FORCER_REFS", "EXPORTS_DIR", "PARTIELS_DIR", "PIVOTS_LONGS",
-                      "CONVERSION_E669", "BARE_E669_DEFAUT")
+                      "CONVERSION_E669", "BARE_E669_DEFAUT", "COLLECT_PAR_MORCEAUX", "SEUIL_ALERTE_GO")
 valeurs_effectives_config <- function(env = globalenv()){
   v <- mget(NOMS_CONFIG_META, envir = env)
   lapply(v, function(x) if(is.numeric(x) && length(x) > 1) as.integer(x) else x)

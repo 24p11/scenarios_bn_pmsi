@@ -545,12 +545,13 @@ verifier_partiels_meta <- function(existant, courant){
   list(erreur = erreur, avertissements = av)
 }
 
-# Ligne d'instrumentation après une itération : apport marginal en lignes et en diag2.
-apports_iteration <- function(etbs, an, statut, df_partiel, df_cumul, diag2_avant){
-  diag2_apres <- unique(df_cumul$diag2)
+# Ligne d'instrumentation d'un partiel SEUL (P2 : plus d'accumulateur) : lignes, sum(n)
+# (= séjours éligibles), diag2 distincts, diag2 nouveaux par rapport au set déjà vu.
+apports_partiel <- function(etbs, an, statut, df_partiel, diag2_vus){
+  d <- unique(df_partiel$diag2)
   data.frame(etbs = etbs, an = as.integer(an), statut = statut,
-             nb_lignes_partiel = nrow(df_partiel), nb_lignes_cumul = nrow(df_cumul),
-             nb_diag2_cumul = length(diag2_apres), nb_diag2_nouveaux = length(setdiff(diag2_apres, diag2_avant)),
+             nb_lignes_partiel = nrow(df_partiel), sum_n_partiel = sum(df_partiel$n),
+             nb_diag2_partiel = length(d), nb_diag2_nouveaux = length(setdiff(d, diag2_vus)),
              stringsAsFactors = FALSE)
 }
 
@@ -831,4 +832,160 @@ impact_niveau_cma <- function(df_raw, col_code = "das", col_niveau = "niveau", c
   list(effectif_e669 = sum(e[[col_n]]),
        niveau_change = sum(e[[col_n]][!is.na(niv_cible) & niv_cible != as.character(e[[col_niveau]])]),
        cible_inconnue = sum(e[[col_n]][is.na(niv_cible)]))
+}
+
+## ---- D. Mémoire 15 GiB : collapse vectorisé, agrégation des partiels, recouvrement, mesure ----
+
+# Collapse séjour -> graine (diagnostic_associes) sur la table top-k collectée (colonnes ident,
+# pivots, das ; au plus k lignes par ident). k == 2 : chemin vectorisé (arrange + match, aucun
+# summarise par groupe) ; sinon repli générique summarise + paste0 (non utilisé en production,
+# K_GRAINE_LONGS = 2). Reproduit exactement l'ancien enchaînement group_by(ident, pivots) |>
+# arrange(das) |> summarise(paste0(das, collapse = " ")) : ordre C des codes, NA -> "NA".
+# Le collapse est PAR SÉJOUR : un ident a une seule cage, donc le morcelage par cage ne coupe
+# jamais un séjour (invariant vérifié en test).
+collapse_graine <- function(df, pivots, k){
+  cols_out <- c(pivots, "diagnostic_associes", "n")
+  if(nrow(df) == 0){
+    out <- df[0, pivots, drop = FALSE]; out$diagnostic_associes <- character(0); out$n <- integer(0)
+    return(tibble::as_tibble(out))
+  }
+  if(k == 2){
+    df <- df |> dplyr::arrange(ident, das)
+    premier <- !duplicated(df$ident)
+    p <- df[premier, , drop = FALSE]
+    second <- df[!premier, c("ident", "das"), drop = FALSE]
+    das2 <- second$das[match(p$ident, second$ident)]
+    p$diagnostic_associes <- ifelse(is.na(das2), paste(p$das), paste(p$das, das2))
+    p |> dplyr::summarise(n = dplyr::n(), .by = dplyr::all_of(c(pivots, "diagnostic_associes")))
+  } else {
+    df |>
+      dplyr::group_by_at(c("ident", pivots)) |>
+      dplyr::arrange(das) |>
+      dplyr::summarise(diagnostic_associes = paste0(das, collapse = " "), .groups = "drop") |>
+      dplyr::ungroup() |>
+      dplyr::summarise(n = dplyr::n(), .by = dplyr::all_of(c(pivots, "diagnostic_associes")))
+  }
+}
+
+# Agrégation de partiels parquet (même schéma) : sum(col_n) par cols, avec semi-jointure
+# optionnelle sur filtre_cles (data.frame de clés). Deux chemins : (a) arrow::open_dataset
+# (production, mémoire bornée par le moteur arrow) ; (b) pur R incrémental, un partiel à la
+# fois, fusion successive (référence sémantique ; utilisé quand arrow est le mock des tests).
+arrow_dataset_disponible <- function() requireNamespace("arrow", quietly = TRUE) && "open_dataset" %in% getNamespaceExports("arrow")
+
+agreger_partiels_incremental <- function(fichiers, cols, col_n, filtre_cles = NULL, lire = arrow::read_parquet){
+  acc <- NULL
+  for(f in fichiers){
+    d <- tibble::as_tibble(lire(f))
+    if(!is.null(filtre_cles)) d <- dplyr::semi_join(d, filtre_cles, by = names(filtre_cles))
+    d <- reagreger(d[, c(cols, col_n), drop = FALSE], cols, col_n)
+    acc <- if(is.null(acc)) d else reagreger(dplyr::bind_rows(acc, d), cols, col_n)
+    rm(d)
+  }
+  if(is.null(acc)){
+    acc <- tibble::as_tibble(lire(fichiers[1]))[0, c(cols, col_n), drop = FALSE]
+  }
+  acc
+}
+
+agreger_partiels_arrow <- function(fichiers, cols, col_n, filtre_cles = NULL){
+  ds <- arrow::open_dataset(fichiers)
+  if(!is.null(filtre_cles)) ds <- dplyr::semi_join(ds, filtre_cles, by = names(filtre_cles))
+  res <- ds |> dplyr::group_by(dplyr::across(dplyr::all_of(cols))) |>
+    dplyr::summarise(.n_tmp = sum(.data[[col_n]], na.rm = TRUE), .groups = "drop") |>
+    dplyr::collect() |> tibble::as_tibble()
+  res$.n_tmp <- as.integer(res$.n_tmp)
+  names(res)[names(res) == ".n_tmp"] <- col_n
+  res
+}
+
+agreger_partiels <- function(fichiers, cols, col_n, filtre_cles = NULL, chemin = c("auto", "arrow", "incremental")){
+  chemin <- match.arg(chemin)
+  if(length(fichiers) == 0) stop("agreger_partiels : aucun fichier")
+  if(chemin == "auto") chemin <- if(arrow_dataset_disponible()) "arrow" else "incremental"
+  if(chemin == "arrow"){
+    res <- tryCatch(agreger_partiels_arrow(fichiers, cols, col_n, filtre_cles),
+                    error = function(e){ warning("agreger_partiels : chemin arrow en échec (" %+% conditionMessage(e) %+% "), repli incrémental", call. = FALSE); NULL })
+    if(!is.null(res)) return(res |> dplyr::arrange(dplyr::across(dplyr::all_of(cols))))
+  }
+  agreger_partiels_incremental(fichiers, cols, col_n, filtre_cles) |> dplyr::arrange(dplyr::across(dplyr::all_of(cols)))
+}
+
+# Clés pivot BRUTES contribuant à une clé pivot retenue (après conversion E669 de diag2) :
+# diag2 hors E669 -> identité ; E669 suffixé -> sa cible ; E669 nu -> retenu si AU MOINS une
+# de ses cibles de redistribution (cascade sur cage/sexe) est retenue.
+cles_brutes_retenues <- function(pivots_bruts, cles_retenues, cols, dist, defaut = "0"){
+  if(nrow(pivots_bruts) == 0) return(pivots_bruts[0, cols, drop = FALSE])
+  cle <- function(d) do.call(paste, c(lapply(cols, function(p) as.character(d[[p]])), sep = "\r"))
+  ret <- unique(cle(cles_retenues[, cols, drop = FALSE]))
+  b <- pivots_bruts[, cols, drop = FALSE]
+  b_conv <- b; b_conv$diag2 <- convertir_e669(b$diag2)
+  garde <- cle(b_conv) %in% ret
+  nu <- which(est_e669_nu(b$diag2))
+  a_cage <- "cage" %in% cols; a_sexe <- "sexe" %in% cols
+  for(i in nu){
+    cl <- classes_e660(dist, if(a_cage) as.character(b$cage[i]) else NA, if(a_sexe) as.character(b$sexe[i]) else NA, defaut)
+    cibles <- b[rep(i, nrow(cl)), , drop = FALSE]; cibles$diag2 <- cl$code
+    garde[i] <- any(cle(cibles) %in% ret)
+  }
+  dplyr::distinct(b[garde, , drop = FALSE])
+}
+
+# Effectifs E669 (suffixé / nu) portés par les graines d'une table de combinaisons
+effectif_e669_combos <- function(df, col_combo, col_n){
+  if(nrow(df) == 0) return(list(suffixe = 0, nu = 0))
+  das <- split_das(df[[col_combo]])
+  list(suffixe = sum(df[[col_n]] * vapply(das, function(v) sum(grepl("^E669.", v)), integer(1))),
+       nu = sum(df[[col_n]] * vapply(das, function(v) sum(v == "E669"), integer(1))))
+}
+
+# Impact de la conversion au niveau des tables PIVOT (petites) : profils > seuil avant / après,
+# entrés / sortis (clés avant exprimées avec diag2 converti par suffixe), effectifs E669 diag2.
+impact_conversion_pivots <- function(pivots_bruts, pivots_convertis, cols, seuil, col_n = "n"){
+  seuil_cles <- function(d){
+    s <- reagreger(d[, c(cols, col_n), drop = FALSE], cols, col_n); s <- s[s[[col_n]] > seuil, , drop = FALSE]
+    unique(do.call(paste, c(lapply(cols, function(p) if(p == "diag2") convertir_e669(s[[p]]) else as.character(s[[p]])), sep = "\r")))
+  }
+  k_avant <- seuil_cles(pivots_bruts); k_apres <- seuil_cles(pivots_convertis)
+  list(n_total_avant = sum(pivots_bruts[[col_n]]), n_total_apres = sum(pivots_convertis[[col_n]]),
+       e669_diag2_suffixe = sum(pivots_bruts[[col_n]][grepl("^E669.", pivots_bruts$diag2)]),
+       e669_diag2_nu = sum(pivots_bruts[[col_n]][est_e669_nu(pivots_bruts$diag2)]),
+       profils_seuil_avant = length(k_avant), profils_seuil_apres = length(k_apres),
+       profils_entres = length(setdiff(k_apres, k_avant)), profils_sortis = length(setdiff(k_avant, k_apres)))
+}
+
+# Recouvrement entre deux partiels A (référence) et B (candidat) : combinaisons (pivots ×
+# diagnostic_associes), pivots seuls, diag2 nouveaux. Parts en proportion de B.
+recouvrement_partiels <- function(A, B, pivots, col_combo = "diagnostic_associes", col_n = "n"){
+  cle <- function(d, cols) do.call(paste, c(lapply(cols, function(p) as.character(d[[p]])), sep = "\r"))
+  cA <- cle(A, c(pivots, col_combo)); cB <- cle(B, c(pivots, col_combo))
+  communes <- cB %in% cA
+  pA <- reagreger(A[, c(pivots, col_n)], pivots, col_n); pB <- reagreger(B[, c(pivots, col_n)], pivots, col_n)
+  piv_communs <- cle(pB, pivots) %in% cle(pA, pivots)
+  data.frame(nb_A = nrow(A), nb_B = nrow(B), nb_communes = sum(communes),
+             part_combos_B_vues = if(nrow(B)) sum(communes) / nrow(B) else NA,
+             part_sejours_B_vus = if(sum(B[[col_n]])) sum(B[[col_n]][communes]) / sum(B[[col_n]]) else NA,
+             nb_pivots_A = nrow(pA), nb_pivots_B = nrow(pB), nb_pivots_communs = sum(piv_communs),
+             part_pivots_B_vus = if(nrow(pB)) sum(piv_communs) / nrow(pB) else NA,
+             part_sejours_pivots_B_vus = if(sum(pB[[col_n]])) sum(pB[[col_n]][piv_communs]) / sum(pB[[col_n]]) else NA,
+             nb_diag2_B_nouveaux = length(setdiff(unique(B$diag2), unique(A$diag2))),
+             sejours_B_uniques_nouveaux = sum(B[[col_n]][!communes]))
+}
+
+# Instrumentation mémoire : une ligne par mesure (étiquette, horodatage, taille de l'objet,
+# mémoire utilisée et pic gc() depuis la mesure précédente, en Go) ; avertissement visible
+# si le pic dépasse seuil_alerte_go. Retourne le journal augmenté (data.frame).
+mesurer_memoire <- function(etiquette, objet = NULL, journal = NULL, seuil_alerte_go = 10, verbose = TRUE){
+  g <- gc(reset = TRUE)   # colonnes : used, (Mb), gc trigger, (Mb), [limit (Mb),] max used, (Mb) -> dernière colonne = pic en Mb
+  taille_mo <- if(is.null(objet)) NA_real_ else as.numeric(utils::object.size(objet)) / 1024^2
+  utilise_go <- sum(g[, 2]) / 1024
+  pic_go <- sum(g[, ncol(g)]) / 1024
+  ligne <- data.frame(etiquette = etiquette, horodatage = format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
+                      taille_objet_mo = round(taille_mo, 1), memoire_utilisee_go = round(utilise_go, 3),
+                      pic_go = round(pic_go, 3), alerte = pic_go > seuil_alerte_go, stringsAsFactors = FALSE)
+  if(verbose) cat(sprintf("  [mémoire] %-40s objet = %8s Mo ; utilisé = %6.2f Go ; pic = %6.2f Go%s\n", etiquette,
+                          if(is.na(taille_mo)) "-" else format(round(taille_mo, 1)), utilise_go, pic_go,
+                          if(pic_go > seuil_alerte_go) "  <<< AVERTISSEMENT : pic > SEUIL_ALERTE_GO" else ""))
+  if(pic_go > seuil_alerte_go) warning(sprintf("Pic mémoire %.2f Go > SEUIL_ALERTE_GO (%s) à l'étape « %s »", pic_go, seuil_alerte_go, etiquette), call. = FALSE)
+  rbind(journal, ligne)
 }

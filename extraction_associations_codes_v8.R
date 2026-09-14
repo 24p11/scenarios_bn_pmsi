@@ -475,9 +475,17 @@ ref_paires_chroniques <- function(an){
 }
 
 ## ---- 4. prep_scenarios2 (définition) ----
-# Source : v7.2 l.278-327 (bloc B8 de MODIFICATIONS_V8.md), déplacé tel quel.
+# Source : v7.2 l.278-327 (bloc B8 de MODIFICATIONS_V8.md). ÉCART P1 (chantier mémoire 15 GiB,
+# MODIFICATIONS_V8.md section 13) : la chaîne ne collecte plus le grain séjour × DAS. Le top-k
+# par séjour (tri desc(niveau), desc(nb_das), das — §5.9 tiebreak compris) est calculé EN BASE
+# par fenêtres (COUNT/ROW_NUMBER OVER, dialecte déjà validé par prep_data), matérialisé dans une
+# table temporaire UNIQUE `prep_topk_tmp` écrasée à chaque itération (jamais d'empilement, pas
+# de DROP nécessaire : temporaire de session, jamais de parquet pour ce grain), puis collectée
+# en colonnes étroites, par morceaux de cage (collect_par_morceaux). Le collapse en graine est
+# vectorisé en R (collapse_graine). Équivalence avec l'ancienne version prouvée par
+# tests/test_chaines_sqlite.R (§P1.5) : les partiels antérieurs restent valides.
 #----------------------------- Prépa DAS  -------------------------------#
-prep_scenarios2<-function(an,type_etbs,nb_journees_aut,nbda_aut,nb_assoc_das,pivots){
+prep_scenarios2<-function(an,type_etbs,nb_journees_aut,nbda_aut,nb_assoc_das,pivots,collect_par_morceaux = TRUE,noter = NULL){
   
   anseqta = anseqta_de(an)
   
@@ -502,24 +510,36 @@ prep_scenarios2<-function(an,type_etbs,nb_journees_aut,nbda_aut,nb_assoc_das,piv
                         dplyr::rename(das = code,niveau = !!dplyr::sym("v20"%+% anseqta))
     ) |> 
     
-    dplyr::collect() -> df_das
+    dplyr::mutate(niveau = ifelse(is.na(niveau), "0", niveau)) |>                                   # écart P1 (ex post-collect)
+    dplyr::mutate(nb_das = dplyr::n(), .by = dplyr::all_of(c(pivots, "das"))) |>                    # écart P1 (ex post-collect ; COUNT OVER)
+    dplyr::group_by(ident) |>                                                                       # écart P1
+    dbplyr::window_order(desc(niveau), desc(nb_das), das) |>                                        # écart P1 (= arrange §5.9 ; `desc` non namespacé : dbplyr ne traduit pas `dplyr::desc` dans window_order)
+    dplyr::filter(dplyr::row_number() <= nb_assoc_das) |>                                           # écart P1 (= slice(1:k) ; ROW_NUMBER OVER)
+    dplyr::ungroup() |>                                                                             # écart P1
+    dplyr::select(dplyr::all_of(c("ident", pivots, "das"))) |>                                      # écart P1 : colonnes étroites
+    dplyr::compute("prep_topk_tmp", temporary = TRUE, overwrite = TRUE)                            # écart P1 : table temporaire unique, écrasée
   
-  
-  df_das |> 
-    dplyr::mutate(niveau = ifelse(is.na(niveau),"0",niveau)) |> 
-    dplyr::mutate(nb_das = dplyr::n(),.by= dplyr::all_of(c(pivots,"das"))) -> df_das
-  
-  df_das |> 
-    dplyr::arrange(ident,dplyr::desc(niveau),dplyr::desc(nb_das),das) |>   # §5.9 : `das` en dernier critère (ordre total)
-    dplyr::group_by(ident) |> 
-    dplyr::slice(1:nb_assoc_das) -> df_das
-  
-  df_das |> 
-    dplyr::group_by_at(c("ident",pivots)) |> 
-    dplyr::arrange(das) |> 
-    dplyr::summarise(diagnostic_associes = paste0(das,collapse = " "),.groups="drop") |> 
-    dplyr::ungroup() |> 
-    dplyr::summarise(n = dplyr::n(),.by=dplyr::all_of(c(pivots,"diagnostic_associes"))) -> df_cases
+  # COLLECT minimal depuis prep_topk_tmp (k lignes max par séjour). Par morceaux de cage : filtre
+  # en lecture seule sur la table figée (aucun recalcul des fenêtres), chaque morceau collapsé
+  # puis libéré ; les df_cases partiels (agrégés, petits) sont concaténés — leurs clés sont
+  # disjointes car cage est un pivot et un ident n'a qu'une cage (jamais coupé par le morcelage).
+  topk <- pRatihque::atihble(conn, "prep_topk_tmp")
+  if(isTRUE(collect_par_morceaux)){
+    cages <- topk |> dplyr::distinct(cage) |> dplyr::collect() |> dplyr::pull(cage)
+    df_cases <- NULL
+    for(cg in cages){
+      morceau <- if(is.na(cg)) topk |> dplyr::filter(is.na(cage)) |> dplyr::collect() else topk |> dplyr::filter(cage == cg) |> dplyr::collect()
+      if(!is.null(noter)) noter("prep_scenarios2 " %+% type_etbs %+% " " %+% an %+% " morceau " %+% cg, morceau)
+      df_cases <- dplyr::bind_rows(df_cases, collapse_graine(morceau, pivots, nb_assoc_das))
+      rm(morceau); gc()
+    }
+    if(is.null(df_cases)) df_cases <- collapse_graine(topk |> dplyr::collect(), pivots, nb_assoc_das)   # itération sans séjour
+  } else {
+    df_das <- topk |> dplyr::collect()
+    if(!is.null(noter)) noter("prep_scenarios2 " %+% type_etbs %+% " " %+% an %+% " collect unique", df_das)
+    df_cases <- collapse_graine(df_das, pivots, nb_assoc_das)
+    rm(df_das); gc()
+  }
   
   return(df_cases)
   
@@ -545,6 +565,14 @@ if(plan$prep_das_chronique) prep_das_chronique(AN_REF)
 #     de référence est calculée sur les comptes BRUTS de ref_das_chronique (avant sa conversion)
 #     et exportée (distribution_e660.parquet) pour les autres refs et le catalogue.
 CACHE_E669 <- new.env()
+# Instrumentation mémoire (chantier 15 GiB) : journal accumulé dans un environnement (pas de
+# `<<-`), exporté en diagnostic_memoire.csv. noter_memoire() après chaque collect notable.
+MEMOIRE_ENV <- new.env(); assign("journal", NULL, envir = MEMOIRE_ENV)
+noter_memoire <- function(etiquette, objet = NULL){
+  assign("journal", mesurer_memoire(etiquette, objet, get("journal", envir = MEMOIRE_ENV), SEUIL_ALERTE_GO), envir = MEMOIRE_ENV)
+  invisible(NULL)
+}
+purger_cache_e669 <- function(){ if(exists("brute", envir = CACHE_E669)) rm("brute", envir = CACHE_E669); gc(); invisible(NULL) }
 charger_dist_e660 <- function(){
   f <- file.path(EXPORTS_DIR, "distribution_e660.parquet")
   if(!file.exists(f)) stop("distribution_e660.parquet absent de " %+% EXPORTS_DIR %+% " (calculé avec ref_das_chronique ; FORCER_REFS <- TRUE)")
@@ -586,7 +614,13 @@ FABRIQUES_REFS <- list(
       convertir_e669_comptes("diag2", c("das", "sexe", "cage", "niveau", "type_liste", "caract"), "nb_das", dist, BARE_E669_DEFAUT) |>
       convertir_e669_comptes("das", c("diag2", "sexe", "cage", "niveau", "type_liste", "caract"), "nb_das", dist, BARE_E669_DEFAUT)
   },
-  distribution_e660 = function() distribution_e660(ref_das_chronique_brute(), "das", "nb_das"),
+  distribution_e660 = function(){
+    brute <- ref_das_chronique_brute()
+    dist <- distribution_e660(brute, "das", "nb_das")
+    assign("niveau_cma", impact_niveau_cma(brute, "das", "niveau", "nb_das"), envir = CACHE_E669)   # mesure §6 conservée (petite)
+    rm(brute); purger_cache_e669()                                                                   # P3.2 : comptes bruts libérés aussitôt
+    dist
+  },
   ref_das_aigu = function(){
     df <- ref_das_aigu(AN_REF)
     if(!CONVERSION_E669) return(df)
@@ -649,16 +683,19 @@ for(i in seq_len(nrow(plan$refs))){
   df_ref <- FABRIQUES_REFS[[nom]]()
   arrow::write_parquet(df_ref, fichier)
   cat("  -> ", nrow(df_ref), " lignes -> ", fichier, "\n", sep = "")
-  rm(df_ref); gc()
+  noter_memoire("ref " %+% nom, df_ref)
+  rm(df_ref); gc()   # P3.1 : aucune ref ne reste liée à l'environnement global après son écriture
 }
+purger_cache_e669()  # P3.2 : au cas où ref_das_chronique a été calculée sans distribution_e660
 
 # 5c. Catalogue longs par partiels : chaque itération (etbs, an) écrit
 #     PARTIELS_DIR/catalogue_partiel_<etbs>_<an>.parquet et est sautée si le fichier existe.
-#     Chaîne base de l'itération (prep_scenarios2) inchangée ; seul l'enrobage R bouge.
-#     Instrumentation : apports marginaux imprimés + diagnostic_apports.csv (EXPORTS_DIR).
+#     P2 : ZÉRO accumulateur en RAM — la boucle calcule/relit, écrit, imprime les stats DU
+#     PARTIEL SEUL (seul cumul conservé : le set des diag2 vus, quelques Ko), libère.
+#     diagnostic_apports.csv : nb_lignes_partiel, sum_n_partiel, nb_diag2_partiel, nb_diag2_nouveaux.
 construire_catalogue_longs <- function(plan){
-  df_cases <- NULL
   apports <- NULL
+  diag2_vus <- character(0)
   it <- plan$iterations
   for(i in seq_len(nrow(it))){
     type_etbs <- it$etbs[i]; an_ <- it$an[i]
@@ -667,57 +704,101 @@ construire_catalogue_longs <- function(plan){
       df_cases_tmp <- arrow::read_parquet(fichier)
       statut <- "relu"
     } else {
-      df_cases_tmp<-prep_scenarios2(an_,type_etbs,DUREE_LONGS,NBDA_MAX,K_GRAINE_LONGS,PIVOTS_LONGS)
+      df_cases_tmp<-prep_scenarios2(an_,type_etbs,DUREE_LONGS,NBDA_MAX,K_GRAINE_LONGS,PIVOTS_LONGS,COLLECT_PAR_MORCEAUX,noter_memoire)
       gc()
       arrow::write_parquet(df_cases_tmp, fichier)
       statut <- "calculé"
     }
-    diag2_avant <- if(is.null(df_cases)) character(0) else unique(df_cases$diag2)
-    df_cases <- dplyr::bind_rows(df_cases,df_cases_tmp) |> 
-      dplyr::summarise(n =sum(n),.by=dplyr::all_of(c(PIVOTS_LONGS,"diagnostic_associes")))
-    ligne <- apports_iteration(type_etbs, an_, statut, df_cases_tmp, df_cases, diag2_avant)
+    ligne <- apports_partiel(type_etbs, an_, statut, df_cases_tmp, diag2_vus)
+    diag2_vus <- union(diag2_vus, unique(df_cases_tmp$diag2))
     apports <- rbind(apports, ligne)
-    cat(sprintf("  %-6s %s [%-7s] partiel = %8d lignes ; cumul = %9d lignes ; diag2 cumul = %5d (+%d nouveaux)\n",
-                type_etbs, an_, statut, ligne$nb_lignes_partiel, ligne$nb_lignes_cumul, ligne$nb_diag2_cumul, ligne$nb_diag2_nouveaux))
-    rm(df_cases_tmp)
+    cat(sprintf("  %-6s %s [%-7s] partiel = %8d lignes ; sum(n) = %9d séjours ; diag2 = %5d (+%d nouveaux)\n",
+                type_etbs, an_, statut, ligne$nb_lignes_partiel, ligne$sum_n_partiel, ligne$nb_diag2_partiel, ligne$nb_diag2_nouveaux))
+    noter_memoire("partiel " %+% type_etbs %+% " " %+% an_ %+% " (" %+% statut %+% ")", df_cases_tmp)
+    rm(df_cases_tmp); gc()
   }
   utils::write.csv(apports, file.path(EXPORTS_DIR, "diagnostic_apports.csv"), row.names = FALSE)
-  df_cases
+  apports
 }
 
 cat("== Catalogue longs (partiels) ==\n")
-df_prep_scenarios <- construire_catalogue_longs(plan)
-cat("- Nombre de lignes catalogue brut (df_prep_scenarios) = ", nrow(df_prep_scenarios), "\n", sep = "")
+apports <- construire_catalogue_longs(plan)
 
-# 5d. Conversion E669 -> E660 du catalogue agrégé (partiels relus en codes BRUTS) : diag2 puis
-#     graines, ré-agrégation sum(n), PUIS seuil (section 6). Mesure d'impact avant/après.
+# 5d. RECOUVREMENT (mesure de déduplication pour la décision de périmètre) : pour chaque paire
+#     (etbs, anA, anB) de PAIRES_RECOUVREMENT dont les deux partiels existent, relire les DEUX
+#     partiels seulement, mesurer, libérer. Export recouvrement.csv + impression lisible.
+mesurer_recouvrement <- function(paires){
+  res <- NULL
+  for(p in paires){
+    etbs <- p[[1]]; anA <- as.integer(p[[2]]); anB <- as.integer(p[[3]])
+    fA <- file.path(PARTIELS_DIR, nom_partiel(etbs, anA)); fB <- file.path(PARTIELS_DIR, nom_partiel(etbs, anB))
+    if(!file.exists(fA) || !file.exists(fB)){
+      res <- dplyr::bind_rows(res, data.frame(etbs = etbs, anA = anA, anB = anB, statut = "non calculable (partiel manquant)"))
+      cat(sprintf("  recouvrement %s %s -> %s : non calculable (partiel manquant)\n", etbs, anA, anB)); next
+    }
+    A <- arrow::read_parquet(fA); B <- arrow::read_parquet(fB)
+    r <- recouvrement_partiels(A, B, PIVOTS_LONGS, "diagnostic_associes", "n")
+    rm(A, B); gc()
+    res <- dplyr::bind_rows(res, cbind(data.frame(etbs = etbs, anA = anA, anB = anB, statut = "ok"), r))
+    cat(sprintf("  ajouter %s aux %s : %.1f %% des combinaisons de %s déjà vues en %s (%.1f %% des séjours), %d cas uniques nouveaux ; pivots : %.1f %% déjà vus ; %d diag2 nouveaux\n",
+                anB, etbs, 100 * r$part_combos_B_vues, anB, anA, 100 * r$part_sejours_B_vus, r$sejours_B_uniques_nouveaux, 100 * r$part_pivots_B_vus, r$nb_diag2_B_nouveaux))
+  }
+  if(!is.null(res)) utils::write.csv(res, file.path(EXPORTS_DIR, "recouvrement.csv"), row.names = FALSE)
+  res
+}
+cat("== Recouvrement entre partiels ==\n")
+recouvrement <- mesurer_recouvrement(PAIRES_RECOUVREMENT)
+
+## ---- 6. Catalogue final en deux étages + seuil + exports ----
+# Construit UNE FOIS après la boucle, hors RAM R (agreger_partiels : arrow::open_dataset en
+# production, chemin incrémental sinon), en relisant UNIQUEMENT les partiels du profil courant.
+# Étage 1 (petit) : agrégation au niveau PIVOTS (PIVOTS_LONGS_SEUIL), conversion E669 des
+#   comptes pivots, seuil > SEUIL_PIVOT -> pivots retenus (convertis).
+# Étage 2 (borné) : clés pivots BRUTES contribuant à un pivot retenu (identité ; E669 suffixé ->
+#   sa cible ; E669 nu -> retenu si au moins une cible est retenue), semi-jointure sur les
+#   partiels, agrégation (pivots bruts × graine), PUIS pipeline existant conversion -> ré-agrégation
+#   -> seuil RE-APPLIQUÉ exactement (l'étage 2 sur-matérialise légèrement ; le seuil final fait foi,
+#   fusions sous-seuil incluses). Équivalence avec l'ancien flux (bind_rows global) prouvée en test.
+fichiers_partiels <- file.path(PARTIELS_DIR, plan$iterations$fichier)
+cat("== Catalogue final : étage 1 (pivots) ==\n")
+pivots_bruts <- agreger_partiels(fichiers_partiels, PIVOTS_LONGS_SEUIL, "n")
+noter_memoire("catalogue étage 1 : pivots bruts", pivots_bruts)
 impact_e669 <- NULL
 if(CONVERSION_E669){
   dist_e660 <- charger_dist_e660()
-  avant <- df_prep_scenarios
-  df_prep_scenarios <- df_prep_scenarios |>
+  pivots_convertis <- convertir_e669_comptes(pivots_bruts, "diag2", setdiff(PIVOTS_LONGS_SEUIL, "diag2"), "n", dist_e660, BARE_E669_DEFAUT)
+  impact_e669 <- impact_conversion_pivots(pivots_bruts, pivots_convertis, PIVOTS_LONGS_SEUIL, SEUIL_PIVOT, "n")
+  impact_e669$niveau_cma <- if(exists("niveau_cma", envir = CACHE_E669)) get("niveau_cma", envir = CACHE_E669) else
+    list(effectif_e669 = "non mesuré (distribution_e660 relue, ref_das_chronique non recalculée)", niveau_change = NA, cible_inconnue = NA)
+} else pivots_convertis <- pivots_bruts
+pivots_retenus <- pivots_convertis[pivots_convertis$n > SEUIL_PIVOT, PIVOTS_LONGS_SEUIL, drop = FALSE]
+cat("- pivots bruts = ", nrow(pivots_bruts), " ; pivots convertis = ", nrow(pivots_convertis), " ; retenus (> ", SEUIL_PIVOT, ") = ", nrow(pivots_retenus), "\n", sep = "")
+
+cat("== Catalogue final : étage 2 (combinaisons des clés retenues) ==\n")
+cles_brutes <- if(CONVERSION_E669) cles_brutes_retenues(pivots_bruts, pivots_retenus, PIVOTS_LONGS_SEUIL, dist_e660, BARE_E669_DEFAUT) else pivots_retenus
+rm(pivots_bruts, pivots_convertis); gc()
+combos <- agreger_partiels(fichiers_partiels, c(PIVOTS_LONGS, "diagnostic_associes"), "n", filtre_cles = cles_brutes)
+noter_memoire("catalogue étage 2 : combinaisons brutes", combos)
+if(CONVERSION_E669){
+  e669_graine <- effectif_e669_combos(combos, "diagnostic_associes", "n")
+  impact_e669$e669_graine_suffixe <- e669_graine$suffixe; impact_e669$e669_graine_nu <- e669_graine$nu
+  impact_e669$lignes_avant <- nrow(combos)
+  combos <- combos |>
     convertir_e669_comptes("diag2", c(setdiff(PIVOTS_LONGS, "diag2"), "diagnostic_associes"), "n", dist_e660, BARE_E669_DEFAUT) |>
     convertir_e669_combo("diagnostic_associes", PIVOTS_LONGS, "n", dist_e660, BARE_E669_DEFAUT)
-  impact_e669 <- impact_conversion_catalogue(avant, df_prep_scenarios, PIVOTS_LONGS_SEUIL, SEUIL_PIVOT, "n")
-  # niveau CMA : mesurable seulement si ref_das_chronique a été calculée dans cette exécution (comptes bruts en cache)
-  impact_e669$niveau_cma <- if(exists("brute", envir = CACHE_E669)) impact_niveau_cma(get("brute", envir = CACHE_E669), "das", "niveau", "nb_das") else
-    list(effectif_e669 = "non mesuré (ref_das_chronique relue, déjà convertie)", niveau_change = NA, cible_inconnue = NA)
-  impact_e669$e660_resultant <- effectifs_e660(df_prep_scenarios |> dplyr::mutate(n = as.integer(n)), c("diag2", "diagnostic_associes"))
-  rm(avant)
-  cat("- Conversion E669 : ", impact_e669$lignes_avant, " -> ", impact_e669$lignes_apres, " lignes (", impact_e669$lignes_fusionnees,
-      " fusionnées) ; sum(n) ", impact_e669$n_total_avant, " -> ", impact_e669$n_total_apres, "\n", sep = "")
+  impact_e669$lignes_apres <- nrow(combos); impact_e669$lignes_fusionnees <- impact_e669$lignes_avant - impact_e669$lignes_apres
+  noter_memoire("catalogue étage 2 : combinaisons converties", combos)
 }
-
-## ---- 6. Agrégation + seuil + exports ----
 # Seuil de divulgation au niveau des pivots (v7.2 l.526-530 ; §2.2 : nb > SEUIL_PIVOT,
-# le n par combinaison est sommé puis abandonné). Relit UNIQUEMENT les partiels du profil
-# courant (ANS_HISTORIQUE × TYPES_ETBS_LONGS) : la production ré-agrège sans requête base.
-df_prep_scenarios_seuil <- df_prep_scenarios |>  dplyr::inner_join(df_prep_scenarios |> 
-                                                                      dplyr::summarise(nb=sum(n),
-                                                                                       .by =dplyr::all_of(PIVOTS_LONGS_SEUIL) )  ) |> 
+# le n par combinaison est sommé puis abandonné) — RE-APPLIQUÉ exactement sur l'étage 2.
+df_prep_scenarios_seuil <- combos |>  dplyr::inner_join(combos |> 
+                                                          dplyr::summarise(nb=sum(n),
+                                                                           .by =dplyr::all_of(PIVOTS_LONGS_SEUIL) )  ) |> 
   dplyr::filter(nb>SEUIL_PIVOT) |> dplyr::select(-n) |>
   dplyr::rename(poids = nb)
-rm(df_prep_scenarios); gc()
+rm(combos, cles_brutes, pivots_retenus); gc()
+if(CONVERSION_E669) impact_e669$e660_resultant <- effectifs_e660(df_prep_scenarios_seuil, c("diag2", "diagnostic_associes"))
+noter_memoire("catalogue final (seuil)", df_prep_scenarios_seuil)
 cat("- Nombre de lignes catalogue éligible (df_prep_scenarios_seuil) = ", nrow(df_prep_scenarios_seuil), "\n", sep = "")
 
 arrow::write_parquet(df_prep_scenarios_seuil, file.path(EXPORTS_DIR, "catalogue_longs_seuil.parquet"))
@@ -745,16 +826,20 @@ if(CONVERSION_E669){
     "-- catalogue agrégé (avant seuil) :",
     sprintf("   effectif E669 converti : diag2 suffixé = %s ; diag2 nu = %s ; graine suffixé = %s ; graine nu = %s",
             impact_e669$e669_diag2_suffixe, impact_e669$e669_diag2_nu, impact_e669$e669_graine_suffixe, impact_e669$e669_graine_nu),
-    sprintf("   sum(n) avant = %s ; après = %s (conservé : %s)", impact_e669$n_total_avant, impact_e669$n_total_apres, impact_e669$n_total_avant == impact_e669$n_total_apres),
-    sprintf("   lignes avant = %d ; après = %d ; fusionnées = %d", impact_e669$lignes_avant, impact_e669$lignes_apres, impact_e669$lignes_fusionnees),
+    sprintf("   sum(n) pivots avant = %s ; après = %s (conservé : %s)", impact_e669$n_total_avant, impact_e669$n_total_apres, impact_e669$n_total_avant == impact_e669$n_total_apres),
+    sprintf("   combinaisons (étage 2, clés retenues) avant = %d ; après = %d ; fusionnées = %d", impact_e669$lignes_avant, impact_e669$lignes_apres, impact_e669$lignes_fusionnees),
     sprintf("   profils (pivots) > seuil : avant = %d ; après = %d ; ENTRÉS par fusion = %d ; sortis = %d  [écart de volumétrie assumé par doctrine]",
             impact_e669$profils_seuil_avant, impact_e669$profils_seuil_apres, impact_e669$profils_entres, impact_e669$profils_sortis),
     sprintf("   niveau CMA (ref_das_chronique brute) : effectif E669x = %s ; conversions changeant le niveau = %s ; cible E660x non observée = %s",
             impact_e669$niveau_cma$effectif_e669, impact_e669$niveau_cma$niveau_change, impact_e669$niveau_cma$cible_inconnue),
     "-- distribution E660x résultante dans le catalogue (diag2 + graines, en lignes) :", fmt_df(impact_e669$e660_resultant))
 }
+lignes_rx <- c(lignes_rx, "", "== 4. Apports par partiel (diagnostic_apports.csv) ==", fmt_df(apports),
+               "", "== 5. Recouvrement entre partiels (recouvrement.csv) ==", fmt_df(recouvrement),
+               "", "== 6. Mémoire (diagnostic_memoire.csv ; SEUIL_ALERTE_GO = " %+% SEUIL_ALERTE_GO %+% ") ==", fmt_df(get("journal", envir = MEMOIRE_ENV)))
+utils::write.csv(get("journal", envir = MEMOIRE_ENV), file.path(EXPORTS_DIR, "diagnostic_memoire.csv"), row.names = FALSE)
 FICHIER_RAPPORT_EXTRACTION <- file.path(EXPORTS_DIR, "rapport_extraction_v8_" %+% DATE_TAG %+% ".txt")
 writeLines(lignes_rx, FICHIER_RAPPORT_EXTRACTION)
 cat("Rapport d'extraction : ", FICHIER_RAPPORT_EXTRACTION, "\n", sep = "")
-cat("Exports écrits dans ", EXPORTS_DIR, " : catalogue_longs_seuil.parquet (+ meta.yaml), diagnostic_apports.csv, refs.\n", sep = "")
+cat("Exports écrits dans ", EXPORTS_DIR, " : catalogue_longs_seuil.parquet (+ meta.yaml), diagnostic_apports.csv, recouvrement.csv, diagnostic_memoire.csv, refs.\n", sep = "")
 cat("Extraction terminée. Étape suivante : tirage_scenarios_v8.R (aucune connexion base).\n")

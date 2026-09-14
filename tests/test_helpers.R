@@ -364,8 +364,8 @@ ok("PIVOTS_LONGS différent -> bloquant", bloque(meta_partiels_courant(2L, 25L, 
 ok("plusieurs clés différentes -> toutes listées dans le message", { v <- verifier_partiels_meta(rt, meta_partiels_courant(3L, 20L, 3:100, PIVOTS_LONGS, "v8-test")); grepl("K_GRAINE_LONGS", v$erreur) && grepl("NBDA_MAX", v$erreur) })
 ok("VERSION_SCRIPT différent -> avertissement seulement, non bloquant", { v <- verifier_partiels_meta(rt, meta_partiels_courant(2L, 25L, 3:100, PIVOTS_LONGS, "v8-autre")); is.null(v$erreur) && length(v$avertissements) == 1 && grepl("VERSION_SCRIPT", v$avertissements) })
 ok("pas de méta existante -> rien", is.null(verifier_partiels_meta(NULL, mc)$erreur))
-ap <- apports_iteration("CH", 17L, "calculé", tibble::tibble(diag2 = c("A", "B")), tibble::tibble(diag2 = c("A", "B", "C")), "C")
-ok("apports_iteration", ap$nb_lignes_partiel == 2 && ap$nb_lignes_cumul == 3 && ap$nb_diag2_cumul == 3 && ap$nb_diag2_nouveaux == 2)
+ap <- apports_partiel("CH", 17L, "calculé", tibble::tibble(diag2 = c("A", "B", "A"), n = c(2L, 3L, 1L)), "B")
+ok("apports_partiel : stats du partiel seul", ap$nb_lignes_partiel == 3 && ap$sum_n_partiel == 6 && ap$nb_diag2_partiel == 2 && ap$nb_diag2_nouveaux == 1 && !"nb_lignes_cumul" %in% names(ap))
 ok("verifier_meta_tirage : identique -> NULL ; différent -> message", is.null(verifier_meta_tirage(list(a = 1L, b = "x"), list(a = 1L, b = "x"), c("a", "b"))) &&
      grepl("b", verifier_meta_tirage(list(a = 1L, b = "x"), list(a = 1L, b = "y"), c("a", "b"))))
 
@@ -453,5 +453,76 @@ ok("impact_conversion_catalogue : totaux, lignes fusionnées, effectifs E669", i
      imp$e669_graine_suffixe == 3 && imp$e669_graine_nu == 20 && imp$e669_diag2_nu == 0)
 ok("impact_niveau_cma : niveau différent compté", { r <- impact_niveau_cma(tibble::tibble(das = c("E6690", "E6600", "E6692"), niveau = c("2", "1", "2"), nb_das = c(5, 1, 3)))
      r$effectif_e669 == 8 && r$niveau_change == 5 && r$cible_inconnue == 3 })
+
+
+# ============================================================ mémoire 15 GiB ==
+cat("\n# collapse_graine\n")
+piv_t <- c("mode_hospit", "sexe", "cage", "diag2")
+topk <- tibble::tibble(ident = c(3, 3, 1, 2, 2, 4), mode_hospit = "HC", sexe = "1",
+                       cage = c("[60-70[", "[60-70[", "[60-70[", "[80-[", "[80-[", "[60-70["), diag2 = "J449",
+                       das = c("N189", "I500", "I10", "E785", "A000", NA))
+cg2 <- collapse_graine(topk, piv_t, 2)
+ok("k = 2 : appariement trié en ordre C, séjour à 1 DAS, séjour sans DAS -> \"NA\"",
+   setequal(cg2$diagnostic_associes, c("I500 N189", "I10", "A000 E785", "NA")) && all(cg2$n == 1) && identical(names(cg2), c(piv_t, "diagnostic_associes", "n")))
+ok("k = 2 vectorisé == repli générique (k = 3 sur mêmes données à 2 DAS max)", identical(dplyr::arrange(cg2, dplyr::across(dplyr::everything())), dplyr::arrange(collapse_graine(topk, piv_t, 3), dplyr::across(dplyr::everything()))))
+ok("k = 2 : agrégation des séjours identiques", { t2 <- dplyr::bind_rows(topk, topk |> dplyr::mutate(ident = ident + 10)); all(collapse_graine(t2, piv_t, 2)$n == 2) })
+ok("df vide -> schéma complet, 0 ligne", { e <- collapse_graine(topk[0, ], piv_t, 2); nrow(e) == 0 && identical(names(e), c(piv_t, "diagnostic_associes", "n")) })
+ok("k = 2 : ordre d'entrée indifférent", identical(dplyr::arrange(collapse_graine(topk[c(6, 5, 4, 3, 2, 1), ], piv_t, 2), dplyr::across(dplyr::everything())), dplyr::arrange(cg2, dplyr::across(dplyr::everything()))))
+
+cat("\n# agreger_partiels (chemin incrémental et arrow)\n")
+mk <- function(i) tibble::tibble(mode_hospit = "HC", sexe = c("1", "2", "1"), cage = "[60-70[", diag2 = c("J449", "J449", "E6690"),
+                                 nbda = 2L, diagnostic_associes = c("I10 N189", "I10", "E785"), n = c(1L, 2L, 3L) * i)
+dpart <- file.path(tempdir(), "partiels_t"); unlink(dpart, recursive = TRUE); dir.create(dpart)
+fp <- file.path(dpart, sprintf("p_%d.parquet", 1:3))
+for(i in 1:3) arrow::write_parquet(mk(i), fp[i])
+ref_global <- dplyr::bind_rows(lapply(1:3, mk)) |> dplyr::summarise(n = sum(n), .by = c(mode_hospit, sexe, cage, diag2, nbda, diagnostic_associes)) |>
+  dplyr::arrange(dplyr::across(dplyr::everything()))
+r_inc <- agreger_partiels(fp, c("mode_hospit", "sexe", "cage", "diag2", "nbda", "diagnostic_associes"), "n", chemin = "incremental")
+ok("chemin (b) incrémental == bind_rows + summarise global", identical(as.data.frame(r_inc), as.data.frame(ref_global)))
+cles <- tibble::tibble(sexe = "1", diag2 = "J449")
+ref_f <- ref_global |> dplyr::semi_join(cles, by = c("sexe", "diag2"))
+r_inc_f <- agreger_partiels(fp, c("mode_hospit", "sexe", "cage", "diag2", "nbda", "diagnostic_associes"), "n", filtre_cles = cles, chemin = "incremental")
+ok("chemin (b) avec filtre de clés == référence filtrée", identical(as.data.frame(r_inc_f), as.data.frame(ref_f)) && nrow(r_inc_f) == 1)
+r_piv <- agreger_partiels(fp, c("sexe", "diag2"), "n", chemin = "incremental")
+ok("chemin (b) niveau pivots : sommes exactes", r_piv$n[r_piv$sexe == "1" & r_piv$diag2 == "J449"] == 6 && r_piv$n[r_piv$diag2 == "E6690"] == 18)
+if(!ARROW_MOCK){
+  r_arw <- agreger_partiels(fp, c("mode_hospit", "sexe", "cage", "diag2", "nbda", "diagnostic_associes"), "n", chemin = "arrow")
+  ok("chemin (a) arrow::open_dataset == chemin (b)", identical(as.data.frame(r_arw), as.data.frame(r_inc)))
+  ok("chemin (a) avec filtre == chemin (b) avec filtre", identical(as.data.frame(agreger_partiels(fp, c("mode_hospit", "sexe", "cage", "diag2", "nbda", "diagnostic_associes"), "n", filtre_cles = cles, chemin = "arrow")), as.data.frame(r_inc_f)))
+  ok("sélection auto = arrow quand disponible", arrow_dataset_disponible())
+} else ok("mock arrow : sélection auto = incrémental", !arrow_dataset_disponible())
+ok("filtre sans correspondance -> 0 ligne, schéma conservé", { z <- agreger_partiels(fp, c("sexe", "diag2"), "n", filtre_cles = tibble::tibble(diag2 = "ZZZ"), chemin = "incremental"); nrow(z) == 0 && identical(names(z), c("sexe", "diag2", "n")) })
+
+cat("\n# cles_brutes_retenues\n")
+cols_s <- c("sexe", "cage", "diag2")
+pb <- tibble::tibble(sexe = "1", cage = "[60-70[", diag2 = c("J449", "E6690", "E669", "E669", "I10", "E6691"), n = c(5L, 1L, 1L, 1L, 1L, 1L))
+pb$cage[4] <- "[80-["
+ret <- tibble::tibble(sexe = "1", cage = c("[60-70[", "[60-70[", "[80-["), diag2 = c("J449", "E6600", "E6602"))
+cb <- cles_brutes_retenues(pb, ret, cols_s, dist)
+ok("identité : J449 retenu ; suffixé : E6690 -> E6600 retenu ; E6691 -> E6601 non retenu ; I10 non retenu",
+   "J449" %in% cb$diag2 && "E6690" %in% cb$diag2 && !"E6691" %in% cb$diag2 && !"I10" %in% cb$diag2)
+ok("nu multi-cibles dont une retenue (strate 1 : E6600/1/2, E6600 retenu) -> retenu", any(cb$diag2 == "E669" & cb$cage == "[60-70["))
+ok("nu dont une cible retenue via cascade globale ([80-[ -> E6602 retenu) -> retenu", any(cb$diag2 == "E669" & cb$cage == "[80-["))
+ok("nu aucune cible retenue -> non retenu", !any(cles_brutes_retenues(pb, ret[ret$diag2 == "J449", ], cols_s, dist)$diag2 == "E669"))
+ok("sans clé retenue -> vide ; schéma = cols", { z <- cles_brutes_retenues(pb, ret[0, ], cols_s, dist); nrow(z) == 0 && identical(names(z), cols_s) })
+ip <- impact_conversion_pivots(pb, convertir_e669_comptes(pb, "diag2", c("sexe", "cage"), "n", dist), cols_s, 1, "n")
+ok("impact_conversion_pivots : totaux, E669 diag2 suffixé/nu, profils", ip$n_total_avant == ip$n_total_apres && ip$e669_diag2_suffixe == 2 && ip$e669_diag2_nu == 2 && ip$profils_seuil_avant == 1 && ip$profils_seuil_apres >= 1)
+ok("effectif_e669_combos", { e <- effectif_e669_combos(tibble::tibble(g = c("E6690 I10", "E669", "I10"), n = c(2, 3, 4)), "g", "n"); e$suffixe == 2 && e$nu == 3 })
+
+cat("\n# recouvrement_partiels\n")
+A <- tibble::tibble(mode_hospit = "HC", sexe = "1", diag2 = c("J449", "J449", "I500"), diagnostic_associes = c("I10", "N189", "I10"), n = c(10L, 5L, 2L))
+B <- tibble::tibble(mode_hospit = "HC", sexe = c("1", "1", "1", "2"), diag2 = c("J449", "J449", "K802", "J449"), diagnostic_associes = c("I10", "E785", "I10", "I10"), n = c(4L, 6L, 3L, 7L))
+rc <- recouvrement_partiels(A, B, c("mode_hospit", "sexe", "diag2"))
+ok("combinaisons : 1 commune sur 4 (25 %), séjours vus 4/20", rc$nb_A == 3 && rc$nb_B == 4 && rc$nb_communes == 1 && rc$part_combos_B_vues == 0.25 && rc$part_sejours_B_vus == 0.2 && rc$sejours_B_uniques_nouveaux == 16)
+ok("pivots : (HC,1,J449) commun sur 3 pivots B, séjours pivots 10/20", rc$nb_pivots_A == 2 && rc$nb_pivots_B == 3 && rc$nb_pivots_communs == 1 && rc$part_pivots_B_vus == 1/3 && rc$part_sejours_pivots_B_vus == 0.5)
+ok("diag2 nouveaux : K802", rc$nb_diag2_B_nouveaux == 1)
+ok("B vide -> parts NA sans erreur", is.na(recouvrement_partiels(A, B[0, ], c("mode_hospit", "sexe", "diag2"))$part_combos_B_vues))
+
+cat("\n# mesurer_memoire\n")
+jm <- mesurer_memoire("etape 1", numeric(1e6), NULL, 10, verbose = FALSE)
+jm <- mesurer_memoire("etape 2", NULL, jm, 10, verbose = FALSE)
+ok("schéma du csv : etiquette, horodatage, taille_objet_mo, memoire_utilisee_go, pic_go, alerte",
+   identical(names(jm), c("etiquette", "horodatage", "taille_objet_mo", "memoire_utilisee_go", "pic_go", "alerte")) && nrow(jm) == 2 && is.na(jm$taille_objet_mo[2]) && jm$taille_objet_mo[1] > 0 && all(!jm$alerte))
+ok("seuil d'alerte : avertissement et colonne alerte", { w <- NULL; j3 <- withCallingHandlers(mesurer_memoire("gros", NULL, NULL, 0.000001, verbose = FALSE), warning = function(x){ w <<- conditionMessage(x); invokeRestart("muffleWarning") }); j3$alerte && grepl("SEUIL_ALERTE_GO", w) })
 
 cat("\nTOUS LES TESTS SONT VERTS :", n_ok, "assertions\n")

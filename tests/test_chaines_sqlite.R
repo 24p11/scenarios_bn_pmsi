@@ -92,7 +92,8 @@ proj <- creer_projet("projet_v8")
 db_file <- file.path(tempdir(), "mock_v8.sqlite"); unlink(db_file)
 options(pmsi_mock_db = db_file, pmsi_mock_interdit = FALSE)
 Sys.setenv(SCENARIOS_PMSI_PATH = proj, SCENARIOS_PMSI_PROFIL = "diagnostic")
-SURCHARGE_BASE <- c("SEUIL_PIVOT <- 1", "SEUIL_REF_PAIRES <- 5", "BUDGET_TOTAL_LONGS <- 120L", "CHUNK_SIZE <- 40L")
+SURCHARGE_BASE <- c("SEUIL_PIVOT <- 1", "SEUIL_REF_PAIRES <- 5", "BUDGET_TOTAL_LONGS <- 120L", "CHUNK_SIZE <- 40L",
+                    'PAIRES_RECOUVREMENT <- list(c("CHR/U", 17, 26), c("CH", 24, 25))')
 surcharger <- function(...){
   f <- file.path(tempdir(), "surcharge.R"); writeLines(c(SURCHARGE_BASE, ...), f); Sys.setenv(SCENARIOS_PMSI_SURCHARGE = f)
 }
@@ -160,7 +161,7 @@ invisible(DBI::dbAppendTable(conn0, "PRD_VUE_MCOBL_2026.um", as.data.frame(tibbl
 invisible(DBI::dbAppendTable(conn0, "PRD_VUE_MCOBL_2026.diag", as.data.frame(tibble::tibble(ident = IDENT_FUSION, rum = 1L, diag = "I48", typ_diag = 5L))))
 DBI::dbWriteTable(conn0, "nomgen.finessgeo", data.frame(finessgeo = c("750100042","750100075","920100013"), categ_pmsi = c("CHR/U","CHR/U","CH")), overwrite = TRUE)
 DBI::dbWriteTable(conn0, "prd_vue_nompmsi.mco_diag_niveau",
-                  data.frame(code = pool_das, v2021 = sample(1:4, length(pool_das), TRUE), v2023 = sample(1:4, length(pool_das), TRUE), v2025 = sample(1:4, length(pool_das), TRUE)), overwrite = TRUE)
+                  data.frame(code = pool_das, v2021 = as.character(sample(1:4, length(pool_das), TRUE)), v2023 = as.character(sample(1:4, length(pool_das), TRUE)), v2025 = as.character(sample(1:4, length(pool_das), TRUE))), overwrite = TRUE)
 DBI::dbWriteTable(conn0, "prd_vue_nompmsi.all_cim10_caract_patient",
                   data.frame(code = pool_das, type_liste = ifelse(pool_das %in% c("I10","I110","E1120","E1128","E102","E785","J449","N189","N185","F172","I48","G20","M199","E1198","I509","I500","J440","C189","E669","E6690","E6602","E6600"), "Patho_chro", "Aigu"),
                              caract = "x"), overwrite = TRUE)
@@ -193,9 +194,9 @@ ok("partiels écrits : 4 parquet + partiels_meta.yaml",
 ok("exports : 10 refs + catalogue + meta + diagnostic_apports.csv",
    all(c(nom_ref(NOMS_REFS), "catalogue_longs_seuil.parquet", "catalogue_longs_seuil_meta.yaml", "diagnostic_apports.csv") %in% list.files(EXPORTS_DIR)))
 ap1 <- utils::read.csv(file.path(EXPORTS_DIR, "diagnostic_apports.csv"))
-ok("diagnostic_apports : 4 lignes calculées, cumuls croissants, ordre types × années",
-   nrow(ap1) == 4 && all(ap1$statut == "calculé") && !is.unsorted(ap1$nb_lignes_cumul) && !is.unsorted(ap1$nb_diag2_cumul) &&
-     identical(ap1$etbs, c("CHR/U", "CHR/U", "CH", "CH")) && identical(ap1$an, c(17L, 26L, 17L, 26L)) && ap1$nb_diag2_nouveaux[1] == ap1$nb_diag2_cumul[1])
+ok("diagnostic_apports : 4 lignes calculées, stats du partiel seul (sans colonnes cumul), ordre types × années",
+   nrow(ap1) == 4 && all(ap1$statut == "calculé") && identical(names(ap1), c("etbs", "an", "statut", "nb_lignes_partiel", "sum_n_partiel", "nb_diag2_partiel", "nb_diag2_nouveaux")) &&
+     identical(ap1$etbs, c("CHR/U", "CHR/U", "CH", "CH")) && identical(ap1$an, c(17L, 26L, 17L, 26L)) && ap1$nb_diag2_nouveaux[1] == ap1$nb_diag2_partiel[1] && all(ap1$sum_n_partiel >= ap1$nb_lignes_partiel))
 # refs : contrôles de contenu
 df_das_ref <- arrow::read_parquet(file.path(EXPORTS_DIR, "ref_das_aigu.parquet"))
 ok("ref_das_aigu : strate + das + n, sans diabète/I10/astérisques", all(c("mode_hospit","sexe","cage","racine","ghm2","diag2","das","n") %in% names(df_das_ref)) && nrow(df_das_ref) > 0 &&
@@ -238,6 +239,94 @@ ok("conversion : meta.yaml porte CONVERSION_E669 et BARE_E669_DEFAUT, rapport d'
      any(grepl("ENTRÉS par fusion", readLines(file.path(EXPORTS_DIR, "rapport_extraction_v8_" %+% DATE_TAG %+% ".txt")))))
 ok("aucune ligne niveau séjour exportée (pas de colonne ident dans les parquets d'exports)",
    !any(vapply(list.files(EXPORTS_DIR, pattern = "\\.parquet$", full.names = TRUE), function(f) "ident" %in% names(arrow::read_parquet(f, as_data_frame = FALSE)), logical(1))))
+# --- chantier mémoire : P1 équivalence, P2 catalogue deux étages, P3 libération
+cat("\n# mémoire : équivalence P1, catalogue deux étages, recouvrement, libération\n")
+prep_scenarios2_ancien_20260912<-function(an,type_etbs,nb_journees_aut,nbda_aut,nb_assoc_das,pivots){
+  
+  anseqta = anseqta_de(an)
+  
+  
+  pRatihque::atihble(conn, 'prep_data_' %+% an ) |>
+    dplyr::filter(prep_sc==1) |> 
+    dplyr::distinct(ident,prep_sc) |> dplyr::rename(sc= prep_sc) |> 
+    dplyr::full_join(pRatihque::atihble(conn, 'prep_data_' %+% an )) |>
+    dplyr::mutate(sc = ifelse(is.na(sc),0,1)) |> 
+    dplyr::filter(! (prep_sc==0 & sc==1)) |>
+    dplyr::filter(categ_pmsi %in% type_etbs,nbda%in%1:nbda_aut,duree %in%nb_journees_aut) |> 
+    dplyr::rename(rum =  rumdudp) |> 
+    dplyr::left_join(pRatihque::atihble(conn, "PRD_VUE_MCOBL_20" %+% an %+% '.diag') |> 
+                       dplyr::filter(typ_diag==5,!diag%in%c(code_dnid_ins,code_dnid,code_did,
+                                                            codes_astrisques_diabete,"I10")) |> 
+                       dplyr::rename(das = diag) ) |> 
+    dplyr::distinct_at(c("ident",pivots,"das")) |>
+    
+                    
+    dplyr::left_join( pRatihque::atihble(conn, 'prd_vue_nompmsi.mco_diag_niveau') |> dplyr::filter(!!dplyr::sym("v20"%+% anseqta)>1) |>   # §5.8 (ex v2025>1)
+                        dplyr::select(dplyr::all_of(c("code","v20"%+% anseqta))) |> 
+                        dplyr::rename(das = code,niveau = !!dplyr::sym("v20"%+% anseqta))
+    ) |> 
+    
+    dplyr::collect() -> df_das
+  
+  
+  df_das |> 
+    dplyr::mutate(niveau = ifelse(is.na(niveau),"0",niveau)) |> 
+    dplyr::mutate(nb_das = dplyr::n(),.by= dplyr::all_of(c(pivots,"das"))) -> df_das
+  
+  df_das |> 
+    dplyr::arrange(ident,dplyr::desc(niveau),dplyr::desc(nb_das),das) |>   # §5.9 : `das` en dernier critère (ordre total)
+    dplyr::group_by(ident) |> 
+    dplyr::slice(1:nb_assoc_das) -> df_das
+  
+  df_das |> 
+    dplyr::group_by_at(c("ident",pivots)) |> 
+    dplyr::arrange(das) |> 
+    dplyr::summarise(diagnostic_associes = paste0(das,collapse = " "),.groups="drop") |> 
+    dplyr::ungroup() |> 
+    dplyr::summarise(n = dplyr::n(),.by=dplyr::all_of(c(pivots,"diagnostic_associes"))) -> df_cases
+  
+  return(df_cases)
+  
+  
+}
+
+comparer <- function(a, b) identical(as.data.frame(dplyr::arrange(tibble::as_tibble(a), dplyr::across(dplyr::everything()))),
+                                     as.data.frame(dplyr::arrange(tibble::as_tibble(b), dplyr::across(dplyr::everything()))))
+for(cas in list(list("CHR/U", 26L, 2L), list("CH", 17L, 2L), list("CHR/U", 26L, 3L))){
+  anc <- prep_scenarios2_ancien_20260912(cas[[2]], cas[[1]], DUREE_LONGS, NBDA_MAX, cas[[3]], PIVOTS_LONGS)
+  nv_m <- prep_scenarios2(cas[[2]], cas[[1]], DUREE_LONGS, NBDA_MAX, cas[[3]], PIVOTS_LONGS, TRUE)
+  nv_u <- prep_scenarios2(cas[[2]], cas[[1]], DUREE_LONGS, NBDA_MAX, cas[[3]], PIVOTS_LONGS, FALSE)
+  ok(sprintf("P1 équivalence %s %s k=%d : nouvelle chaîne (morceaux) == ancienne", cas[[1]], cas[[2]], cas[[3]]), comparer(anc, nv_m) && nrow(anc) > 0)
+  ok(sprintf("P1 équivalence %s %s k=%d : collect unique == ancienne", cas[[1]], cas[[2]], cas[[3]]), comparer(anc, nv_u))
+}
+ok("partiel écrit par le run == ancienne chaîne (partiels antérieurs valides)",
+   comparer(arrow::read_parquet(file.path(PARTIELS_DIR, "catalogue_partiel_CH_17.parquet")), prep_scenarios2_ancien_20260912(17L, "CH", DUREE_LONGS, NBDA_MAX, K_GRAINE_LONGS, PIVOTS_LONGS)))
+tk <- pRatihque::atihble(conn, "prep_topk_tmp") |> dplyr::collect()
+ok("prep_topk_tmp : au plus k lignes par ident, colonnes étroites (ident, pivots, das)",
+   max(table(tk$ident)) <= 3 && identical(names(tk), c("ident", PIVOTS_LONGS, "das")))
+ok("invariant morceaux : un ident n'apparaît que dans une seule cage", all((tk |> dplyr::distinct(ident, cage) |> dplyr::count(ident))$n == 1))
+ok("prep_topk_tmp : une seule table (pas d'empilement), écrasée par la dernière itération (CHR/U 26 k=3 ci-dessus)",
+   sum(temp_tables(conn) == "prep_topk_tmp") == 1 && all(tk$ident %in% (pRatihque::atihble(conn, "prep_data_26") |> dplyr::filter(categ_pmsi == "CHR/U") |> dplyr::distinct(ident) |> dplyr::collect())$ident))
+# catalogue deux étages == ancien flux (bind_rows global -> conversion -> ré-agrégation -> seuil)
+ancien_flux <- function(fichiers, conversion){
+  d <- dplyr::bind_rows(lapply(fichiers, arrow::read_parquet)) |> dplyr::summarise(n = sum(n), .by = dplyr::all_of(c(PIVOTS_LONGS, "diagnostic_associes")))
+  if(conversion){
+    dist <- arrow::read_parquet(file.path(EXPORTS_DIR, "distribution_e660.parquet"))
+    d <- d |> convertir_e669_comptes("diag2", c(setdiff(PIVOTS_LONGS, "diag2"), "diagnostic_associes"), "n", dist, BARE_E669_DEFAUT) |>
+      convertir_e669_combo("diagnostic_associes", PIVOTS_LONGS, "n", dist, BARE_E669_DEFAUT)
+  }
+  d |> dplyr::inner_join(d |> dplyr::summarise(nb = sum(n), .by = dplyr::all_of(PIVOTS_LONGS_SEUIL)), by = PIVOTS_LONGS_SEUIL) |>
+    dplyr::filter(nb > SEUIL_PIVOT) |> dplyr::select(-n) |> dplyr::rename(poids = nb)
+}
+ok("P2 catalogue deux étages == ancien flux (conversion TRUE, fixture de fusion E669 incluse)",
+   comparer(cat1, ancien_flux(file.path(PARTIELS_DIR, plan$iterations$fichier), TRUE)) && any(cat1$ghm2 == "88M991"))
+ok("recouvrement.csv : (CHR/U 17->26) ok avec parts dans [0,1], (CH 24->25) non calculable",
+   { r <- utils::read.csv(file.path(EXPORTS_DIR, "recouvrement.csv")); nrow(r) == 2 && r$statut[1] == "ok" && r$part_combos_B_vues[1] >= 0 && r$part_combos_B_vues[1] <= 1 &&
+     r$nb_B[1] == ap1$nb_lignes_partiel[2] && grepl("non calculable", r$statut[2]) })
+ok("diagnostic_memoire.csv : schéma, mesures par morceau / partiel / ref / étage",
+   { m <- utils::read.csv(file.path(EXPORTS_DIR, "diagnostic_memoire.csv")); all(c("etiquette", "horodatage", "taille_objet_mo", "memoire_utilisee_go", "pic_go", "alerte") %in% names(m)) &&
+     any(grepl("morceau", m$etiquette)) && any(grepl("^partiel ", m$etiquette)) && any(grepl("^ref v_admin_longs", m$etiquette)) && any(grepl("étage 1", m$etiquette)) && any(grepl("catalogue final", m$etiquette)) })
+ok("P3 : aucun objet ref ni cache brut vivant après l'extraction", !exists("df_ref") && !exists("brute", envir = CACHE_E669) && !exists("pivots_bruts") && !exists("combos") && !exists("df_prep_scenarios"))
 fermer()
 
 # =============================================================== SESSION 2 ==
@@ -247,11 +336,11 @@ log2 <- sortie(lancer("extraction_associations_codes_v8.R"))
 ok("plan session 2 : 2 itérations (CHR/U 20, CH 20), 0 ref, année 20 seule, pas de prep_das_chronique",
    sum(plan$iterations$a_faire) == 2 && all(plan$iterations$an[plan$iterations$a_faire] == 20) && !any(plan$refs$a_faire) &&
      identical(plan$annees_a_preparer, 20L) && !plan$prep_das_chronique)
-ok("seule prep_data_20 recréée (aucune autre table temporaire)", identical(temp_tables(conn), "prep_data_20"))
+ok("seule prep_data_20 recréée (plus la table top-k unique de l'itération)", setequal(temp_tables(conn), c("prep_data_20", "prep_topk_tmp")))
 ok("refs sautées (message)", any(grepl("ref ref_das_aigu : présente, sautée", log2)))
 ap2 <- utils::read.csv(file.path(EXPORTS_DIR, "diagnostic_apports.csv"))
-ok("diagnostic_apports : 6 lignes, relu pour 17/26 et calculé pour 20, cumuls croissants",
-   nrow(ap2) == 6 && identical(ap2$statut[ap2$an == 20], c("calculé", "calculé")) && all(ap2$statut[ap2$an != 20] == "relu") && !is.unsorted(ap2$nb_lignes_cumul))
+ok("diagnostic_apports : 6 lignes, relu pour 17/26 et calculé pour 20",
+   nrow(ap2) == 6 && identical(ap2$statut[ap2$an == 20], c("calculé", "calculé")) && all(ap2$statut[ap2$an != 20] == "relu"))
 cat_multi <- lire_cat(EXPORTS_DIR)
 ok("catalogue étendu (3 années > 2 années)", nrow(cat_multi) > nrow(cat1))
 fermer()
@@ -312,6 +401,7 @@ cat_nc <- lire_cat(EXPORTS_DIR)
 ok("toggle FALSE : ^E669 présents dans le catalogue et les refs", compter_e669(cat_nc, c("diag2", "diagnostic_associes")) > 0 &&
      compter_e669(arrow::read_parquet(file.path(EXPORTS_DIR, "ref_das_chronique.parquet")), "das") > 0 && !isTRUE(yaml::read_yaml(file.path(EXPORTS_DIR, "catalogue_longs_seuil_meta.yaml"))$CONVERSION_E669))
 ok("toggle FALSE : le cas de fusion n'entre pas au catalogue (deux profils n = 1 <= seuil)", !any(cat_nc$ghm2 == "88M991"))
+ok("P2 catalogue deux étages == ancien flux (conversion FALSE)", comparer(cat_nc, ancien_flux(file.path(PARTIELS_DIR, plan$iterations$fichier), FALSE)))
 ok("toggle FALSE : partiels bruts identiques à ceux du projet converti (cache indépendant du toggle)",
    identical(arrow::read_parquet(file.path(PARTIELS_DIR, "catalogue_partiel_CHRU_26.parquet")),
              arrow::read_parquet(file.path(proj, "results", "partiels", "catalogue_partiel_CHRU_26.parquet"))) &&

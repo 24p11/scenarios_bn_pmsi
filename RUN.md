@@ -44,12 +44,20 @@ la complétion DAS sur petit volume (1 000 scénarios longs, mode `quota_dp`).
    Critères de passage : plan cohérent ; `results/partiels/` contient un parquet par
    (etbs, an) ; `exports_diagnostic/` contient les 10 refs (dont `distribution_e660.parquet`),
    `catalogue_longs_seuil.parquet`, `catalogue_longs_seuil_meta.yaml`, `diagnostic_apports.csv`,
-   `rapport_extraction_v8_<date>.txt` (section 3 : impact de la conversion E669, écart de
-   volumétrie assumé par doctrine).
+   `recouvrement.csv`, `diagnostic_memoire.csv`, `rapport_extraction_v8_<date>.txt` (section 3 :
+   impact de la conversion E669, écart de volumétrie assumé par doctrine ; sections 4-6 : apports,
+   recouvrement, mémoire).
 2. Lecture de `exports_diagnostic/diagnostic_apports.csv` : colonnes `etbs, an, statut,
-   nb_lignes_partiel, nb_lignes_cumul, nb_diag2_cumul, nb_diag2_nouveaux` dans l'ordre
-   d'exécution (CHR/U 17…AN_REF puis CH 17…AN_REF). Repérer à partir de quelle année / quelle
-   catégorie l'apport en diag2 nouveaux et en lignes devient marginal.
+   nb_lignes_partiel, sum_n_partiel, nb_diag2_partiel, nb_diag2_nouveaux` (stats du partiel
+   seul, plus de cumul) dans l'ordre d'exécution (CHR/U 17…AN_REF puis CH 17…AN_REF). Repérer à
+   partir de quelle année / quelle catégorie l'apport en diag2 nouveaux devient marginal.
+   Puis `recouvrement.csv` (paires `PAIRES_RECOUVREMENT`, ex. CHR/U 24 → 25) : part des
+   combinaisons et des séjours de l'année B déjà vus en A, pivots déjà vus, diag2 nouveaux,
+   séjours uniques nouveaux — c'est la mesure de déduplication pour la **décision de périmètre**.
+   Enfin `diagnostic_memoire.csv` (calibration 15 GiB) : pic gc() par morceau / partiel / ref /
+   étage du catalogue ; toute ligne `alerte = TRUE` (pic > `SEUIL_ALERTE_GO`) signale l'étape à
+   réduire (`COLLECT_PAR_MORCEAUX <- TRUE`, par défaut, collecte le top-k par morceaux de cage ;
+   `FALSE` = un seul collect, réservé aux petites itérations et aux tests).
 3. Tirage 1 000 :
    ```
    SCENARIOS_PMSI_PROFIL=diagnostic Rscript tirage_scenarios_v8.R
@@ -124,6 +132,11 @@ Ne pas toucher à `K_GRAINE_LONGS` sans vider `results/partiels/` (voir règles 
   ref chronique manque. Ne jamais persister de table en base.
 - **Relance après plantage de l'extraction** : relancer la même commande ; les partiels et refs
   déjà écrits sont sautés.
+- **Partiels antérieurs au chantier mémoire** : valides. La nouvelle chaîne `prep_scenarios2`
+  (top-k en base dans la table temporaire unique `prep_topk_tmp`, collect par morceaux) produit
+  exactement les mêmes partiels que l'ancienne (équivalence prouvée par `tests/test_chaines_sqlite.R`) ;
+  les partiels déjà acquis restent mélangeables avec les nouveaux. Le catalogue final est
+  ré-agrégé en deux étages hors RAM (`arrow::open_dataset`), sans accumulateur.
 
 ## Tests hors base
 

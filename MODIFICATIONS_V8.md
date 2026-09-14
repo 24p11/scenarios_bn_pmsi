@@ -85,14 +85,14 @@ section 5 (« non repris ») ; Q1 résolue. La construction de `REFS` (commune a
 ### B7 — `df_v_admin_courts` — extraction l.549-553 (`fabrique_v_admin_courts`)
 **Source :** v7.1.2 l.232-234. Écarts : `an` (25 en dur) → `AN_REF` ; nom `df_v_admin` → `df_v_admin_courts`.
 
-### B8 — `prep_scenarios2(...)` — extraction l.480-527
+### B8 — `prep_scenarios2(...)` — extraction l.488-547 (écart P1 depuis le chantier mémoire, section 13)
 **Source :** v7.2 l.278-327. Écarts :
 - `anseqta = dplyr::case_when(...)` (3 lignes) → `anseqta = anseqta_de(an)` (même table de correspondance, déplacée en config §3.0).
 - `dplyr::filter(v2025>1)` → `dplyr::filter(!!dplyr::sym("v20"%+% anseqta)>1)` (§5.8).
 - `all_of(` → `dplyr::all_of(` (×3).
 - Post-collect (R) : `dplyr::arrange(ident,desc(niveau),desc(nb_das))` → `dplyr::arrange(ident,dplyr::desc(niveau),dplyr::desc(nb_das),das)` (§5.9 : ordre total, les ex æquo de niveau/fréquence étaient tranchés par l'ordre de collecte).
 
-### B9 — Catalogue séjours longs — extraction l.588-631 (`construire_catalogue_longs` + seuil)
+### B9 — Catalogue séjours longs — extraction l.696-727 (`construire_catalogue_longs`) et l.752-801 (catalogue deux étages + seuil ; section 13)
 **Source :** v7.2 l.483-534. Le code de boucle (R, post-collect) est encapsulé dans
 `construire_catalogue_longs()` : deux boucles `TYPES_ETBS_LONGS × ANS_HISTORIQUE` reproduisent
 CHR/U (26 puis 17-25) puis CH (17-26) ; la somme étant commutative, l'ordre des années est
@@ -204,9 +204,9 @@ Tous dans les **helpers purs** (§0.3 : « là où tu peux écrire du code neuf 
 
 - `referentiels.R` : B11 ; `comp_sat_diab <- codes_comp_sat_diab` ; `neo_codes_diabete` (§5.10). Rien d'autre.
 - `referentiels/exclusions_paires.yaml` : créé (§6.4), 4 paires évidentes, structure `- [A, B]`.
-- `tests/test_helpers.R` : §8.1 + briefs industrialisation §8 et conversion §7, 181 assertions (`stopifnot`, sans testthat). Source `config_v8.R` puis `helpers_v8.R`. Repli arrow par paquet mock (section 11).
+- `tests/test_helpers.R` : §8.1 + briefs industrialisation §8, conversion §7 et mémoire, 206 assertions (`stopifnot`, sans testthat). Source `config_v8.R` puis `helpers_v8.R`. Repli arrow par paquet mock (section 11).
 - `tests/test_chaines_sqlite.R` : les **scripts réels** (extraction puis tirage) sur SQLite **fichier**
-  avec un faux paquet `pRatihque` (mock interdit pendant le tirage), 66 assertions : chaînes dbplyr
+  avec un faux paquet `pRatihque` (mock interdit pendant le tirage), 81 assertions : chaînes dbplyr
   (§5.9a, B1-10, refs, §7.5/§7.6), sessions multiples et résolution des besoins, cache des partiels,
   reprise, FORCER_REFS, garde-fou `partiels_meta`, tirage sans base, reprise des chunks, identité
   parquet, livrables, mode `catalogue_complet`. Ne valide PAS le dialecte ni les colonnes réelles.
@@ -266,8 +266,8 @@ Tous dans les **helpers purs** (§0.3 : « là où tu peux écrire du code neuf 
 ```
 Rscript -e 'parse("extraction_associations_codes_v8.R")'        # syntaxe OK
 Rscript -e 'for(f in c("config_v8.R","helpers_v8.R","extraction_associations_codes_v8.R","tirage_scenarios_v8.R")) parse(f)'
-Rscript tests/test_helpers.R                                     # 181 assertions vertes (avec ou sans arrow)
-R_LIBS_TEST=<lib avec dbplyr/DBI/RSQLite[/arrow]> Rscript tests/test_chaines_sqlite.R   # 66 assertions vertes (avec ou sans arrow)
+Rscript tests/test_helpers.R                                     # 206 assertions vertes (204 sans arrow : chemin (a) non testé)
+R_LIBS_TEST=<lib avec dbplyr/DBI/RSQLite[/arrow]> Rscript tests/test_chaines_sqlite.R   # 81 assertions vertes (avec ou sans arrow)
 grep -n 'filter_chap\|sexe_ ==sexe_\|v2025\|slice(1:2)\|<<-\|distinct(.*\.keep_all' config_v8.R helpers_v8.R extraction_associations_codes_v8.R tirage_scenarios_v8.R
 grep -c 'pRatihque::' tirage_scenarios_v8.R                       # 0 attendu
 #  -> uniquement des commentaires, plus l'unique distinct(.keep_all) HTA commenté « déterministe » (B1 #5)
@@ -514,3 +514,124 @@ les deux cas.
 - **Q20 — partiels d'un run antérieur** : un `distribution_e660.parquet` absent d'un `EXPORTS_DIR`
   ancien force le recalcul de `ref_das_chronique` (résolution des besoins) : une requête base
   supplémentaire au premier lancement après ce chantier.
+
+---
+
+## 13. Chantier « mémoire 15 GiB »
+
+Plateforme sécurisée limitée à 15 GiB. Doctrine : ne collecter que des agrégats, le plus tard
+possible, libérer immédiatement ; le niveau séjour ne quitte JAMAIS la base (tables temporaires
+autorisées, parquet interdit pour ce grain). Un run est en cours avec des partiels déjà écrits :
+les correctifs ne changent pas le contenu des partiels (preuve d'équivalence P1.5), qui restent
+valides et mélangeables.
+
+### 13.1 Écart P1 — `prep_scenarios2` : top-k en base, table temporaire unique, collect minimal
+Premier écart de chaîne base depuis B1-10, autorisé nominativement. La chaîne jusqu'au
+`left_join(mco_diag_niveau)` inclus est **inchangée**. Avant (v7.2 l.305-322, v8 jusqu'au
+commit `4d07aaf`) / après (extraction l.513-520) :
+
+```
+AVANT
+    dplyr::collect() -> df_das
+  df_das |> 
+    dplyr::mutate(niveau = ifelse(is.na(niveau),"0",niveau)) |> 
+    dplyr::mutate(nb_das = dplyr::n(),.by= dplyr::all_of(c(pivots,"das"))) -> df_das
+  df_das |> 
+    dplyr::arrange(ident,dplyr::desc(niveau),dplyr::desc(nb_das),das) |>
+    dplyr::group_by(ident) |> 
+    dplyr::slice(1:nb_assoc_das) -> df_das
+  df_das |> 
+    dplyr::group_by_at(c("ident",pivots)) |> 
+    dplyr::arrange(das) |> 
+    dplyr::summarise(diagnostic_associes = paste0(das,collapse = " "),.groups="drop") |> 
+    dplyr::ungroup() |> 
+    dplyr::summarise(n = dplyr::n(),.by=dplyr::all_of(c(pivots,"diagnostic_associes"))) -> df_cases
+
+APRÈS (en base)
+    dplyr::mutate(niveau = ifelse(is.na(niveau), "0", niveau)) |>
+    dplyr::mutate(nb_das = dplyr::n(), .by = dplyr::all_of(c(pivots, "das"))) |>      # COUNT() OVER (PARTITION BY pivots, das)
+    dplyr::group_by(ident) |>
+    dbplyr::window_order(desc(niveau), desc(nb_das), das) |>                           # = arrange(ident, desc(niveau), desc(nb_das), das)
+    dplyr::filter(dplyr::row_number() <= nb_assoc_das) |>                             # = slice(1:k) ; ROW_NUMBER() OVER
+    dplyr::ungroup() |>
+    dplyr::select(dplyr::all_of(c("ident", pivots, "das"))) |>
+    dplyr::compute("prep_topk_tmp", temporary = TRUE, overwrite = TRUE)
+APRÈS (en R, extraction l.526-545) : collect depuis prep_topk_tmp — par morceaux de cage
+  (COLLECT_PAR_MORCEAUX, config l.107, défaut TRUE : un collect par modalité, filtre en lecture
+  seule sur la table figée, chaque morceau collapsé puis libéré, df_cases partiels concaténés) ou
+  collect unique (FALSE) — puis collapse_graine() (helpers l.846-872) : k = 2 vectorisé
+  (arrange(ident, das), !duplicated, match, paste), sinon repli générique summarise + paste0.
+```
+- Les fenêtres (`COUNT OVER`, `ROW_NUMBER OVER`) sont celles déjà validées par `prep_data` sur la
+  base de production. `desc` non namespacé dans `window_order` : dbplyr 2.5 échoue à traduire
+  `dplyr::desc(...)` (test SQLite) ; `desc` est la forme documentée.
+- `prep_topk_tmp` : UN SEUL nom, écrasé à chaque itération (`overwrite = TRUE`), jamais
+  d'empilement ; temporaire de session, pas de DROP nécessaire ; jamais de parquet pour ce grain.
+- Signature : `+ collect_par_morceaux = TRUE, noter = NULL` (fonction d'instrumentation optionnelle).
+- Collapse par séjour sain en mode morceaux : un ident a une seule cage (cage est un pivot), le
+  morcelage ne coupe jamais un séjour (assertion « invariant morceaux » du test SQLite).
+- `gc()` après chaque morceau et chaque itération ; intermédiaires libérés sitôt df_cases construit.
+- **Preuve d'équivalence (test_chaines_sqlite.R)** : ancienne version conservée en fonction privée
+  datée `prep_scenarios2_ancien_20260912` ; sur les fixtures, `nouvelle == ancienne` (mêmes lignes,
+  ordre indifférent) pour (CHR/U, 26, k=2), (CH, 17, k=2), (CHR/U, 26, k=3), morceaux TRUE et FALSE,
+  et `partiel écrit par le run == ancienne`. Les partiels antérieurs au chantier restent valides.
+
+### 13.2 P2 — boucle sans accumulateur, recouvrement, catalogue final en deux étages
+- `construire_catalogue_longs` (extraction l.696-727) ne maintient plus de `df_cases` cumulé :
+  calcule/relit, écrit, imprime les stats DU PARTIEL SEUL (`apports_partiel`, helpers l.550 :
+  nb_lignes_partiel, sum_n_partiel = séjours éligibles, nb_diag2_partiel, nb_diag2_nouveaux —
+  seul cumul conservé : le set des diag2 vus), libère. `diagnostic_apports.csv` perd les colonnes
+  `nb_lignes_cumul` / `nb_diag2_cumul` (sans sens sans accumulateur). `apports_iteration` supprimé.
+- **Recouvrement** (`PAIRES_RECOUVREMENT`, config l.111, défaut `list(c("CHR/U", 24, 25))` ;
+  `mesurer_recouvrement` extraction l.730-749 ; `recouvrement_partiels` helpers l.959) : pour
+  chaque paire (etbs, anA, anB) dont les deux partiels existent, relecture des DEUX partiels
+  seulement : combinaisons (nb_A, nb_B, nb_communes, part des combinaisons de B déjà vues en A,
+  part des séjours de B), même chose au niveau pivots, diag2 nouveaux, séjours uniques nouveaux ;
+  `recouvrement.csv` + impression lisible ; partiel manquant -> ligne « non calculable ».
+- **Catalogue final** (extraction l.752-801), construit UNE FOIS après la boucle, hors RAM R :
+  Étage 1 : `agreger_partiels(fichiers, PIVOTS_LONGS_SEUIL, "n")` -> conversion E669 des comptes
+  pivots -> seuil > SEUIL_PIVOT -> pivots retenus (convertis). Étage 2 : `cles_brutes_retenues`
+  (helpers l.917 : identité ; E669 suffixé -> sa cible ; E669 nu -> retenu si AU MOINS une cible
+  de la cascade est retenue) -> `agreger_partiels(..., filtre_cles = clés brutes)` (semi-jointure)
+  -> pipeline existant `convertir_e669_comptes` + `convertir_e669_combo` -> ré-agrégation ->
+  **seuil re-appliqué exactement** (l'étage 2 sur-matérialise les autres cibles des E669 nus ;
+  le seuil final fait foi ; ordre conversion -> ré-agrégation -> seuil et fusions sous-seuil
+  préservés). Preuve : test SQLite « catalogue deux étages == ancien flux » (conversion TRUE avec
+  la fixture de fusion E669, et FALSE).
+- `agreger_partiels` (helpers l.902) : (a) `arrow::open_dataset` + dplyr (production, mémoire
+  bornée par arrow ; repli automatique sur (b) en cas d'échec avec avertissement) ; (b) pur R
+  incrémental, un partiel à la fois, fusion successive (référence sémantique ; utilisé quand arrow
+  est le mock des tests). Sélection auto : (a) si `open_dataset` est exporté par arrow. Tests :
+  (b) == bind_rows + summarise global, avec et sans filtre ; (a) == (b) quand arrow est réel.
+- Mesure d'impact E669 recalculée sur les tables PIVOT des deux étages (`impact_conversion_pivots`,
+  helpers l.944 ; `effectif_e669_combos` sur l'étage 2 borné) ; plus jamais de copie `avant` du
+  catalogue complet. `df_prep_scenarios` (brut intégral) disparaît du flux.
+
+### 13.3 P3 — libération et instrumentation
+- Boucle des refs : `rm(df_ref); gc()` après chaque écriture (déjà) + mesure mémoire ; aucune ref
+  n'est liée à une variable globale après sa fabrique (test « P3 : aucun objet ref ni cache brut
+  vivant »).
+- `CACHE_E669` : `brute` purgé dans la fabrique `distribution_e660` sitôt la distribution et
+  l'impact niveau CMA calculés (l'impact, petit, est conservé dans le cache) ; purge de sécurité
+  après la boucle des refs (l.689).
+- `mesurer_memoire` (helpers l.978) : étiquette, horodatage, taille de l'objet (Mo), mémoire
+  utilisée et pic gc() depuis la mesure précédente (Go, `gc(reset = TRUE)`, dernière colonne
+  « max used (Mb) » — la colonne « limit » présente sur certains R décale les indices), alerte si
+  pic > SEUIL_ALERTE_GO (config l.108, défaut 10) : avertissement visible + colonne `alerte`.
+  Journal accumulé dans `MEMOIRE_ENV` (extraction l.570-574, `noter_memoire`, pas de `<<-`) après
+  chaque morceau, partiel, ref, étage du catalogue ; exporté en `diagnostic_memoire.csv` et repris
+  en section 6 du rapport d'extraction. Livrable de calibration de la passe diagnostic.
+- `v_admin_longs` : inchangé sur le fond (grain en arbitrage), écrit puis libéré, taille mesurée.
+
+### 13.4 Questions
+- **Q21 — dialecte `window_order`** : validé sur SQLite ; en production, `ROW_NUMBER() OVER
+  (PARTITION BY ident ORDER BY ...)` et `COUNT(*) OVER (PARTITION BY ...)` sont ceux de
+  `prep_data`. Si la base refuse `desc` sur `niveau` (type texte), le tri reste celui de
+  l'ancienne version R (desc sur caractère).
+- **Q22 — NULLs dans `ORDER BY das`** : un séjour sans DAS a une seule ligne (das NULL) : l'ordre
+  des NULL n'a pas d'incidence ; la graine vaut "NA" comme avant (paste). Conservé tel quel.
+- **Q23 — morcelage par cage** : 12 morceaux par itération ; si un morceau reste trop gros, la
+  clé de morcelage pourrait être (cage, sexe) — même invariant (un ident, une strate).
+- **Q24 — `PAIRES_RECOUVREMENT`** par défaut (CHR/U 24 -> 25) : à étendre selon les partiels
+  disponibles ; le recouvrement pivots ignore `nbda` ? Non : il utilise `PIVOTS_LONGS` complets
+  (nbda inclus), comme les combinaisons.
