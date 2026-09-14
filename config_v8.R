@@ -134,7 +134,6 @@ if(PROFIL == "diagnostic"){
   TYPES_ETBS_LONGS   <- c("CHR/U", "CH")    # LES DEUX catégories (ordre v7.2 : CHR/U puis CH)
   MODE_SELECTION     <- "quota_dp"
   BUDGET_TOTAL_LONGS <- 1000L
-  CHUNK_SIZE         <- 200L
   EXPORTS_DIR        <- paste0(PATH_RESULTS, "exports_diagnostic/")
 } else {
   # À choisir d'après diagnostic_apports.csv (RUN.md, étape 2)
@@ -142,11 +141,17 @@ if(PROFIL == "diagnostic"){
   TYPES_ETBS_LONGS   <- c("CHR/U", "CH")
   MODE_SELECTION     <- "catalogue_complet"
   BUDGET_TOTAL_LONGS <- 10000000L
-  CHUNK_SIZE         <- 2000L
   EXPORTS_DIR        <- paste0(PATH_RESULTS, "exports/")
 }
 PARTIELS_DIR        <- paste0(PATH_RESULTS, "partiels/")   # PARTAGÉ entre profils (cache inter-profils)
 QUOTA_MIN_PAR_UNITE <- 5L        # mode quota_dp : plancher par type_unite présent au catalogue du DP
+# Chunking DYNAMIQUE (les deux profils) : la taille des chunks est dimensionnée par les données,
+# taille_chunk(n) = max(CHUNK_SIZE_MIN, ceiling(n / NB_CHUNKS_MAX)) -> au plus NB_CHUNKS_MAX chunks
+# par tirage, jamais de chunks minuscules. CHUNK_SIZE_FIXE non-NA court-circuite le calcul.
+# Reprise : mêmes n / chunk_size / seed_base que le sidecar <prefixe>_chunks_meta.yaml, sinon stop().
+NB_CHUNKS_MAX   <- 50L           # borne haute du nombre de chunks par tirage
+CHUNK_SIZE_MIN  <- 500L          # plancher : en dessous, moins de chunks que NB_CHUNKS_MAX
+CHUNK_SIZE_FIXE <- NA_integer_   # surcharge manuelle : si non-NA, court-circuite le calcul
 GARDER_CHUNKS       <- TRUE      # conserver les chunks de tirage après assemblage (reprise)
 FORCER_REFS         <- FALSE     # TRUE : ignorer l'existence des refs et les recalculer (changement d'AN_REF, correction amont)
 
@@ -168,7 +173,7 @@ NOMS_CONFIG_META <- c("PROFIL", "VERSION_SCRIPT", "AN_REF", "ANS_HISTORIQUE", "T
                       "SEUIL_PIVOT", "SEUIL_REF_DAS", "SEUIL_REF_IMPRECIS", "SEUIL_REF_PAIRES",
                       "DUREE_COURTS", "DUREE_LONGS", "DUREE_MIN_REF", "NBDA_MAX", "K_GRAINE_LONGS",
                       "NB_TIRAGES_COURTS", "NB_VARIANTES_ADMIN_COURTS", "NB_VARIANTES_ADMIN_LONGS",
-                      "MODE_SELECTION", "BUDGET_TOTAL_LONGS", "QUOTA_MIN_PAR_UNITE", "CHUNK_SIZE",
+                      "MODE_SELECTION", "BUDGET_TOTAL_LONGS", "QUOTA_MIN_PAR_UNITE", "NB_CHUNKS_MAX", "CHUNK_SIZE_MIN", "CHUNK_SIZE_FIXE",
                       "GARDER_CHUNKS", "FORCER_REFS", "EXPORTS_DIR", "PARTIELS_DIR", "PIVOTS_LONGS",
                       "CONVERSION_E669", "BARE_E669_DEFAUT", "COLLECT_PAR_MORCEAUX", "SEUIL_ALERTE_GO")
 valeurs_effectives_config <- function(env = globalenv()){

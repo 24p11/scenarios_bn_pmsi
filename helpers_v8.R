@@ -367,19 +367,58 @@ taux_imprecis <- function(df, codes_imprecis){
 
 ## ---- B. Industrialisation ----
 
-# --- B1. Chunking avec reprise --------------------------------------------------------
-# Découpe df en chunks de chunk_size lignes ; chunk i : si <dossier>/<prefixe>_chunk_%04d<ext>
-# existe -> sauté (reprise) ; sinon set.seed(seed_base + i), pmap(f, ...), écriture du chunk.
-# Fin : relecture de tous les chunks, retour assemblé. Le seed par chunk garantit :
-# reprise après plantage == exécution complète, bit à bit. `ecrire`/`lire` sont injectables
-# (arrow par défaut ; les tests peuvent passer saveRDS/readRDS).
-pmap_chunks <- function(df, f, chunk_size, dossier, prefixe, seed_base, ...,
+# --- B1. Chunking DYNAMIQUE avec reprise ----------------------------------------------------
+# Taille de chunk dimensionnée par les données : au plus nb_chunks_max chunks par tirage, jamais
+# de chunks minuscules (plancher chunk_size_min) ; chunk_size_fixe non-NA court-circuite le calcul.
+taille_chunk <- function(n, nb_chunks_max = NB_CHUNKS_MAX, chunk_size_min = CHUNK_SIZE_MIN, chunk_size_fixe = CHUNK_SIZE_FIXE){
+  if(!is.na(chunk_size_fixe)) return(as.integer(chunk_size_fixe))
+  stopifnot(nb_chunks_max >= 1, chunk_size_min >= 1)
+  as.integer(max(chunk_size_min, ceiling(n / nb_chunks_max)))
+}
+
+# Sidecar de reprise : <dossier>/<prefixe>_chunks_meta.yaml (n, chunk_size, seed_base, nb_chunks,
+# date), écrit AVANT le premier chunk. Les index de chunks désignent des PLAGES DE LIGNES de df :
+# reprendre sur un découpage différent (n, chunk_size ou seed_base) corromprait silencieusement
+# le résultat -> stop() explicite. Chunks présents sans sidecar (dossier antérieur au chantier)
+# -> même stop, en l'expliquant.
+verifier_chunks_meta <- function(existant, courant, dossier, prefixe){
+  cles <- c("n", "chunk_size", "seed_base")
+  if(is.null(existant)){
+    return(sprintf("pmap_chunks : des chunks `%s_chunk_*` existent dans %s sans sidecar %s_chunks_meta.yaml (dossier antérieur au chantier « chunking dynamique » : découpage inconnu). Videz %s ou restaurez le sidecar.", prefixe, dossier, prefixe, dossier))
+  }
+  diff <- cles[vapply(cles, function(k) !identical(as.numeric(unlist(existant[[k]])), as.numeric(courant[[k]])), logical(1))]
+  if(length(diff) == 0) return(NULL)
+  sprintf("pmap_chunks : découpage incompatible avec les chunks existants de `%s` dans %s ; videz %s ou restaurez les paramètres : attendu %s ; reçu %s.",
+          prefixe, dossier, dossier,
+          paste(sprintf("%s = %s", cles, vapply(cles, function(k) paste(unlist(existant[[k]]), collapse = ","), character(1))), collapse = ", "),
+          paste(sprintf("%s = %s", cles, vapply(cles, function(k) as.character(courant[[k]]), character(1))), collapse = ", "))
+}
+
+# Découpe df en chunks de chunk_size lignes (NULL = taille_chunk(nrow(df))) ; chunk i : si
+# <dossier>/<prefixe>_chunk_%04d<ext> existe -> sauté (reprise) ; sinon set.seed(seed_base + i),
+# pmap(f, ...), écriture du chunk. Fin : relecture de tous les chunks, retour assemblé. Le seed
+# par chunk garantit : reprise après plantage == exécution complète, bit à bit. `ecrire`/`lire`
+# sont injectables (arrow par défaut ; les tests peuvent passer saveRDS/readRDS).
+pmap_chunks <- function(df, f, chunk_size = NULL, dossier, prefixe, seed_base, ...,
                         garder_chunks = TRUE, ecrire = arrow::write_parquet, lire = arrow::read_parquet,
                         ext = ".parquet", verbose = TRUE){
-  stopifnot(is.data.frame(df), chunk_size >= 1)
+  stopifnot(is.data.frame(df))
   if(!dir.exists(dossier)) dir.create(dossier, recursive = TRUE)
   n <- nrow(df)
+  if(is.null(chunk_size)) chunk_size <- taille_chunk(n)
+  stopifnot(chunk_size >= 1)
   n_chunks <- if(n == 0) 0L else as.integer(ceiling(n / chunk_size))
+  if(verbose) cat(sprintf("  [chunks %s] n = %d lignes ; chunk_size = %d ; %d chunk(s) dans %s\n", prefixe, n, as.integer(chunk_size), n_chunks, dossier))
+  # Garde-fou de reprise (sidecar)
+  f_meta <- file.path(dossier, prefixe %+% "_chunks_meta.yaml")
+  courant <- list(n = as.integer(n), chunk_size = as.integer(chunk_size), seed_base = as.numeric(seed_base), nb_chunks = n_chunks, date = as.character(Sys.Date()))
+  chunks_presents <- list.files(dossier, pattern = "^" %+% prefixe %+% "_chunk_[0-9]{4}")
+  if(length(chunks_presents) > 0){
+    msg <- verifier_chunks_meta(if(file.exists(f_meta)) yaml::read_yaml(f_meta) else NULL, courant, dossier, prefixe)
+    if(!is.null(msg)) stop(msg, call. = FALSE)
+  } else {
+    yaml::write_yaml(courant, f_meta)   # écrit AVANT le premier chunk
+  }
   fichiers <- character(0)
   for(i in seq_len(n_chunks)){
     fichier <- file.path(dossier, sprintf("%s_chunk_%04d%s", prefixe, i, ext))

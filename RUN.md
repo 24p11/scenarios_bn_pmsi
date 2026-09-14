@@ -24,9 +24,9 @@ actionnable (« lancez etape_X d'abord », « fichier Y manquant ») si elle est
 | `etape_refs(forcer = FORCER_REFS)` | extraction (base) | 10 refs parquet dans `EXPORTS_DIR` (dont `distribution_e660`, `pivots_courts`, `v_admin_*`) | après changement d'`AN_REF`, des seuils de refs, de `CONVERSION_E669` (`forcer = TRUE`) | ref sautée si son parquet existe |
 | `etape_partiels_longs(iterations = NULL)` | extraction (base) | `PARTIELS_DIR/catalogue_partiel_<etbs>_<an>.parquet` manquants ; `diagnostic_apports.csv` ; `recouvrement.csv` | ajout d'années / de catégories au plan ; `iterations = data.frame(etbs, an)` pour une itération isolée (supprimer son partiel pour le recalculer) | partiel sauté s'il existe ; partiels en codes bruts, partagés entre profils |
 | `etape_catalogue(ans = ANS_HISTORIQUE, etbs = TYPES_ETBS_LONGS)` | extraction (**sans base**) | `catalogue_longs_seuil.parquet` + `_meta.yaml` (trace du périmètre passé), `rapport_extraction_v8_<date>.txt`, `diagnostic_memoire.csv` | **décision de périmètre** : relancer avec les `ans`/`etbs` retenus | agrégation deux étages hors RAM depuis les partiels du périmètre ; conversion E669 puis seuil |
-| `etape_tirage_courts()` | tirage | `chunks/courts_chunk_*.parquet`, `scenarios_courts_v8_<date>.parquet` | une fois par jeu de refs (AN_REF uniquement) | chunks présents sautés (reprise bit à bit) |
+| `etape_tirage_courts()` | tirage | `chunks/courts_chunk_*.parquet` (+ sidecar `courts_chunks_meta.yaml`), `scenarios_courts_v8_<date>.parquet` | une fois par jeu de refs (AN_REF uniquement) | chunks présents sautés (reprise bit à bit, mêmes paramètres de découpage exigés) |
 | `etape_selection_longs(budget = BUDGET_TOTAL_LONGS, mode = MODE_SELECTION)` | tirage | `selection_longs.parquet` (quota_dp), `selection_longs_effectifs.csv`, `meta_tirage.yaml` | changement de budget / mode : vider d'abord chunks + sélection + méta (garde-fou `meta_tirage.yaml`) | sélection relue si présente, jamais re-tirée |
-| `etape_tirage_das_longs()` | tirage | `chunks/longs_chunk_*.parquet` (assemblé en mémoire de session) | reprise après plantage : relancer telle quelle | chunks présents sautés ; sélection relue si la session est neuve |
+| `etape_tirage_das_longs()` | tirage | `chunks/longs_chunk_*.parquet` (+ sidecar `longs_chunks_meta.yaml`), assemblé en mémoire de session | reprise après plantage : relancer telle quelle | chunks présents sautés ; sélection relue si la session est neuve ; mêmes paramètres de découpage exigés |
 | `etape_habillage_longs()` | tirage | scénarios habillés en mémoire de session (jointure `v_admin_longs.parquet` relu, jamais `prep_data`) | après `etape_tirage_das_longs()` ; relit les chunks si la session est neuve | — |
 | `etape_finalisation()` | tirage | `scenarios_longs_tirage_v8_<date>.parquet`, `rapport_v8_<date>.txt`, `echantillon_revue.csv`, `top30_das_par_cmd.csv` | après habillage ; reconstruit ce qui manque en session (chunks, stats des courts depuis leur parquet) | — |
 
@@ -100,7 +100,17 @@ mêmes étapes ; les partiels sont réutilisés, seules les refs sont recalculé
   d'`AN_REF`, d'un `SEUIL_REF_*`, de `CONVERSION_E669` / `BARE_E669_DEFAUT` ou correction amont.
 - Chunks / sélection / `meta_tirage.yaml` : reprise après plantage telle quelle (identité bit à bit par
   seed par chunk) ; à vider après changement de `MODE_SELECTION`, `BUDGET_TOTAL_LONGS`,
-  `QUOTA_MIN_PAR_UNITE`, `CHUNK_SIZE`, `SEED` ou du catalogue (le garde-fou le demande).
+  `QUOTA_MIN_PAR_UNITE`, `SEED` ou du catalogue (le garde-fou `meta_tirage.yaml` le demande).
+- **Chunking dynamique** : la taille des chunks est calculée par les données,
+  `taille_chunk(n) = max(CHUNK_SIZE_MIN, ceiling(n / NB_CHUNKS_MAX))` — au plus `NB_CHUNKS_MAX` (50)
+  chunks par tirage, plancher `CHUNK_SIZE_MIN` (500) ; `CHUNK_SIZE_FIXE` (NA par défaut) impose une
+  taille manuelle. Chaque dossier de chunks porte un sidecar `<prefixe>_chunks_meta.yaml` (n,
+  chunk_size, seed_base, nb_chunks, date) écrit avant le premier chunk : la reprise n'est acceptée
+  qu'avec les MÊMES n / chunk_size / seed_base (les index de chunks sont des plages de lignes ;
+  un découpage différent corromprait silencieusement le résultat). Changer `NB_CHUNKS_MAX`,
+  `CHUNK_SIZE_MIN`, `CHUNK_SIZE_FIXE` ou le volume d'entrée ⇒ vider les dossiers de chunks (le
+  garde-fou l'impose de toute façon, avec « attendu … / reçu … »). Dossiers de chunks antérieurs au
+  chantier (sans sidecar) : à vider, le `stop()` l'explique.
 - Sessions multiples : les tables temporaires (`prep_data_<an>`, `prep_das_chro_<an>`,
   `prep_topk_tmp`) disparaissent à la déconnexion ; `etape_prep_data()` recrée à la demande.
   Ne jamais persister de table en base.

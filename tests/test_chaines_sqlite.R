@@ -92,7 +92,9 @@ proj <- creer_projet("projet_v8")
 db_file <- file.path(tempdir(), "mock_v8.sqlite"); unlink(db_file)
 options(pmsi_mock_db = db_file, pmsi_mock_interdit = FALSE)
 Sys.setenv(SCENARIOS_PMSI_PATH = proj, SCENARIOS_PMSI_PROFIL = "diagnostic")
-SURCHARGE_BASE <- c("SEUIL_PIVOT <- 1", "SEUIL_REF_PAIRES <- 5", "BUDGET_TOTAL_LONGS <- 120L", "CHUNK_SIZE <- 40L",
+# CHUNK_SIZE_FIXE = 40 : force des cas multi-chunks sur les petites fixtures (reprise et garde-fou
+# réellement exercés) ; CHUNK_SIZE <- 40L n'est lu que par les anciens scripts d'entrée (référence d'identité).
+SURCHARGE_BASE <- c("SEUIL_PIVOT <- 1", "SEUIL_REF_PAIRES <- 5", "BUDGET_TOTAL_LONGS <- 120L", "CHUNK_SIZE_FIXE <- 40L", "CHUNK_SIZE <- 40L",
                     'PAIRES_RECOUVREMENT <- list(c("CHR/U", 17, 26), c("CH", 24, 25))')
 surcharger <- function(...){
   f <- file.path(tempdir(), "surcharge.R"); writeLines(c(SURCHARGE_BASE, ...), f); Sys.setenv(SCENARIOS_PMSI_SURCHARGE = f)
@@ -428,7 +430,11 @@ ok("aucun objet df_scenarios vivant en fin de script", !exists("df_scenarios"))
 sel <- arrow::read_parquet(file.path(EXPORTS_DIR, "selection_longs.parquet"))
 mt <- yaml::read_yaml(file.path(EXPORTS_DIR, "meta_tirage.yaml"))
 ok("quota_dp : quota exact par diag2, origine renseignée", all(table(sel$diag2) == mt$quota_par_dp) && all(grepl("^plancher_|^libre$", sel$origine)) && nrow(sel) == mt$volume_attendu)
-ok("meta_tirage.yaml cohérent avec le profil", mt$PROFIL == "diagnostic" && mt$MODE_SELECTION == "quota_dp" && mt$BUDGET_TOTAL_LONGS == 120 && mt$CHUNK_SIZE == 40 && mt$nrow_catalogue == nrow(cat_multi))
+ok("meta_tirage.yaml cohérent avec le profil", mt$PROFIL == "diagnostic" && mt$MODE_SELECTION == "quota_dp" && mt$BUDGET_TOTAL_LONGS == 120 && mt$CHUNK_SIZE_FIXE == 40 && mt$NB_CHUNKS_MAX == NB_CHUNKS_MAX && mt$nrow_catalogue == nrow(cat_multi))
+ok("sidecars de chunking présents pour les deux branches, cohérents (chunk_size = 40, nb_chunks = fichiers)",
+   { sc_c <- yaml::read_yaml(file.path(CHUNKS_DIR, "courts_chunks_meta.yaml")); sc_l <- yaml::read_yaml(file.path(CHUNKS_DIR, "longs_chunks_meta.yaml"))
+     sc_c$chunk_size == 40 && sc_l$chunk_size == 40 && sc_c$nb_chunks == length(list.files(CHUNKS_DIR, pattern = "^courts_chunk_")) &&
+       sc_l$nb_chunks == length(list.files(CHUNKS_DIR, pattern = "^longs_chunk_")) && sc_l$n == nrow(sel) && sc_c$nb_chunks > 1 && sc_l$nb_chunks > 1 })
 ok("tirage : aucun ^E669 dans les sorties (diag2, graine, DAS), effectifs E660x au rapport",
    ETAPES_ENV$rapport$courts$e669_residuels == 0 && ETAPES_ENV$rapport$longs$e669_residuels == 0 && sans_e669(sc_courts, c("diag2", "diagnostic_associes")) &&
      sans_e669(sc_longs, c("diag2", "graine", "diagnostic_associes")) && any(grepl("effectifs E660x par classe", rap <- readLines(file.path(EXPORTS_DIR, "rapport_v8_" %+% DATE_TAG %+% ".txt")))))

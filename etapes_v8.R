@@ -946,14 +946,14 @@ stats_branche <- function(df, pivots, codes_imprecis, cols_e669){
 # extraits sur l'année de référence), habillage admin depuis v_admin_courts.parquet, contrôles,
 # export scenarios_courts. Idempotent : chunks présents sautés ; export réécrit à l'identique.
 etape_tirage_courts <- function(){
-  t0 <- banniere_debut("etape_tirage_courts", "AN_REF = " %+% AN_REF %+% " uniquement (pivots courts de l'année de référence) ; CHUNK_SIZE = " %+% CHUNK_SIZE)
+  t0 <- banniere_debut("etape_tirage_courts", "AN_REF = " %+% AN_REF %+% " uniquement (pivots courts de l'année de référence) ; chunking dynamique (NB_CHUNKS_MAX = " %+% NB_CHUNKS_MAX %+% ", CHUNK_SIZE_MIN = " %+% CHUNK_SIZE_MIN %+% ", CHUNK_SIZE_FIXE = " %+% CHUNK_SIZE_FIXE %+% ")")
   ctx <- charger_contexte_tirage(nom_ref(c("pivots_courts", "ref_das_chronique", "ref_nb_chroniques", "ref_comp_diabete", "v_admin_courts")), "etape_tirage_courts")
   lire <- function(nom) arrow::read_parquet(file.path(EXPORTS_DIR, nom_ref(nom)))
   df_pivots_courts <- lire("pivots_courts"); df_nb_chroniques <- lire("ref_nb_chroniques")
   ref_chro <- prep_ref_chronique(lire("ref_das_chronique")); df_v_admin_courts <- lire("v_admin_courts")
   cat("== Séjours courts : tirage par chunks (", nrow(df_pivots_courts), " pivots) ==\n", sep = "")
   df_tirage <- pmap_chunks(df_pivots_courts[, c(PIVOTS_COURTS, "nb")], sample_das_court,
-                           chunk_size = CHUNK_SIZE, dossier = CHUNKS_DIR, prefixe = "courts", seed_base = SEED,
+                           chunk_size = NULL, dossier = CHUNKS_DIR, prefixe = "courts", seed_base = SEED,
                            garder_chunks = GARDER_CHUNKS,
                            ref_chro = ref_chro, ref_nb_chro = df_nb_chroniques, refs = ctx$REFS,
                            nb_tirages = NB_TIRAGES_COURTS, seuil_ref = SEUIL_REF_DAS,
@@ -990,9 +990,10 @@ etape_selection_longs <- function(budget = BUDGET_TOTAL_LONGS, mode = MODE_SELEC
   FICHIER_META_TIRAGE <- file.path(EXPORTS_DIR, "meta_tirage.yaml")
   FICHIER_SELECTION   <- file.path(EXPORTS_DIR, "selection_longs.parquet")
   meta_tirage <- list(MODE_SELECTION = mode, BUDGET_TOTAL_LONGS = as.integer(budget),
-                      QUOTA_MIN_PAR_UNITE = as.integer(QUOTA_MIN_PAR_UNITE), CHUNK_SIZE = as.integer(CHUNK_SIZE),
+                      QUOTA_MIN_PAR_UNITE = as.integer(QUOTA_MIN_PAR_UNITE), NB_CHUNKS_MAX = as.integer(NB_CHUNKS_MAX),
+                      CHUNK_SIZE_MIN = as.integer(CHUNK_SIZE_MIN), CHUNK_SIZE_FIXE = as.integer(CHUNK_SIZE_FIXE),
                       SEED = as.integer(SEED), nrow_catalogue = nrow(df_prep_scenarios_seuil))
-  CLES_META_TIRAGE <- c("MODE_SELECTION", "BUDGET_TOTAL_LONGS", "QUOTA_MIN_PAR_UNITE", "CHUNK_SIZE", "SEED", "nrow_catalogue")
+  CLES_META_TIRAGE <- c("MODE_SELECTION", "BUDGET_TOTAL_LONGS", "QUOTA_MIN_PAR_UNITE", "NB_CHUNKS_MAX", "CHUNK_SIZE_MIN", "CHUNK_SIZE_FIXE", "SEED", "nrow_catalogue")
   meta_existant <- if(file.exists(FICHIER_META_TIRAGE)) yaml::read_yaml(FICHIER_META_TIRAGE) else NULL
   msg <- verifier_meta_tirage(meta_existant, meta_tirage, CLES_META_TIRAGE)
   if(!is.null(msg)) stop(msg)
@@ -1060,14 +1061,14 @@ relire_selection_longs <- function(etape){
 # Étape T3 — tirage des DAS des séjours longs par chunks (sauvegardés / repris), SANS habillage.
 # L'assemblé reste en mémoire de session (ETAPES_ENV) ; les chunks présents sont relus.
 etape_tirage_das_longs <- function(){
-  t0 <- banniere_debut("etape_tirage_das_longs", "CHUNKS_DIR = " %+% CHUNKS_DIR)
+  t0 <- banniere_debut("etape_tirage_das_longs", "CHUNKS_DIR = " %+% CHUNKS_DIR %+% " ; chunking dynamique (NB_CHUNKS_MAX = " %+% NB_CHUNKS_MAX %+% ", CHUNK_SIZE_MIN = " %+% CHUNK_SIZE_MIN %+% ", CHUNK_SIZE_FIXE = " %+% CHUNK_SIZE_FIXE %+% ")")
   ctx <- charger_contexte_tirage(nom_ref(c("ref_das_aigu", "ref_comp_diabete")), "etape_tirage_das_longs")
   if(is.null(etat_tirage("selection"))) relire_selection_longs("etape_tirage_das_longs")
   df_selection <- etat_tirage("selection"); nb_tirage_longs <- etat_tirage("nb_tirage_longs")
   df_das_ref <- arrow::read_parquet(file.path(EXPORTS_DIR, nom_ref("ref_das_aigu")))
   cat("== Séjours longs : tirage par chunks (", nrow(df_selection), " lignes × ", nb_tirage_longs, " variante(s)) ==\n", sep = "")
   df_tirage <- pmap_chunks(df_selection |> dplyr::select(dplyr::all_of(c(PIVOTS_LONGS, "diagnostic_associes", "poids"))),
-                           sample_das_long, chunk_size = CHUNK_SIZE, dossier = CHUNKS_DIR, prefixe = "longs",
+                           sample_das_long, chunk_size = NULL, dossier = CHUNKS_DIR, prefixe = "longs",
                            seed_base = SEED + 1e5, garder_chunks = GARDER_CHUNKS,
                            ref_das_aigu = df_das_ref, refs = ctx$REFS, nb_tirage = nb_tirage_longs)
   rapport <- etat_tirage("rapport", list()); rapport$longs_tirage_n <- nrow(df_tirage); poser_tirage("rapport", rapport)
@@ -1223,7 +1224,7 @@ etat_pipeline <- function(){
                                                                              paste(unlist(m$TYPES_ETBS_LONGS), collapse = ","), paste(range(unlist(m$ANS_HISTORIQUE)), collapse = "-"), m$CONVERSION_E669))
   # 5. courts
   f_pc <- file.path(EXPORTS_DIR, "pivots_courts.parquet")
-  n_courts_att <- if(file.exists(f_pc)) as.integer(ceiling(nrow(arrow::read_parquet(f_pc)) / CHUNK_SIZE)) else NA
+  n_courts_att <- if(file.exists(f_pc)){ nc <- nrow(arrow::read_parquet(f_pc)); as.integer(ceiling(nc / taille_chunk(nc))) } else NA
   n_courts <- if(dir.exists(CHUNKS_DIR)) length(list.files(CHUNKS_DIR, pattern = "^courts_chunk_")) else 0L
   f_sc <- if(dir.exists(EXPORTS_DIR)) list.files(EXPORTS_DIR, pattern = "^scenarios_courts_v8_.*\\.parquet$") else character(0)
   ajouter("etape_tirage_courts", if(length(f_sc)) "FAIT" else if(n_courts > 0) "PARTIEL" else "À FAIRE",
@@ -1233,7 +1234,7 @@ etat_pipeline <- function(){
   ajouter("etape_selection_longs", if(is.null(mt)) "À FAIRE" else "FAIT",
           if(is.null(mt)) "meta_tirage.yaml absent" else sprintf("mode %s ; budget %s ; NB_VARIANTES %s ; volume attendu %s ; date %s", mt$MODE_SELECTION, mt$BUDGET_TOTAL_LONGS, mt$NB_VARIANTES, mt$volume_attendu, mt$date))
   # 7. chunks longs
-  n_longs_att <- if(is.null(mt)) NA else as.integer(ceiling((if(identical(mt$MODE_SELECTION, "quota_dp")) mt$volume_attendu else mt$nrow_catalogue) / mt$CHUNK_SIZE))
+  n_longs_att <- if(is.null(mt)) NA else { nl <- if(identical(mt$MODE_SELECTION, "quota_dp")) mt$volume_attendu else mt$nrow_catalogue; as.integer(ceiling(nl / taille_chunk(nl))) }
   n_longs <- if(dir.exists(CHUNKS_DIR)) length(list.files(CHUNKS_DIR, pattern = "^longs_chunk_")) else 0L
   ajouter("etape_tirage_das_longs", if(!is.na(n_longs_att)) statut3(n_longs, n_longs_att) else if(n_longs > 0) "PARTIEL" else "À FAIRE",
           sprintf("chunks longs %d / %s", n_longs, format(n_longs_att)))

@@ -204,9 +204,9 @@ Tous dans les **helpers purs** (§0.3 : « là où tu peux écrire du code neuf 
 
 - `referentiels.R` : B11 ; `comp_sat_diab <- codes_comp_sat_diab` ; `neo_codes_diabete` (§5.10). Rien d'autre.
 - `referentiels/exclusions_paires.yaml` : créé (§6.4), 4 paires évidentes, structure `- [A, B]`.
-- `tests/test_helpers.R` : §8.1 + briefs industrialisation §8, conversion §7, mémoire et orchestration, 207 assertions (`stopifnot`, sans testthat). Source `config_v8.R` puis `helpers_v8.R`. Repli arrow par paquet mock (section 11).
+- `tests/test_helpers.R` : §8.1 + briefs industrialisation §8, conversion §7, mémoire, orchestration et chunking dynamique, 220 assertions (`stopifnot`, sans testthat). Source `config_v8.R` puis `helpers_v8.R`. Repli arrow par paquet mock (section 11).
 - `tests/test_chaines_sqlite.R` : les **scripts réels** (extraction puis tirage) sur SQLite **fichier**
-  avec un faux paquet `pRatihque` (mock interdit pendant le tirage), 96 assertions : chaînes dbplyr
+  avec un faux paquet `pRatihque` (mock interdit pendant le tirage), 97 assertions : chaînes dbplyr
   (§5.9a, B1-10, refs, §7.5/§7.6), sessions multiples et résolution des besoins, cache des partiels,
   reprise, FORCER_REFS, garde-fou `partiels_meta`, tirage sans base, reprise des chunks, identité
   parquet, livrables, mode `catalogue_complet`. Ne valide PAS le dialecte ni les colonnes réelles.
@@ -266,8 +266,8 @@ Tous dans les **helpers purs** (§0.3 : « là où tu peux écrire du code neuf 
 ```
 Rscript -e 'parse("extraction_associations_codes_v8.R")'        # syntaxe OK
 Rscript -e 'for(f in c("config_v8.R","helpers_v8.R","extraction_associations_codes_v8.R","tirage_scenarios_v8.R")) parse(f)'
-Rscript tests/test_helpers.R                                     # 207 assertions vertes (204 sans arrow : chemin (a) non testé)
-R_LIBS_TEST=<lib avec dbplyr/DBI/RSQLite[/arrow]> Rscript tests/test_chaines_sqlite.R   # 96 assertions vertes (avec ou sans arrow)
+Rscript tests/test_helpers.R                                     # 220 assertions vertes (217 sans arrow : chemin (a) non testé)
+R_LIBS_TEST=<lib avec dbplyr/DBI/RSQLite[/arrow]> Rscript tests/test_chaines_sqlite.R   # 97 assertions vertes (avec ou sans arrow)
 grep -n 'filter_chap\|sexe_ ==sexe_\|v2025\|slice(1:2)\|<<-\|distinct(.*\.keep_all' config_v8.R helpers_v8.R extraction_associations_codes_v8.R tirage_scenarios_v8.R
 grep -c 'pRatihque::' tirage_scenarios_v8.R                       # 0 attendu
 #  -> uniquement des commentaires, plus l'unique distinct(.keep_all) HTA commenté « déterministe » (B1 #5)
@@ -727,3 +727,56 @@ bornée par arrow).
 - **Q28 — `etat_pipeline` et tables temporaires** : avec une connexion ouverte, teste
   `prep_data_<AN_REF>` / `prep_das_chro_<AN_REF>` par `atihble()` dans un `tryCatch` ; « inconnu
   hors connexion » sinon.
+
+---
+
+## 15. Chantier « chunking dynamique »
+
+**Motivation.** 390 chunks constatés sur les séjours courts en diagnostic avec `CHUNK_SIZE = 200` ;
+en production, les longs en produiraient des milliers. Cible : au plus `NB_CHUNKS_MAX` runs par
+tirage. Aucune chaîne base concernée : helpers, config, points d'appel, documentation.
+
+**Config (config_v8.R).** `CHUNK_SIZE` supprimé (des deux blocs profil : le calcul s'adapte au
+volume) ; remplacé par `NB_CHUNKS_MAX = 50L` (borne haute du nombre de chunks), `CHUNK_SIZE_MIN = 500L`
+(plancher), `CHUNK_SIZE_FIXE = NA_integer_` (surcharge manuelle qui court-circuite le calcul). Les
+trois entrent dans `NOMS_CONFIG_META`, dans `meta_tirage.yaml` et dans ses clés de garde-fou
+(`CLES_META_TIRAGE`, à la place de `CHUNK_SIZE`).
+
+**Formule (helpers `taille_chunk`, pure, testée).** `CHUNK_SIZE_FIXE` si non-NA, sinon
+`max(CHUNK_SIZE_MIN, ceiling(n / NB_CHUNKS_MAX))` : jamais plus de `NB_CHUNKS_MAX` chunks, jamais de
+chunks minuscules, n petit -> un seul chunk. `pmap_chunks(chunk_size = NULL)` (nouveau défaut) calcule
+`taille_chunk(nrow(df))` et imprime n, chunk_size retenu et nombre de chunks. `etape_tirage_courts`
+et `etape_tirage_das_longs` passent `chunk_size = NULL` ; `etat_pipeline` calcule les chunks attendus
+avec la même formule.
+
+**Garde-fou de reprise (sidecar).** `pmap_chunks` écrit `<dossier>/<prefixe>_chunks_meta.yaml`
+(n, chunk_size, seed_base, nb_chunks, date) AVANT le premier chunk (un sidecar par préfixe : les
+branches courts et longs partagent `CHUNKS_DIR`). À la reprise (chunks du préfixe présents), si n,
+chunk_size ou seed_base diffèrent -> `stop()` explicite « découpage incompatible avec les chunks
+existants ; videz <dossier> ou restaurez les paramètres : attendu … ; reçu … ». Pourquoi : les index
+de chunks désignent des PLAGES DE LIGNES de df ; reprendre sur un autre découpage ferait sauter des
+lignes ou en tirerait deux fois, sans erreur (corruption silencieuse). Chunks présents sans sidecar
+(dossiers antérieurs au chantier) -> même stop, en l'expliquant (`verifier_chunks_meta`).
+
+**Migration.** Les dossiers de chunks existants (sans sidecar) doivent être vidés ; le stop l'explique.
+`meta_tirage.yaml` antérieurs : la clé `CHUNK_SIZE` n'est plus vérifiée, les nouvelles clés le sont ->
+un `meta_tirage.yaml` antérieur diffère (`NB_CHUNKS_MAX` absent) et déclenche le garde-fou existant :
+vider chunks + sélection + méta du tirage avant de rejouer.
+
+**Tests.** test_helpers.R (220 assertions, 217 sans arrow) : `taille_chunk` (n petit -> 1 chunk, plancher actif,
+n grand -> exactement NB_CHUNKS_MAX chunks, `CHUNK_SIZE_FIXE` prioritaire, défauts config) ;
+`pmap_chunks` auto (<= NB_CHUNKS_MAX), sidecar écrit avant le premier chunk (présent même si le
+chunk 1 échoue) et complet, reprise mêmes paramètres == run complet bit à bit, n / chunk_size /
+seed_base modifiés -> stop, chunks sans sidecar -> stop, deux préfixes dans un dossier -> sidecars
+distincts, déterminisme inchangé. test_chaines_sqlite.R (97) : fixtures petites -> cas multi-chunks
+forcés par `CHUNK_SIZE_FIXE <- 40L` en surcharge (reprise et garde-fou réellement exercés) ;
+assertions de résultat inchangées ; sidecars des deux branches présents et cohérents ; identité
+avec les anciens scripts conservée (`CHUNK_SIZE <- 40L` ajouté à la surcharge de test pour eux seuls).
+
+### 15.1 Questions
+- **Q29 — un sidecar par préfixe** : le brief nomme `chunks_meta.yaml` ; les deux branches
+  partageant `CHUNKS_DIR`, le sidecar est `courts_chunks_meta.yaml` / `longs_chunks_meta.yaml`.
+- **Q30 — `garder_chunks = FALSE`** : les chunks sont supprimés à la fin mais le sidecar reste ;
+  sans chunk présent, il est simplement réécrit au run suivant (pas de garde-fou déclenché).
+- **Q31 — `CHUNK_SIZE_MIN = 500` en diagnostic** : les courts (~78 000 pivots) donnent 50 chunks
+  de ~1 560 ; le tirage longs de 1 000 lignes donne 2 chunks de 500 (au lieu de 5 de 200).

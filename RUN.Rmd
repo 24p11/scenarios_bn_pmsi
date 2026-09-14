@@ -98,7 +98,7 @@ cat(readLines(list.files(EXPORTS_DIR, "^rapport_extraction", full.names = TRUE)[
 etape_selection_longs()    # diagnostic : quota_dp, 1 000 ; production : catalogue_complet ; budget = 100000L pour un palier
 ```
 
-## 3.4 Tirage DAS par chunks (reprise : relancer tel quel)
+## 3.4 Tirage DAS par chunks (reprise : relancer tel quel, mêmes paramètres de découpage)
 
 ```{r tirage_das}
 etape_tirage_das_longs()
@@ -149,7 +149,13 @@ if (JE_CONFIRME) {
 - Refs : sautées si le parquet existe ; `etape_refs(forcer = TRUE)` après changement d'`AN_REF`,
   d'un `SEUIL_REF_*`, de `CONVERSION_E669` ou correction amont.
 - Chunks / sélection / `meta_tirage.yaml` : reprise telle quelle ; à vider après changement de
-  `MODE_SELECTION`, `BUDGET_TOTAL_LONGS`, `QUOTA_MIN_PAR_UNITE`, `CHUNK_SIZE`, `SEED` ou du catalogue.
+  `MODE_SELECTION`, `BUDGET_TOTAL_LONGS`, `QUOTA_MIN_PAR_UNITE`, `SEED` ou du catalogue.
+- Chunking dynamique : `taille_chunk(n) = max(CHUNK_SIZE_MIN, ceiling(n / NB_CHUNKS_MAX))`
+  (au plus 50 chunks par tirage, plancher 500 ; `CHUNK_SIZE_FIXE` pour imposer une taille).
+  Sidecar `<prefixe>_chunks_meta.yaml` par dossier : reprise acceptée uniquement avec les mêmes
+  n / chunk_size / seed_base ; changer `NB_CHUNKS_MAX`, `CHUNK_SIZE_MIN`, `CHUNK_SIZE_FIXE` ou le
+  volume d'entrée ⇒ vider les dossiers de chunks (le garde-fou l'impose). Dossiers antérieurs
+  au chantier (sans sidecar) : à vider.
 - Sessions multiples : les tables temporaires disparaissent à la déconnexion ;
   `etape_prep_data()` recrée à la demande. Ne jamais persister de table en base.
 
