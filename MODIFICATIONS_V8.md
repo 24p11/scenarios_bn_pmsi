@@ -204,9 +204,9 @@ Tous dans les **helpers purs** (§0.3 : « là où tu peux écrire du code neuf 
 
 - `referentiels.R` : B11 ; `comp_sat_diab <- codes_comp_sat_diab` ; `neo_codes_diabete` (§5.10). Rien d'autre.
 - `referentiels/exclusions_paires.yaml` : créé (§6.4), 4 paires évidentes, structure `- [A, B]`.
-- `tests/test_helpers.R` : §8.1 + briefs industrialisation §8, conversion §7 et mémoire, 206 assertions (`stopifnot`, sans testthat). Source `config_v8.R` puis `helpers_v8.R`. Repli arrow par paquet mock (section 11).
+- `tests/test_helpers.R` : §8.1 + briefs industrialisation §8, conversion §7, mémoire et orchestration, 207 assertions (`stopifnot`, sans testthat). Source `config_v8.R` puis `helpers_v8.R`. Repli arrow par paquet mock (section 11).
 - `tests/test_chaines_sqlite.R` : les **scripts réels** (extraction puis tirage) sur SQLite **fichier**
-  avec un faux paquet `pRatihque` (mock interdit pendant le tirage), 81 assertions : chaînes dbplyr
+  avec un faux paquet `pRatihque` (mock interdit pendant le tirage), 96 assertions : chaînes dbplyr
   (§5.9a, B1-10, refs, §7.5/§7.6), sessions multiples et résolution des besoins, cache des partiels,
   reprise, FORCER_REFS, garde-fou `partiels_meta`, tirage sans base, reprise des chunks, identité
   parquet, livrables, mode `catalogue_complet`. Ne valide PAS le dialecte ni les colonnes réelles.
@@ -266,8 +266,8 @@ Tous dans les **helpers purs** (§0.3 : « là où tu peux écrire du code neuf 
 ```
 Rscript -e 'parse("extraction_associations_codes_v8.R")'        # syntaxe OK
 Rscript -e 'for(f in c("config_v8.R","helpers_v8.R","extraction_associations_codes_v8.R","tirage_scenarios_v8.R")) parse(f)'
-Rscript tests/test_helpers.R                                     # 206 assertions vertes (204 sans arrow : chemin (a) non testé)
-R_LIBS_TEST=<lib avec dbplyr/DBI/RSQLite[/arrow]> Rscript tests/test_chaines_sqlite.R   # 81 assertions vertes (avec ou sans arrow)
+Rscript tests/test_helpers.R                                     # 207 assertions vertes (204 sans arrow : chemin (a) non testé)
+R_LIBS_TEST=<lib avec dbplyr/DBI/RSQLite[/arrow]> Rscript tests/test_chaines_sqlite.R   # 96 assertions vertes (avec ou sans arrow)
 grep -n 'filter_chap\|sexe_ ==sexe_\|v2025\|slice(1:2)\|<<-\|distinct(.*\.keep_all' config_v8.R helpers_v8.R extraction_associations_codes_v8.R tirage_scenarios_v8.R
 grep -c 'pRatihque::' tirage_scenarios_v8.R                       # 0 attendu
 #  -> uniquement des commentaires, plus l'unique distinct(.keep_all) HTA commenté « déterministe » (B1 #5)
@@ -635,3 +635,95 @@ APRÈS (en R, extraction l.526-545) : collect depuis prep_topk_tmp — par morce
 - **Q24 — `PAIRES_RECOUVREMENT`** par défaut (CHR/U 24 -> 25) : à étendre selon les partiels
   disponibles ; le recouvrement pivots ignore `nbda` ? Non : il utilise `PIVOTS_LONGS` complets
   (nbda inclus), comme les combinaisons.
+
+---
+
+## 14. Chantier « orchestration par étapes »
+
+Pur ré-enrobage : mêmes calculs, mêmes fichiers, mêmes noms d'exports ; aucune chaîne base
+modifiée (diffs vides, commandes en 14.3). Les deux scripts d'entrée n'appellent plus que des
+étapes ; `RUN.Rmd` appelle une étape par chunk.
+
+### 14.1 Nouveau fichier `etapes_v8.R` — mapping ancien -> nouveau
+
+| Ancien (extraction c2a7e0a / tirage c2a7e0a) | Nouveau (`etapes_v8.R`) | Contenu |
+|---|---|---|
+| extraction section 2 (`prep_data`, l.61-348) | l.23-310, bloc déplacé | diff vide |
+| extraction section 3 (refs 3a-3e, l.350-475) | l.312-437, bloc déplacé | diff vide |
+| extraction section 4 (`prep_scenarios2`, l.477-547) | l.439-509, bloc déplacé | diff vide (ligne vide finale près) |
+| extraction 5b : `CACHE_E669`, `MEMOIRE_ENV`, `noter_memoire`, `purger_cache_e669`, `charger_dist_e660`, `ref_das_chronique_brute`, `codes_imprecis_extraction`, fabriques pivots/v_admin, `FABRIQUES_REFS` (l.567-663) | section 0b, l.511-623, bloc déplacé | diff vide |
+| extraction 5a (prep_data des années du plan, garde-fou partiels_meta, plan) | `etape_prep_data(ans = NULL)` l.672 | plan stocké dans `ETAPES_ENV$plan` |
+| extraction 5b (boucle des refs) | `etape_refs(forcer = FORCER_REFS)` l.699 | boucle déplacée ; prérequis `prep_data_<AN_REF>` (crée `prep_das_chro` si une ref chronique manque) |
+| extraction 5c (`construire_catalogue_longs`) + 5d (`mesurer_recouvrement`) | `etape_partiels_longs(iterations = NULL)` l.729 + `mesurer_recouvrement` l.772 | sans agrégation finale |
+| extraction section 6 (catalogue deux étages, meta, rapport d'extraction) | `etape_catalogue(ans, etbs)` l.796 | périmètre en ARGUMENT, tracé dans le meta (`ANS_HISTORIQUE`/`TYPES_ETBS_LONGS` = valeurs passées, + `perimetre_ans`/`perimetre_etbs`) ; ne touche pas la base |
+| tirage section 1 (lecture des produits, REFS, codes imprécis, libellés) | `charger_contexte_tirage(requis, etape)` l.909 | chargé une fois par session (`ETAPES_ENV$ctx`), prérequis par étape |
+| tirage section 2 (courts) | `etape_tirage_courts()` l.948 | bannière « AN_REF uniquement » |
+| tirage 3a (sélection figée, meta_tirage) | `etape_selection_longs(budget, mode)` l.985 + `relire_selection_longs` l.1042 | reprise de session : sélection relue depuis les fichiers |
+| tirage 3b (pmap_chunks longs) | `etape_tirage_das_longs()` l.1062 | assemblé en mémoire de session |
+| tirage 3c (habillage) | `etape_habillage_longs()` l.1082 | jointure `v_admin_longs.parquet` relu (frontière tirage / base réaffirmée : jamais `prep_data` en direct) |
+| tirage 3c export + section 4 (livrables, rapport) | `etape_finalisation()` l.1108 | reconstruit ce qui manque en session (chunks via habillage, stats des courts depuis leur parquet) |
+| (nouveau) | `etat_pipeline()` l.1195 | FAIT / PARTIEL / À FAIRE avec preuves, fichiers seulement |
+
+Infrastructure (l.624-665) : `ETAPES_ENV` (état de session : plan, impact_e669, rapport, revue,
+sélection, df longs), `banniere_debut/fin` (durée, fichiers produits), `exiger_conn`,
+`exiger_fichiers` (« lancez etape_X d'abord »), `table_temporaire_existe` / `exiger_table`,
+`plan_courant`, `fmt_df`, `chemin_export`. Signatures : voir tableau de RUN.md.
+
+### 14.2 Scripts d'entrée et notebook
+- `extraction_associations_codes_v8.R` (46 lignes) : bootstrap puis `etape_prep_data(); etape_refs();
+  etape_partiels_longs(); etape_catalogue()`. `tirage_scenarios_v8.R` (32 lignes) : bootstrap puis
+  `etape_tirage_courts(); etape_selection_longs(); etape_tirage_das_longs(); etape_habillage_longs();
+  etape_finalisation()`. Variable d'environnement `SCENARIOS_PMSI_ETAPES_SEULEMENT=1` : charge la
+  session (config, sources, connexion pour l'extraction) sans exécuter d'étape — utilisée par
+  RUN.Rmd (chunk « session ») et les tests.
+- Ordre des seeds inchangé : chaque tirage est précédé de son `set.seed` explicite (`SEED + i` par
+  chunk, `SEED + 1e6 … 5e6`), donc l'ordre d'appel des étapes est sans effet sur les résultats.
+- `RUN.md` réécrit autour des étapes (tableau nom / produit / quand relancer / cache ; séquence
+  utilisateur 1 prep_data, 2 courts, 3 longs avec DÉCISION de périmètre -> `etape_catalogue(ans=, etbs=)`) ;
+  `RUN.Rmd` synchronisé (un chunk par étape, chunk `etat_pipeline()` réutilisable, chunk de décision
+  avec `ANS_CHOISIES` / `ETBS_CHOISIS` en clair, protections `eval = FALSE` et `JE_CONFIRME` conservées).
+
+### 14.3 Aucune chaîne base touchée — commandes de vérification
+```
+OLD=tests/ancien_20260914/extraction_associations_codes_v8.R ; NEW=etapes_v8.R
+diff <(awk '/^## ---- 2\. prep_data/{f=1} /^## ---- 3\. Tables/{f=0} f' $OLD) <(awk '/^## ---- 2\. prep_data/{f=1} /^## ---- 3\. Tables/{f=0} f' $NEW)
+diff <(awk '/^## ---- 3\. Tables/{f=1} /^## ---- 4\. prep_scenarios2/{f=0} f' $OLD) <(awk '/^## ---- 3\. Tables/{f=1} /^## ---- 4\. prep_scenarios2/{f=0} f' $NEW)
+diff <(awk '/^## ---- 4\. prep_scenarios2/{f=1} /^## ---- 5\. Exécution/{f=0} f' $OLD) <(awk '/^## ---- 4\. prep_scenarios2/{f=1} /^## ---- 0b\. Infrastructure/{f=0} f' $NEW | sed '$d')
+diff <(awk '/^CACHE_E669 <- new\.env\(\)/{f=1} /^stopifnot\(setequal/{f=0} f' $OLD) <(awk '/^CACHE_E669 <- new\.env\(\)/{f=1} /^stopifnot\(setequal/{f=0} f' $NEW)
+```
+Tous vides à la livraison. Les instantanés `tests/ancien_20260914/` (deux scripts d'entrée avant
+le chantier) servent de référence d'identité aux tests.
+
+### 14.4 Tests
+- test_chaines_sqlite.R (96 assertions) : (a) bout-en-bout par les scripts d'entrée == résultats
+  antérieurs (assertions existantes inchangées ; état de session lu dans `ETAPES_ENV`) ET identité
+  bit à bit avec les anciens scripts d'entrée (catalogue, 10 refs, sélection, scenarios_courts,
+  scenarios_longs_tirage, echantillon_revue, top30) ; (b) étape par étape avec déconnexion /
+  reconnexion entre `etape_refs` et `etape_partiels_longs`, puis tirage par étapes en sessions
+  séparées (sélection et chunks relus) == bout-en-bout ; (c) `etape_catalogue(ans = c(17, 26),
+  etbs = "CHR/U")` : catalogue restreint == ancien flux sur ces partiels, méta cohérent ; (d) hors
+  ordre : `etape_refs()` sans prep_data, `etape_tirage_das_longs()` sans sélection,
+  `etape_partiels_longs()` après reconnexion sans prep_data -> erreurs actionnables ;
+  (e) `etat_pipeline()` avant / après chaque phase, y compris sans connexion.
+- test_helpers.R (207) : inchangé sauf le chemin arrow d'`agreger_partiels`, désormais testé
+  SANS repli (voir 14.5).
+
+### 14.5 Correctif révélé par le chantier
+`agreger_partiels_arrow` échouait silencieusement (avertissement puis repli incrémental) : arrow
+ne traduit ni le pronom `.data[[col]]` ni `across(all_of(cols))`. Remplacés par `!!dplyr::sym(col)`
+et `!!!dplyr::syms(cols)` ; le test du chemin (a) exige maintenant l'absence de repli. Sans ce
+correctif, la production aurait utilisé le chemin incrémental (résultats identiques, mémoire non
+bornée par arrow).
+
+### 14.6 Questions
+- **Q25 — `etape_refs` et `prep_das_chronique`** : si une ref chronique est à calculer et que la
+  table `prep_das_chro_<AN_REF>` manque, l'étape la crée elle-même (au lieu d'échouer), pour rester
+  idempotente en session neuve ; `prep_data_<AN_REF>` reste un prérequis strict.
+- **Q26 — bannière « AN_REF uniquement » des courts** : les pivots courts sont extraits sur
+  l'année de référence (chaîne v7.1.2) ; une extension multi-années des courts changerait la
+  chaîne (hors périmètre).
+- **Q27 — `etape_catalogue` sans plan de session** : appelée seule (session neuve), le meta porte
+  `plan_* = NA` (le plan n'est connu que d'`etape_prep_data`) ; le périmètre passé reste tracé.
+- **Q28 — `etat_pipeline` et tables temporaires** : avec une connexion ouverte, teste
+  `prep_data_<AN_REF>` / `prep_das_chro_<AN_REF>` par `atihble()` dans un `tryCatch` ; « inconnu
+  hors connexion » sinon.

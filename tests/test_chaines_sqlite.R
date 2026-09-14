@@ -81,7 +81,7 @@ stub_referentiels <- c(
   '              "Insuffisance cardiaque, sans précision","IC congestive","Hyperlipidémie","Tabagisme","Fibrillation auriculaire"))')
 creer_projet <- function(nom){
   proj <- file.path(tempdir(), nom); unlink(proj, recursive = TRUE); dir.create(file.path(proj, "referentiels"), recursive = TRUE)
-  for(f in c("config_v8.R", "helpers_v8.R", "extraction_associations_codes_v8.R", "tirage_scenarios_v8.R", "exclusions.R"))
+  for(f in c("config_v8.R", "helpers_v8.R", "etapes_v8.R", "extraction_associations_codes_v8.R", "tirage_scenarios_v8.R", "exclusions.R"))
     file.copy(file.path(racine, f), file.path(proj, f))
   file.copy(file.path(racine, "referentiels", "exclusions_paires.yaml"), file.path(proj, "referentiels", "exclusions_paires.yaml"))
   writeLines(stub_utils, file.path(proj, "utils.R"))
@@ -173,7 +173,7 @@ cat("\n# session 1 : extraction partielle (années 17 et 26, CHR/U et CH)\n")
 surcharger("ANS_HISTORIQUE <- c(17L, 26L)")
 log1 <- sortie(lancer("extraction_associations_codes_v8.R"))
 ok("plan session 1 : 4 itérations, 10 refs, années 17 et 26, prep_das_chronique",
-   sum(plan$iterations$a_faire) == 4 && all(plan$refs$a_faire) && identical(plan$annees_a_preparer, c(17L, 26L)) && plan$prep_das_chronique)
+   sum(ETAPES_ENV$plan$iterations$a_faire) == 4 && all(ETAPES_ENV$plan$refs$a_faire) && identical(ETAPES_ENV$plan$annees_a_preparer, c(17L, 26L)) && ETAPES_ENV$plan$prep_das_chronique)
 tt <- temp_tables(conn)
 ok("tables temporaires créées : prep_data_17, prep_data_26, prep_das_chro_26 ; pas de prep_data_20",
    all(c("prep_data_17", "prep_data_26", "prep_das_chro_26") %in% tt) && !"prep_data_20" %in% tt)
@@ -227,12 +227,12 @@ ok("conversion : aucun ^E669 dans les refs (aigu, chronique, paires, imprécis, 
      sans_e669(df_imp, "code") && sans_e669(df_pc, "diag2") &&
      sans_e669(arrow::read_parquet(file.path(EXPORTS_DIR, "v_admin_courts.parquet")), "diag2") && sans_e669(arrow::read_parquet(file.path(EXPORTS_DIR, "v_admin_longs.parquet")), "diag2"))
 ok("conversion : somme des n inchangée sur le catalogue agrégé, distribution E660x exportée",
-   impact_e669$n_total_avant == impact_e669$n_total_apres && impact_e669$e669_diag2_suffixe + impact_e669$e669_graine_suffixe > 0 &&
+   ETAPES_ENV$impact_e669$n_total_avant == ETAPES_ENV$impact_e669$n_total_apres && ETAPES_ENV$impact_e669$e669_diag2_suffixe + ETAPES_ENV$impact_e669$e669_graine_suffixe > 0 &&
      file.exists(file.path(EXPORTS_DIR, "distribution_e660.parquet")) && nrow(arrow::read_parquet(file.path(EXPORTS_DIR, "distribution_e660.parquet"))) > 0)
 ok("conversion : les partiels restent en codes BRUTS (E669 présents)",
    any(vapply(list.files(PARTIELS_DIR, pattern = "_26\\.parquet$", full.names = TRUE), function(f){ d <- arrow::read_parquet(f); compter_e669(d, c("diag2", "diagnostic_associes")) > 0 }, logical(1))))
 ok("conversion : cas de fusion sous-seuil -> au-dessus (GHM 88M991, DP E6690 + E6600 -> E6600, n = 2 > 1)",
-   { f <- cat1[cat1$ghm2 == "88M991", ]; nrow(f) == 1 && f$diag2 == "E6600" && f$poids == 2 && impact_e669$profils_entres >= 1 })
+   { f <- cat1[cat1$ghm2 == "88M991", ]; nrow(f) == 1 && f$diag2 == "E6600" && f$poids == 2 && ETAPES_ENV$impact_e669$profils_entres >= 1 })
 ok("conversion : paires das_a < das_b, aucune paire identique", all(df_pair$das_a < df_pair$das_b))
 ok("conversion : meta.yaml porte CONVERSION_E669 et BARE_E669_DEFAUT, rapport d'extraction écrit",
    isTRUE(meta1$CONVERSION_E669) && meta1$BARE_E669_DEFAUT == "0" && file.exists(file.path(EXPORTS_DIR, "rapport_extraction_v8_" %+% DATE_TAG %+% ".txt")) &&
@@ -319,14 +319,14 @@ ancien_flux <- function(fichiers, conversion){
     dplyr::filter(nb > SEUIL_PIVOT) |> dplyr::select(-n) |> dplyr::rename(poids = nb)
 }
 ok("P2 catalogue deux étages == ancien flux (conversion TRUE, fixture de fusion E669 incluse)",
-   comparer(cat1, ancien_flux(file.path(PARTIELS_DIR, plan$iterations$fichier), TRUE)) && any(cat1$ghm2 == "88M991"))
+   comparer(cat1, ancien_flux(file.path(PARTIELS_DIR, ETAPES_ENV$plan$iterations$fichier), TRUE)) && any(cat1$ghm2 == "88M991"))
 ok("recouvrement.csv : (CHR/U 17->26) ok avec parts dans [0,1], (CH 24->25) non calculable",
    { r <- utils::read.csv(file.path(EXPORTS_DIR, "recouvrement.csv")); nrow(r) == 2 && r$statut[1] == "ok" && r$part_combos_B_vues[1] >= 0 && r$part_combos_B_vues[1] <= 1 &&
      r$nb_B[1] == ap1$nb_lignes_partiel[2] && grepl("non calculable", r$statut[2]) })
 ok("diagnostic_memoire.csv : schéma, mesures par morceau / partiel / ref / étage",
    { m <- utils::read.csv(file.path(EXPORTS_DIR, "diagnostic_memoire.csv")); all(c("etiquette", "horodatage", "taille_objet_mo", "memoire_utilisee_go", "pic_go", "alerte") %in% names(m)) &&
      any(grepl("morceau", m$etiquette)) && any(grepl("^partiel ", m$etiquette)) && any(grepl("^ref v_admin_longs", m$etiquette)) && any(grepl("étage 1", m$etiquette)) && any(grepl("catalogue final", m$etiquette)) })
-ok("P3 : aucun objet ref ni cache brut vivant après l'extraction", !exists("df_ref") && !exists("brute", envir = CACHE_E669) && !exists("pivots_bruts") && !exists("combos") && !exists("df_prep_scenarios"))
+ok("P3 : aucun objet ref ni cache brut vivant après l'extraction", !exists("df_ref") && !exists("brute", envir = CACHE_E669) && !exists("pivots_bruts") && !exists("combos") && !exists("df_prep_scenarios") && !exists("df_prep_scenarios_seuil"))
 fermer()
 
 # =============================================================== SESSION 2 ==
@@ -334,8 +334,8 @@ cat("\n# session 2 : reconnexion, année 20 ajoutée -> seules les itérations m
 surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)")
 log2 <- sortie(lancer("extraction_associations_codes_v8.R"))
 ok("plan session 2 : 2 itérations (CHR/U 20, CH 20), 0 ref, année 20 seule, pas de prep_das_chronique",
-   sum(plan$iterations$a_faire) == 2 && all(plan$iterations$an[plan$iterations$a_faire] == 20) && !any(plan$refs$a_faire) &&
-     identical(plan$annees_a_preparer, 20L) && !plan$prep_das_chronique)
+   sum(ETAPES_ENV$plan$iterations$a_faire) == 2 && all(ETAPES_ENV$plan$iterations$an[ETAPES_ENV$plan$iterations$a_faire] == 20) && !any(ETAPES_ENV$plan$refs$a_faire) &&
+     identical(ETAPES_ENV$plan$annees_a_preparer, 20L) && !ETAPES_ENV$plan$prep_das_chronique)
 ok("seule prep_data_20 recréée (plus la table top-k unique de l'itération)", setequal(temp_tables(conn), c("prep_data_20", "prep_topk_tmp")))
 ok("refs sautées (message)", any(grepl("ref ref_das_aigu : présente, sautée", log2)))
 ap2 <- utils::read.csv(file.path(EXPORTS_DIR, "diagnostic_apports.csv"))
@@ -349,7 +349,7 @@ fermer()
 cat("\n# run mono-session (3 années d'un coup) : identité du catalogue\n")
 proj2 <- creer_projet("projet_v8_mono"); Sys.setenv(SCENARIOS_PMSI_PATH = proj2)
 log_mono <- sortie(lancer("extraction_associations_codes_v8.R"))
-ok("mono-session : 6 itérations calculées", sum(plan$iterations$a_faire) == 6)
+ok("mono-session : 6 itérations calculées", sum(ETAPES_ENV$plan$iterations$a_faire) == 6)
 cat_mono <- lire_cat(EXPORTS_DIR)
 ok("identité du catalogue final multi-sessions == mono-session", identical(cat_multi, cat_mono))
 ok("identité des partiels (CH, 20)", identical(arrow::read_parquet(file.path(PARTIELS_DIR, "catalogue_partiel_CH_20.parquet")),
@@ -360,7 +360,7 @@ Sys.setenv(SCENARIOS_PMSI_PATH = proj)
 # =============================================================== SESSION 3 ==
 cat("\n# session 3 : tout présent -> rien à faire\n")
 log3 <- sortie(lancer("extraction_associations_codes_v8.R"))
-ok("plan : rien à faire, message explicite", plan$rien_a_faire && any(grepl("TOUT EST A JOUR", log3)))
+ok("plan : rien à faire, message explicite", ETAPES_ENV$plan$rien_a_faire && any(grepl("TOUT EST A JOUR", log3)))
 ok("aucune table temporaire créée", length(temp_tables(conn)) == 0)
 ok("catalogue ré-agrégé identique", identical(lire_cat(EXPORTS_DIR), cat_multi))
 fermer()
@@ -371,7 +371,7 @@ mt_avant <- file.info(file.path(EXPORTS_DIR, nom_ref(NOMS_REFS)))$mtime; Sys.sle
 surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)", "FORCER_REFS <- TRUE")
 invisible(sortie(lancer("extraction_associations_codes_v8.R")))
 ok("FORCER_REFS : 9 refs recalculées, 0 itération, année AN_REF seule, prep_das_chronique",
-   all(plan$refs$a_faire) && !any(plan$iterations$a_faire) && identical(plan$annees_a_preparer, 26L) && plan$prep_das_chronique)
+   all(ETAPES_ENV$plan$refs$a_faire) && !any(ETAPES_ENV$plan$iterations$a_faire) && identical(ETAPES_ENV$plan$annees_a_preparer, 26L) && ETAPES_ENV$plan$prep_das_chronique)
 ok("tables temporaires : prep_data_26 et prep_das_chro_26 uniquement", setequal(temp_tables(conn), c("prep_data_26", "prep_das_chro_26")))
 ok("refs réécrites (mtime)", all(file.info(file.path(EXPORTS_DIR, nom_ref(NOMS_REFS)))$mtime > mt_avant))
 fermer()
@@ -388,7 +388,7 @@ cat("\n# reprise des partiels\n")
 unlink(file.path(PARTIELS_DIR, "catalogue_partiel_CH_20.parquet"))
 surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)")
 invisible(sortie(lancer("extraction_associations_codes_v8.R")))
-ok("un partiel supprimé -> 1 itération, année 20", sum(plan$iterations$a_faire) == 1 && identical(plan$annees_a_preparer, 20L))
+ok("un partiel supprimé -> 1 itération, année 20", sum(ETAPES_ENV$plan$iterations$a_faire) == 1 && identical(ETAPES_ENV$plan$annees_a_preparer, 20L))
 ok("catalogue identique après reprise", identical(lire_cat(EXPORTS_DIR), cat_multi))
 fermer()
 
@@ -401,7 +401,7 @@ cat_nc <- lire_cat(EXPORTS_DIR)
 ok("toggle FALSE : ^E669 présents dans le catalogue et les refs", compter_e669(cat_nc, c("diag2", "diagnostic_associes")) > 0 &&
      compter_e669(arrow::read_parquet(file.path(EXPORTS_DIR, "ref_das_chronique.parquet")), "das") > 0 && !isTRUE(yaml::read_yaml(file.path(EXPORTS_DIR, "catalogue_longs_seuil_meta.yaml"))$CONVERSION_E669))
 ok("toggle FALSE : le cas de fusion n'entre pas au catalogue (deux profils n = 1 <= seuil)", !any(cat_nc$ghm2 == "88M991"))
-ok("P2 catalogue deux étages == ancien flux (conversion FALSE)", comparer(cat_nc, ancien_flux(file.path(PARTIELS_DIR, plan$iterations$fichier), FALSE)))
+ok("P2 catalogue deux étages == ancien flux (conversion FALSE)", comparer(cat_nc, ancien_flux(file.path(PARTIELS_DIR, ETAPES_ENV$plan$iterations$fichier), FALSE)))
 ok("toggle FALSE : partiels bruts identiques à ceux du projet converti (cache indépendant du toggle)",
    identical(arrow::read_parquet(file.path(PARTIELS_DIR, "catalogue_partiel_CHRU_26.parquet")),
              arrow::read_parquet(file.path(proj, "results", "partiels", "catalogue_partiel_CHRU_26.parquet"))) &&
@@ -423,16 +423,16 @@ ok("exports du tirage présents", all(file.exists(c(f_courts, f_longs, file.path
    "echantillon_revue.csv", "top30_das_par_cmd.csv", "rapport_v8_" %+% DATE_TAG %+% ".txt"))))))
 ok("chunks courts et longs écrits", length(list.files(CHUNKS_DIR, pattern = "^courts_chunk_")) >= 1 && length(list.files(CHUNKS_DIR, pattern = "^longs_chunk_")) >= 1)
 sc_courts <- arrow::read_parquet(f_courts); sc_longs <- arrow::read_parquet(f_longs)
-ok("identité parquet relu / objet mémoire (volumétrie du rapport)", nrow(sc_courts) == rapport$courts$n && nrow(sc_longs) == rapport$longs$n && nrow(sc_courts) > 0 && nrow(sc_longs) > 0)
+ok("identité parquet relu / objet mémoire (volumétrie du rapport)", nrow(sc_courts) == ETAPES_ENV$rapport$courts$n && nrow(sc_longs) == ETAPES_ENV$rapport$longs$n && nrow(sc_courts) > 0 && nrow(sc_longs) > 0)
 ok("aucun objet df_scenarios vivant en fin de script", !exists("df_scenarios"))
 sel <- arrow::read_parquet(file.path(EXPORTS_DIR, "selection_longs.parquet"))
 mt <- yaml::read_yaml(file.path(EXPORTS_DIR, "meta_tirage.yaml"))
 ok("quota_dp : quota exact par diag2, origine renseignée", all(table(sel$diag2) == mt$quota_par_dp) && all(grepl("^plancher_|^libre$", sel$origine)) && nrow(sel) == mt$volume_attendu)
 ok("meta_tirage.yaml cohérent avec le profil", mt$PROFIL == "diagnostic" && mt$MODE_SELECTION == "quota_dp" && mt$BUDGET_TOTAL_LONGS == 120 && mt$CHUNK_SIZE == 40 && mt$nrow_catalogue == nrow(cat_multi))
 ok("tirage : aucun ^E669 dans les sorties (diag2, graine, DAS), effectifs E660x au rapport",
-   rapport$courts$e669_residuels == 0 && rapport$longs$e669_residuels == 0 && sans_e669(sc_courts, c("diag2", "diagnostic_associes")) &&
+   ETAPES_ENV$rapport$courts$e669_residuels == 0 && ETAPES_ENV$rapport$longs$e669_residuels == 0 && sans_e669(sc_courts, c("diag2", "diagnostic_associes")) &&
      sans_e669(sc_longs, c("diag2", "graine", "diagnostic_associes")) && any(grepl("effectifs E660x par classe", rap <- readLines(file.path(EXPORTS_DIR, "rapport_v8_" %+% DATE_TAG %+% ".txt")))))
-ok("contrôles §8.2 à zéro sur les deux branches", { cc <- rapport$courts$controles; cl <- rapport$longs$controles
+ok("contrôles §8.2 à zéro sur les deux branches", { cc <- ETAPES_ENV$rapport$courts$controles; cl <- ETAPES_ENV$rapport$longs$controles
    cc$doublons_categorie == 0 && cc$diabete_hors_flag == 0 && cc$i10_avec_hta_autres == 0 && cc$poids_sous_seuil == 0 &&
      cl$doublons_categorie == 0 && cl$diabete_hors_flag == 0 && cl$i10_avec_hta_autres == 0 && cl$poids_sous_seuil == 0 })
 ok("longs : graine conservée (hors doublon de catégorie interne), HTA et diabète cohérents",
@@ -452,6 +452,73 @@ unlink(ch_longs[min(2, length(ch_longs))]); unlink(sort(list.files(CHUNKS_DIR, p
 log_t2 <- sortie(lancer("tirage_scenarios_v8.R"))
 ok("reprise : sélection relue, chunks présents sautés", any(grepl("relue depuis", log_t2)) && any(grepl("déjà présent, sauté", log_t2)))
 ok("reprise après suppression d'un chunk : parquets identiques bit à bit", identical(arrow::read_parquet(f_courts), sc_courts) && identical(arrow::read_parquet(f_longs), sc_longs))
+# =============================================================== ORCHESTRATION ==
+# (a) identité bit à bit avec les ANCIENS scripts d'entrée (instantanés tests/ancien_20260914),
+#     mêmes fixtures, même seed, même surcharge : extraction puis tirage dans un projet dédié.
+cat("\n# orchestration (a) : nouveau flux == anciens scripts d'entrée (bit à bit)\n")
+options(pmsi_mock_interdit = FALSE)
+proj_anc <- creer_projet("projet_v8_ancien")
+for(f in c("extraction_associations_codes_v8.R", "tirage_scenarios_v8.R")) file.copy(file.path(racine, "tests", "ancien_20260914", f), file.path(proj_anc, f), overwrite = TRUE)
+Sys.setenv(SCENARIOS_PMSI_PATH = proj_anc); surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)")
+invisible(sortie(lancer("extraction_associations_codes_v8.R"))); fermer()
+options(pmsi_mock_interdit = TRUE)
+invisible(sortie(lancer("tirage_scenarios_v8.R")))
+EXPORTS_ANC <- EXPORTS_DIR
+Sys.setenv(SCENARIOS_PMSI_PATH = proj); surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)"); source(file.path(proj, "config_v8.R"))
+meme_parquet <- function(a, b) identical(as.data.frame(arrow::read_parquet(a)), as.data.frame(arrow::read_parquet(b)))
+ok("(a) catalogue et les 10 refs identiques aux anciens scripts",
+   all(vapply(c("catalogue_longs_seuil.parquet", nom_ref(NOMS_REFS)), function(f) meme_parquet(file.path(EXPORTS_ANC, f), file.path(EXPORTS_DIR, f)), logical(1))))
+ok("(a) scenarios_courts et scenarios_longs_tirage identiques bit à bit aux anciens scripts",
+   meme_parquet(file.path(EXPORTS_ANC, basename(f_courts)), f_courts) && meme_parquet(file.path(EXPORTS_ANC, basename(f_longs)), f_longs) &&
+     meme_parquet(file.path(EXPORTS_ANC, "selection_longs.parquet"), file.path(EXPORTS_DIR, "selection_longs.parquet")))
+ok("(a) echantillon_revue.csv et top30 identiques", identical(readLines(file.path(EXPORTS_ANC, "echantillon_revue.csv")), readLines(file.path(EXPORTS_DIR, "echantillon_revue.csv"))) &&
+     identical(readLines(file.path(EXPORTS_ANC, "top30_das_par_cmd.csv")), readLines(file.path(EXPORTS_DIR, "top30_das_par_cmd.csv"))))
+
+# (d) étapes hors ordre -> erreur actionnable ; (e) etat_pipeline avant ; (b) étape par étape
+cat("\n# orchestration (b)(d)(e) : étape par étape, hors ordre, tableau de bord\n")
+proj_et <- creer_projet("projet_v8_etapes"); Sys.setenv(SCENARIOS_PMSI_PATH = proj_et, SCENARIOS_PMSI_ETAPES_SEULEMENT = "1")
+options(pmsi_mock_interdit = FALSE)
+invisible(sortie(lancer("extraction_associations_codes_v8.R")))   # session chargée sans exécution
+etat0 <- etat_pipeline()
+ok("(e) avant toute étape : refs, partiels, catalogue, courts, sélection, finalisation À FAIRE",
+   all(etat0$statut[etat0$etape %in% c("etape_refs", "etape_partiels_longs", "etape_catalogue", "etape_tirage_courts", "etape_selection_longs", "etape_tirage_das_longs", "etape_finalisation")] == "À FAIRE"))
+err <- tryCatch({ invisible(sortie(etape_refs())); NULL }, error = function(e) conditionMessage(e))
+ok("(d) etape_refs() sans prep_data -> erreur actionnable", !is.null(err) && grepl("etape_prep_data", err))
+err <- tryCatch({ invisible(sortie(etape_tirage_das_longs())); NULL }, error = function(e) conditionMessage(e))
+ok("(d) etape_tirage_das_longs() sans sélection -> erreur actionnable", !is.null(err) && grepl("etape_selection_longs|manquant", err))
+invisible(sortie(etape_prep_data())); invisible(sortie(etape_refs()))
+ok("(b) après etape_refs : refs FAIT, partiels À FAIRE", { e <- etat_pipeline(); e$statut[e$etape == "etape_refs"] == "FAIT" && e$statut[e$etape == "etape_partiels_longs"] == "À FAIRE" })
+fermer()   # déconnexion entre etape_refs et etape_partiels_longs
+invisible(sortie(lancer("extraction_associations_codes_v8.R")))   # reconnexion (session chargée sans exécution)
+err <- tryCatch({ invisible(sortie(etape_partiels_longs())); NULL }, error = function(e) conditionMessage(e))
+ok("(b) etape_partiels_longs() après reconnexion sans prep_data -> erreur actionnable", !is.null(err) && grepl("etape_prep_data", err))
+invisible(sortie(etape_prep_data()))
+ok("(b) reconnexion : seules les années des partiels sont préparées, refs sautées", identical(ETAPES_ENV$plan$annees_a_preparer, c(17L, 20L, 26L)) && !any(ETAPES_ENV$plan$refs$a_faire))
+invisible(sortie(etape_partiels_longs())); invisible(sortie(etape_catalogue()))
+ok("(b) catalogue et refs par étapes == bout-en-bout",
+   all(vapply(c("catalogue_longs_seuil.parquet", nom_ref(NOMS_REFS)), function(f) meme_parquet(file.path(EXPORTS_DIR, f), file.path(proj, "results", "exports_diagnostic", f)), logical(1))))
+fermer(); rm(conn)
+ok("(e) sans connexion : tables temporaires « inconnu hors connexion », catalogue FAIT", { e <- etat_pipeline(); grepl("inconnu hors connexion", e$preuve[e$etape == "etape_prep_data"]) && e$statut[e$etape == "etape_catalogue"] == "FAIT" })
+options(pmsi_mock_interdit = TRUE)
+invisible(sortie(lancer("tirage_scenarios_v8.R")))   # session tirage chargée sans exécution
+invisible(sortie(etape_tirage_courts())); invisible(sortie(etape_selection_longs()))
+invisible(sortie(lancer("tirage_scenarios_v8.R")))   # nouvelle session : la sélection et les chunks doivent être relus
+ok("(b) nouvelle session : état de tirage vide", is.null(etat_tirage("selection")) && is.null(etat_tirage("df_tirage_longs")))
+invisible(sortie(etape_tirage_das_longs())); invisible(sortie(etape_habillage_longs())); invisible(sortie(etape_finalisation()))
+ok("(b) sorties du tirage par étapes (sessions séparées) == bout-en-bout, bit à bit",
+   meme_parquet(file.path(EXPORTS_DIR, basename(f_courts)), f_courts) && meme_parquet(file.path(EXPORTS_DIR, basename(f_longs)), f_longs) &&
+     identical(readLines(file.path(EXPORTS_DIR, "echantillon_revue.csv")), readLines(file.path(proj, "results", "exports_diagnostic", "echantillon_revue.csv"))))
+ok("(e) après finalisation : tout FAIT", { e <- etat_pipeline(); all(e$statut[e$etape %in% c("etape_refs", "etape_partiels_longs", "etape_catalogue", "etape_tirage_courts", "etape_selection_longs", "etape_tirage_das_longs", "etape_finalisation")] == "FAIT") })
+# (c) etape_catalogue à périmètre restreint
+invisible(sortie(etape_catalogue(ans = c(17L, 26L), etbs = "CHR/U")))
+mres <- yaml::read_yaml(file.path(EXPORTS_DIR, "catalogue_longs_seuil_meta.yaml"))
+ok("(c) etape_catalogue(ans, etbs) : catalogue restreint au périmètre passé, méta cohérent",
+   identical(unlist(mres$ANS_HISTORIQUE), c(17L, 26L)) && identical(unlist(mres$TYPES_ETBS_LONGS), "CHR/U") && identical(unlist(mres$perimetre_ans), c(17L, 26L)) &&
+     comparer(lire_cat(EXPORTS_DIR), ancien_flux(file.path(PARTIELS_DIR, nom_partiel("CHR/U", c(17L, 26L))), TRUE)))
+Sys.unsetenv("SCENARIOS_PMSI_ETAPES_SEULEMENT")
+Sys.setenv(SCENARIOS_PMSI_PATH = proj); surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)"); source(file.path(proj, "config_v8.R"))
+invisible(sortie(lancer("tirage_scenarios_v8.R")))   # rétablit l'état de session du projet principal (chunks présents : reprise)
+
 # changement de paramètres -> garde-fou meta_tirage, puis mode catalogue_complet
 surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)", "MODE_SELECTION <- 'catalogue_complet'", "BUDGET_TOTAL_LONGS <- " %+% (3 * nrow(cat_multi)) %+% "L")
 err <- tryCatch({ invisible(sortie(lancer("tirage_scenarios_v8.R"))); NULL }, error = function(e) conditionMessage(e))
@@ -460,7 +527,7 @@ unlink(CHUNKS_DIR, recursive = TRUE); unlink(file.path(EXPORTS_DIR, c("meta_tira
 log_t3 <- sortie(lancer("tirage_scenarios_v8.R"))
 mt3 <- yaml::read_yaml(file.path(EXPORTS_DIR, "meta_tirage.yaml"))
 ok("catalogue_complet : NB_VARIANTES = 3, volume attendu = nrow × 3, variante max = 3",
-   mt3$NB_VARIANTES == 3 && mt3$volume_attendu == 3 * nrow(cat_multi) && max(arrow::read_parquet(f_longs)$variante) == 3 && rapport$longs_tirage_n <= mt3$volume_attendu)
+   mt3$NB_VARIANTES == 3 && mt3$volume_attendu == 3 * nrow(cat_multi) && max(arrow::read_parquet(f_longs)$variante) == 3 && ETAPES_ENV$rapport$longs_tirage_n <= mt3$volume_attendu)
 ok("rapport catalogue_complet : ligne nrow / NB_VARIANTES / volume", any(grepl("mode catalogue_complet : nrow catalogue", readLines(file.path(EXPORTS_DIR, "rapport_v8_" %+% DATE_TAG %+% ".txt")))))
 ok("la phase tirage n'a jamais touché la base (mock interdit resté silencieux)", isTRUE(getOption("pmsi_mock_interdit")))
 options(pmsi_mock_interdit = FALSE)

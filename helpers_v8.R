@@ -891,8 +891,9 @@ agreger_partiels_incremental <- function(fichiers, cols, col_n, filtre_cles = NU
 agreger_partiels_arrow <- function(fichiers, cols, col_n, filtre_cles = NULL){
   ds <- arrow::open_dataset(fichiers)
   if(!is.null(filtre_cles)) ds <- dplyr::semi_join(ds, filtre_cles, by = names(filtre_cles))
-  res <- ds |> dplyr::group_by(dplyr::across(dplyr::all_of(cols))) |>
-    dplyr::summarise(.n_tmp = sum(.data[[col_n]], na.rm = TRUE), .groups = "drop") |>
+  # symboles explicites : le pronom .data[[ ]] et across(all_of()) ne sont pas traduits par arrow
+  res <- ds |> dplyr::group_by(!!!dplyr::syms(cols)) |>
+    dplyr::summarise(.n_tmp = sum(!!dplyr::sym(col_n), na.rm = TRUE), .groups = "drop") |>
     dplyr::collect() |> tibble::as_tibble()
   res$.n_tmp <- as.integer(res$.n_tmp)
   names(res)[names(res) == ".n_tmp"] <- col_n

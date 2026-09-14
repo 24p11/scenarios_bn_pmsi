@@ -10,232 +10,148 @@ knitr::opts_chunk$set(eval = FALSE)
 ```
 
 Version notebook de `RUN.md` (qui reste la référence texte). Fichiers du pipeline :
-`config_v8.R` (config + profils), `helpers_v8.R`, `extraction_associations_codes_v8.R`
-(base → agrégats parquet), `tirage_scenarios_v8.R` (parquets → scénarios, **sans base**).
-Journal : `MODIFICATIONS_V8.md`. Règles de cache : en fin de notebook.
+`config_v8.R` (config + profils), `helpers_v8.R`, `etapes_v8.R` (chaînes base + fonctions
+d'étape + `etat_pipeline()`), `extraction_associations_codes_v8.R` (entrée extraction),
+`tirage_scenarios_v8.R` (entrée tirage, **sans base**). Journal : `MODIFICATIONS_V8.md`.
 
-**Usage** : exécuter les chunks un à un, dans l'ordre, en lisant les critères de passage
-entre deux. En cas de plantage d'une extraction ou d'un tirage : relancer le même chunk,
-le cache fait le reste (partiels / refs / chunks déjà écrits sont sautés).
+**Usage** : un chunk par étape, dans l'ordre, en lisant les critères de passage entre deux ;
+`etat_pipeline()` à tout moment. En cas de plantage : relancer le même chunk, le cache fait le
+reste (partiels / refs / chunks déjà écrits sont sautés). Session → Restart R conseillé avant
+chaque grosse étape.
 
 ---
 
-# Étape 1 — profil diagnostic
+# 0. Session
 
-But : mesurer l'apport marginal de chaque (catégorie d'établissements × année) et valider
-la complétion DAS sur petit volume (1 000 scénarios longs, mode `quota_dp`).
+Charge config, sources, connexion et les fonctions d'étape SANS rien exécuter
+(`SCENARIOS_PMSI_ETAPES_SEULEMENT`). À ré-exécuter après tout Restart R.
 
-## 1.0 Session propre + profil
-
-À exécuter au début, et à ré-exécuter après tout Restart R (Session → Restart R conseillé
-avant chaque grosse étape : `source()` hérite des objets de la session, contrairement à
-`Rscript` qui part toujours de zéro).
-
-```{r profil_diagnostic}
+```{r session}
 rm(list = ls())
-Sys.setenv(SCENARIOS_PMSI_PROFIL = "diagnostic")
-# Optionnel si le projet n'est pas au chemin par défaut :
-# Sys.setenv(SCENARIOS_PMSI_PATH = "~/commun/scenarios_bn_pmsi/")
+Sys.setenv(SCENARIOS_PMSI_PROFIL = "diagnostic",          # ou "production"
+           SCENARIOS_PMSI_ETAPES_SEULEMENT = "1")
+# Sys.setenv(SCENARIOS_PMSI_PATH = "~/commun/scenarios_bn_pmsi/")   # si le projet n'est pas au chemin par défaut
+source("extraction_associations_codes_v8.R")   # connecte la base ; pour le tirage seul : source("tirage_scenarios_v8.R")
+etat_pipeline()
 ```
 
-## 1.1 Extraction instrumentée complète
-
-Toutes les années (17:AN_REF), CHR/U et CH. Le script imprime d'abord son **plan**
-(itérations à faire / sautées, refs à faire / sautées, années `prep_data` à préparer),
-puis une ligne d'apport par itération. C'est l'étape longue, et la première rencontre
-avec le dialecte SQL de la base de production (`ROW_NUMBER()` / `MAX() OVER`) : une
-erreur SQL arriverait dans les premières minutes — noter le message exact.
-
-```{r extraction_diagnostic}
-source("extraction_associations_codes_v8.R")
+```{r etat}
+etat_pipeline()   # réutilisable entre chaque étape
 ```
 
-**Critères de passage** : plan cohérent ; `results/partiels/` contient un parquet par
-(etbs, an) ; `results/exports_diagnostic/` contient les 10 refs (dont
-`distribution_e660.parquet`), `catalogue_longs_seuil.parquet` + son `_meta.yaml`,
-`diagnostic_apports.csv`, `recouvrement.csv`, `diagnostic_memoire.csv`,
-`rapport_extraction_v8_<date>.txt` (section conversion E669 : effectifs convertis, fusions,
-écart de volumétrie assumé par doctrine ; sections apports, recouvrement, mémoire).
-Partiels antérieurs au chantier mémoire : valides (équivalence de la nouvelle chaîne prouvée).
+---
 
-```{r verif_extraction_diagnostic}
-source("config_v8.R")   # recharge les chemins du profil courant (EXPORTS_DIR, ...)
-list.files(PARTIELS_DIR)
-list.files(EXPORTS_DIR)
+# Étape 1 — prep_data
+
+Résolution des besoins (partiels et refs manquants) puis tables temporaires `prep_data_<an>`
+des seules années nécessaires. À relancer à chaque nouvelle session d'extraction.
+
+```{r prep_data}
+etape_prep_data()          # ans = c(24, 25) pour forcer des années
+```
+
+# Étape 2 — séjours courts (AN_REF uniquement)
+
+```{r refs}
+etape_refs()               # forcer = TRUE après changement d'AN_REF, de SEUIL_REF_*, de CONVERSION_E669
+```
+
+```{r courts}
+Sys.setenv(SCENARIOS_PMSI_ETAPES_SEULEMENT = "1"); source("tirage_scenarios_v8.R")   # famille tirage (sans base)
+etape_tirage_courts()      # chunks courts + scenarios_courts_v8_<date>.parquet
+etat_pipeline()
+```
+
+# Étape 3 — séjours longs
+
+## 3.1 Partiels
+
+```{r partiels}
+etape_partiels_longs()     # iterations = data.frame(etbs = "CHR/U", an = 25) pour une itération isolée
+```
+
+Lecture des apports, du recouvrement et de la mémoire :
+
+```{r apports}
+apports <- read.csv(file.path(EXPORTS_DIR, "diagnostic_apports.csv")); apports
+plot(seq_len(nrow(apports)), cumsum(apports$nb_diag2_nouveaux), type = "b",
+     xlab = "itération (CHR/U 17..26 puis CH 17..26)", ylab = "diag2 nouveaux cumulés")
+recouvrement <- read.csv(file.path(EXPORTS_DIR, "recouvrement.csv")); recouvrement
+memoire <- read.csv(file.path(EXPORTS_DIR, "diagnostic_memoire.csv")); memoire[order(-memoire$pic_go), ][1:10, ]
+```
+
+## 3.2 DÉCISION de périmètre -> catalogue (sans base)
+
+Éditer `ans` et `etbs` d'après les apports et le recouvrement ; le méta du catalogue en garde
+la trace. Le rapport d'extraction mesure l'impact de la conversion E669.
+
+```{r catalogue}
+ANS_CHOISIES  <- 17:26                 # <- À ÉDITER (ex. 22:26)
+ETBS_CHOISIS  <- c("CHR/U", "CH")      # <- À ÉDITER (ex. "CHR/U")
+etape_catalogue(ans = ANS_CHOISIES, etbs = ETBS_CHOISIS)
 cat(readLines(list.files(EXPORTS_DIR, "^rapport_extraction", full.names = TRUE)[1]), sep = "\n")
 ```
 
-## 1.2 Lecture des apports et du recouvrement — décision de périmètre
+## 3.3 Sélection
 
-`nb_diag2_nouveaux` = couverture en DP nouveaux apportée par l'itération ;
-`nb_lignes_partiel` / `sum_n_partiel` = volume du partiel seul (plus de colonnes cumul).
-Chercher le coude : à partir de quelle année, et pour quelle catégorie d'établissements,
-l'apport devient marginal.
-
-```{r apports}
-apports <- read.csv(file.path(EXPORTS_DIR, "diagnostic_apports.csv"))
-apports
-plot(seq_len(nrow(apports)), cumsum(apports$nb_diag2_nouveaux), type = "b",
-     xlab = "itération (CHR/U 17..26 puis CH 17..26)", ylab = "diag2 nouveaux cumulés")
+```{r selection}
+etape_selection_longs()    # diagnostic : quota_dp, 1 000 ; production : catalogue_complet ; budget = 100000L pour un palier
 ```
 
-`recouvrement.csv` (paires `PAIRES_RECOUVREMENT` de la config, ex. CHR/U 24 → 25) : part des
-combinaisons et des séjours de l'année B déjà vus en A, pivots déjà vus, diag2 nouveaux,
-séjours uniques nouveaux — la mesure de déduplication qui fonde la décision de périmètre.
+## 3.4 Tirage DAS par chunks (reprise : relancer tel quel)
 
-```{r recouvrement}
-recouvrement <- read.csv(file.path(EXPORTS_DIR, "recouvrement.csv"))
-recouvrement
+```{r tirage_das}
+etape_tirage_das_longs()
 ```
 
-`diagnostic_memoire.csv` (calibration 15 GiB) : pic gc() après chaque morceau / partiel / ref /
-étage du catalogue. Une ligne `alerte = TRUE` (pic > `SEUIL_ALERTE_GO`) désigne l'étape à
-réduire. `COLLECT_PAR_MORCEAUX <- TRUE` (défaut) collecte le top-k par morceaux de cage ;
-`FALSE` = un seul collect, réservé aux petites itérations et aux tests.
+## 3.5 Habillage admin
 
-```{r memoire}
-memoire <- read.csv(file.path(EXPORTS_DIR, "diagnostic_memoire.csv"))
-memoire[order(-memoire$pic_go), ][1:10, ]
+```{r habillage}
+etape_habillage_longs()
 ```
 
-## 1.3 Tirage 1 000
+## 3.6 Fichiers définitifs, rapport, revue
 
-Ne touche jamais la base : lit uniquement les parquets d'`exports_diagnostic/`.
-
-```{r tirage_diagnostic}
-rm(list = setdiff(ls(), character(0)))
-Sys.setenv(SCENARIOS_PMSI_PROFIL = "diagnostic")
-source("tirage_scenarios_v8.R")
+```{r finalisation}
+etape_finalisation()
+etat_pipeline()
 ```
 
-**Critères de passage** (dans `rapport_v8_<date>.txt`) : « TOTAL anomalies = 0 »
-(doublons de catégorie, diabète hors flag, I10+hta_autres, ^E669 résiduels) ;
-distribution du nombre de DAS par classe d'âge conforme aux cibles de saturation ;
-taux « sans précision » noté (il dimensionnera le module de substitution aval).
-
-```{r verif_tirage_diagnostic}
-source("config_v8.R")
-cat(readLines(list.files(EXPORTS_DIR, "^rapport_v8", full.names = TRUE)[1]), sep = "\n")
-```
-
-## 1.4 Revue clinique — le critère non automatisable
-
-50 scénarios en libellés CIM (25 courts / 25 longs, répartis sur les CMD, graine
-marquée `[G]`). Validation DIM de la vraisemblance avant toute production ; si les
-complétions sonnent faux → ajuster (`CIBLES_NB_CHRONIQUES`, plancher d'unités) et
-rejouer 1.3.
+**Critères** : rapport « TOTAL anomalies = 0 » (dont ^E669 résiduels) ; distribution du nombre
+de DAS par classe d'âge conforme aux cibles ; revue humaine de `echantillon_revue.csv`.
 
 ```{r revue}
-revue <- read.csv(file.path(EXPORTS_DIR, "echantillon_revue.csv"))
-View(revue)
-top30 <- read.csv(file.path(EXPORTS_DIR, "top30_das_par_cmd.csv"))
-View(top30)
+revue <- read.csv(file.path(EXPORTS_DIR, "echantillon_revue.csv")); View(revue)
+top30 <- read.csv(file.path(EXPORTS_DIR, "top30_das_par_cmd.csv")); View(top30)
 ```
 
----
+## 3.7 Changement de budget / mode (geste destructeur, gardé)
 
-# Étape 2 — choix du périmètre de production
+Changer le budget change `NB_VARIANTES` : le garde-fou `meta_tirage.yaml` refuse de mélanger des
+chunks tirés sous d'autres paramètres. Vider chunks + sélection + méta avant de rejouer 3.3-3.6.
 
-D'après l'étape 1.2, **éditer le bloc `production` de `config_v8.R`** :
-`ANS_HISTORIQUE` (ex. `22:AN_REF`) et `TYPES_ETBS_LONGS` (ex. `"CHR/U"` seul).
-C'est une décision durable : elle se fixe dans la config, pas en surcharge.
-Ne pas toucher à `K_GRAINE_LONGS` sans vider `results/partiels/` (règles de cache).
-
----
-
-# Étape 3 — profil production
-
-## 3.1 Ré-agrégation depuis les partiels
-
-Si le diagnostic a tout extrait : « 0 itération à faire », le catalogue est ré-agrégé
-localement en quelques secondes ; seules les refs sont recalculées dans `exports/`
-(une passe `prep_data(AN_REF)`).
-
-```{r extraction_production}
-rm(list = ls())
-Sys.setenv(SCENARIOS_PMSI_PROFIL = "production")
-source("extraction_associations_codes_v8.R")
-```
-
-Alternative pour éviter le recalcul des refs — copie depuis le diagnostic, sûre
-**si et seulement si** `AN_REF`, `SEUIL_REF_DAS`, `SEUIL_REF_IMPRECIS`,
-`SEUIL_REF_PAIRES`, `CONVERSION_E669` et `BARE_E669_DEFAUT` sont identiques entre les
-deux profils (sinon `FORCER_REFS <- TRUE` et recalcul) :
-
-```{r copie_refs_optionnelle}
-src <- "results/exports_diagnostic"; dst <- "results/exports"
-a_copier <- list.files(src, "^(ref_|distribution_e660|pivots_courts|v_admin_|referentiel_)",
-                       full.names = TRUE)
-file.copy(a_copier, dst, overwrite = FALSE)
-```
-
-**Critère** : `exports/catalogue_longs_seuil_meta.yaml` porte `PROFIL: production`
-et le périmètre choisi.
-
-## 3.2 Tirage — palier 100 k
-
-Surcharge du budget sans éditer la config (le fichier de surcharge est évalué après
-le bloc profil) :
-
-```{r palier_100k}
-rm(list = ls())
-writeLines("BUDGET_TOTAL_LONGS <- 100000L", "palier.R")
-Sys.setenv(SCENARIOS_PMSI_PROFIL = "production",
-           SCENARIOS_PMSI_SURCHARGE = normalizePath("palier.R"))
-source("tirage_scenarios_v8.R")
-```
-
-**Critères** : rapport sans anomalie ; volumétrie = nrow × NB_VARIANTES annoncé ;
-noter le temps d'exécution — il s'extrapole linéairement au budget complet.
-
-## 3.3 Budget complet
-
-**Geste obligatoire avant** : changer le budget change `NB_VARIANTES` ; le garde-fou
-`meta_tirage.yaml` refuse (à juste titre) de mélanger des chunks tirés sous d'autres
-paramètres. Il faut donc vider chunks + sélection + méta du tirage — geste destructeur,
-gardé derrière une confirmation :
-
-```{r vider_chunks_production}
+```{r vider_chunks}
 JE_CONFIRME <- FALSE   # passer à TRUE en connaissance de cause
 if (JE_CONFIRME) {
-  unlink("results/exports/chunks", recursive = TRUE)
-  unlink(c("results/exports/selection_longs.parquet",
-           "results/exports/selection_longs_effectifs.csv",
-           "results/exports/meta_tirage.yaml"))
+  unlink(CHUNKS_DIR, recursive = TRUE)
+  unlink(file.path(EXPORTS_DIR, c("selection_longs.parquet", "selection_longs_effectifs.csv", "meta_tirage.yaml")))
 } else cat("Rien fait : passer JE_CONFIRME à TRUE d'abord.\n")
 ```
-
-```{r budget_complet}
-rm(list = ls())
-Sys.setenv(SCENARIOS_PMSI_PROFIL = "production", SCENARIOS_PMSI_SURCHARGE = "")
-source("tirage_scenarios_v8.R")   # BUDGET_TOTAL_LONGS de la config : 10 000 000
-```
-
-Le livrable est `exports/scenarios_longs_tirage_v8_<date>.parquet`
-(+ `scenarios_courts_v8_<date>.parquet`). En cas de plantage en cours de route :
-relancer le chunk tel quel, les chunks de tirage déjà écrits sont sautés,
-identité bit à bit garantie par le seed par chunk.
 
 ---
 
 # Règles de cache (mémo)
 
 - `results/partiels/` : partagé entre profils ; dépend de `K_GRAINE_LONGS`, `NBDA_MAX`,
-  `DUREE_LONGS`, `PIVOTS_LONGS` et de la logique amont — clés bloquantes de
-  `partiels_meta.yaml` ; **pas** de `SEUIL_PIVOT` ni du périmètre d'années. À vider
-  après tout changement de ces clés ou de `prep_data`/`prep_scenarios2`.
-- Conversion E669 : partiels stockés **bruts**, conversion à la ré-agrégation ;
-  basculer `CONVERSION_E669` ⇒ `FORCER_REFS` + vider chunks/sélection/méta du tirage,
-  mais PAS les partiels.
-- Refs (`exports*/`) : sautées si le parquet existe ; `FORCER_REFS <- TRUE` une fois
-  après changement d'`AN_REF` ou correction amont.
-- Chunks/sélection/`meta_tirage.yaml` : à vider après changement de `MODE_SELECTION`,
-  `BUDGET_TOTAL_LONGS`, `QUOTA_MIN_PAR_UNITE`, `CHUNK_SIZE`, `SEED` ou du catalogue.
-- Sessions multiples : les tables temporaires disparaissent à la déconnexion ; la
-  résolution des besoins recrée à la demande. Ne jamais persister de table en base
-  (`prep_topk_tmp` : table temporaire unique du top-k, écrasée à chaque itération).
-- Partiels antérieurs au chantier mémoire : valides et mélangeables (équivalence de la
-  nouvelle chaîne `prep_scenarios2` prouvée par `tests/test_chaines_sqlite.R`).
+  `DUREE_LONGS`, `PIVOTS_LONGS` et de la logique amont (clés bloquantes de `partiels_meta.yaml`) ;
+  **pas** de `SEUIL_PIVOT`, du périmètre d'années ni de `CONVERSION_E669`. Partiels antérieurs
+  au chantier mémoire : valides.
+- Refs : sautées si le parquet existe ; `etape_refs(forcer = TRUE)` après changement d'`AN_REF`,
+  d'un `SEUIL_REF_*`, de `CONVERSION_E669` ou correction amont.
+- Chunks / sélection / `meta_tirage.yaml` : reprise telle quelle ; à vider après changement de
+  `MODE_SELECTION`, `BUDGET_TOTAL_LONGS`, `QUOTA_MIN_PAR_UNITE`, `CHUNK_SIZE`, `SEED` ou du catalogue.
+- Sessions multiples : les tables temporaires disparaissent à la déconnexion ;
+  `etape_prep_data()` recrée à la demande. Ne jamais persister de table en base.
 
 # Tests hors base
 

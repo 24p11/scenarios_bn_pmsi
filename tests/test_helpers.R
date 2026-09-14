@@ -486,9 +486,13 @@ ok("chemin (b) avec filtre de clés == référence filtrée", identical(as.data.
 r_piv <- agreger_partiels(fp, c("sexe", "diag2"), "n", chemin = "incremental")
 ok("chemin (b) niveau pivots : sommes exactes", r_piv$n[r_piv$sexe == "1" & r_piv$diag2 == "J449"] == 6 && r_piv$n[r_piv$diag2 == "E6690"] == 18)
 if(!ARROW_MOCK){
-  r_arw <- agreger_partiels(fp, c("mode_hospit", "sexe", "cage", "diag2", "nbda", "diagnostic_associes"), "n", chemin = "arrow")
-  ok("chemin (a) arrow::open_dataset == chemin (b)", identical(as.data.frame(r_arw), as.data.frame(r_inc)))
-  ok("chemin (a) avec filtre == chemin (b) avec filtre", identical(as.data.frame(agreger_partiels(fp, c("mode_hospit", "sexe", "cage", "diag2", "nbda", "diagnostic_associes"), "n", filtre_cles = cles, chemin = "arrow")), as.data.frame(r_inc_f)))
+  sans_repli <- function(expr){ w <- NULL; v <- withCallingHandlers(expr, warning = function(x){ w <<- conditionMessage(x); invokeRestart("muffleWarning") }); list(v = v, repli = !is.null(w) && grepl("repli", w)) }
+  ra <- sans_repli(agreger_partiels(fp, c("mode_hospit", "sexe", "cage", "diag2", "nbda", "diagnostic_associes"), "n", chemin = "arrow"))
+  ok("chemin (a) arrow::open_dataset == chemin (b), SANS repli", !ra$repli && identical(as.data.frame(ra$v), as.data.frame(r_inc)))
+  raf <- sans_repli(agreger_partiels(fp, c("mode_hospit", "sexe", "cage", "diag2", "nbda", "diagnostic_associes"), "n", filtre_cles = cles, chemin = "arrow"))
+  ok("chemin (a) avec filtre == chemin (b) avec filtre, SANS repli", !raf$repli && identical(as.data.frame(raf$v), as.data.frame(r_inc_f)))
+  rap <- sans_repli(agreger_partiels(fp, c("sexe", "diag2"), "n", chemin = "arrow"))
+  ok("chemin (a) niveau pivots == chemin (b), SANS repli", !rap$repli && identical(as.data.frame(rap$v), as.data.frame(r_piv)))
   ok("sélection auto = arrow quand disponible", arrow_dataset_disponible())
 } else ok("mock arrow : sélection auto = incrémental", !arrow_dataset_disponible())
 ok("filtre sans correspondance -> 0 ligne, schéma conservé", { z <- agreger_partiels(fp, c("sexe", "diag2"), "n", filtre_cles = tibble::tibble(diag2 = "ZZZ"), chemin = "incremental"); nrow(z) == 0 && identical(names(z), c("sexe", "diag2", "n")) })
