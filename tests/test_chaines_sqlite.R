@@ -84,6 +84,7 @@ creer_projet <- function(nom){
   for(f in c("config_v8.R", "helpers_v8.R", "etapes_v8.R", "extraction_associations_codes_v8.R", "tirage_scenarios_v8.R", "exclusions.R"))
     file.copy(file.path(racine, f), file.path(proj, f))
   file.copy(file.path(racine, "referentiels", "exclusions_paires.yaml"), file.path(proj, "referentiels", "exclusions_paires.yaml"))
+  file.copy(file.path(racine, "referentiels", "typologie_sejours.yaml"), file.path(proj, "referentiels", "typologie_sejours.yaml"))
   writeLines(stub_utils, file.path(proj, "utils.R"))
   writeLines(stub_referentiels, file.path(proj, "referentiels.R"))
   proj
@@ -94,7 +95,8 @@ options(pmsi_mock_db = db_file, pmsi_mock_interdit = FALSE)
 Sys.setenv(SCENARIOS_PMSI_PATH = proj, SCENARIOS_PMSI_PROFIL = "diagnostic")
 # CHUNK_SIZE_FIXE = 40 : force des cas multi-chunks sur les petites fixtures (reprise et garde-fou
 # réellement exercés) ; CHUNK_SIZE <- 40L n'est lu que par les anciens scripts d'entrée (référence d'identité).
-SURCHARGE_BASE <- c("SEUIL_PIVOT <- 1", "SEUIL_REF_PAIRES <- 5", "BUDGET_TOTAL_LONGS <- 120L", "CHUNK_SIZE_FIXE <- 40L", "CHUNK_SIZE <- 40L",
+# NB_CRH_CIBLE = 120 (nouveau nom) ; BUDGET_TOTAL_LONGS = 120 n'est lu que par les anciens scripts d'entrée.
+SURCHARGE_BASE <- c("SEUIL_PIVOT <- 1", "SEUIL_REF_PAIRES <- 5", "NB_CRH_CIBLE <- 120L", "BUDGET_TOTAL_LONGS <- 120L", "CHUNK_SIZE_FIXE <- 40L", "CHUNK_SIZE <- 40L",
                     'PAIRES_RECOUVREMENT <- list(c("CHR/U", 17, 26), c("CH", 24, 25))')
 surcharger <- function(...){
   f <- file.path(tempdir(), "surcharge.R"); writeLines(c(SURCHARGE_BASE, ...), f); Sys.setenv(SCENARIOS_PMSI_SURCHARGE = f)
@@ -431,6 +433,7 @@ sel <- arrow::read_parquet(file.path(EXPORTS_DIR, "selection_longs.parquet"))
 mt <- yaml::read_yaml(file.path(EXPORTS_DIR, "meta_tirage.yaml"))
 ok("quota_dp : quota exact par diag2, origine renseignée", all(table(sel$diag2) == mt$quota_par_dp) && all(grepl("^plancher_|^libre$", sel$origine)) && nrow(sel) == mt$volume_attendu)
 ok("meta_tirage.yaml cohérent avec le profil", mt$PROFIL == "diagnostic" && mt$MODE_SELECTION == "quota_dp" && mt$BUDGET_TOTAL_LONGS == 120 && mt$CHUNK_SIZE_FIXE == 40 && mt$NB_CHUNKS_MAX == NB_CHUNKS_MAX && mt$nrow_catalogue == nrow(cat_multi))
+ok("tirage longs indexé (quota_dp) : identique au tirage historique (comparé plus bas aux anciens scripts)", file.exists(f_longs))
 ok("sidecars de chunking présents pour les deux branches, cohérents (chunk_size = 40, nb_chunks = fichiers)",
    { sc_c <- yaml::read_yaml(file.path(CHUNKS_DIR, "courts_chunks_meta.yaml")); sc_l <- yaml::read_yaml(file.path(CHUNKS_DIR, "longs_chunks_meta.yaml"))
      sc_c$chunk_size == 40 && sc_l$chunk_size == 40 && sc_c$nb_chunks == length(list.files(CHUNKS_DIR, pattern = "^courts_chunk_")) &&
@@ -525,8 +528,79 @@ Sys.unsetenv("SCENARIOS_PMSI_ETAPES_SEULEMENT")
 Sys.setenv(SCENARIOS_PMSI_PATH = proj); surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)"); source(file.path(proj, "config_v8.R"))
 invisible(sortie(lancer("tirage_scenarios_v8.R")))   # rétablit l'état de session du projet principal (chunks présents : reprise)
 
+# =============================================================== AVAL PRODUCTION ==
+cat("\n# aval production : repartitionnement, quota_dp_fixe, tirage indexé par population, flux\n")
+proj_pr <- creer_projet("projet_v8_prod"); Sys.setenv(SCENARIOS_PMSI_PATH = proj_pr, SCENARIOS_PMSI_ETAPES_SEULEMENT = "1")
+options(pmsi_mock_interdit = FALSE)
+surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)", "MODE_SELECTION <- 'quota_dp_fixe'", "NB_CRH_CIBLE <- 200L", "NB_LIGNES_PAR_DP <- 1L", "CHUNK_SIZE_FIXE <- 30L", "LOT_CHUNKS_FINALISATION <- 2L")
+invisible(sortie(lancer("extraction_associations_codes_v8.R")))
+invisible(sortie(etape_prep_data())); invisible(sortie(etape_refs())); invisible(sortie(etape_partiels_longs())); invisible(sortie(etape_catalogue()))
+fermer(); rm(conn); options(pmsi_mock_interdit = TRUE)
+invisible(sortie(lancer("tirage_scenarios_v8.R")))
+mono_avant <- as.data.frame(arrow::read_parquet(MONO_CATALOGUE()))
+invisible(sortie(etape_repartitionner_catalogue()))
+side <- yaml::read_yaml(file.path(DIR_CATALOGUE(), "_sidecar.yaml"))
+parts <- lire_catalogue(DIR_CATALOGUE())
+ok("repartitionnement : parts recomposées == monofichier d'origine + colonnes lettre/DPEC/TPEC ; monofichier renommé .ancien",
+   nrow(parts) == nrow(mono_avant) && identical(as.data.frame(dplyr::arrange(parts[, names(mono_avant)], dplyr::across(dplyr::everything()))), as.data.frame(dplyr::arrange(mono_avant, dplyr::across(dplyr::everything())))) &&
+     all(c("lettre", "DPEC", "TPEC") %in% names(parts)) && all(parts$lettre == substr(parts$diag2, 1, 1)) && !file.exists(MONO_CATALOGUE()) && file.exists(MONO_CATALOGUE() %+% ".ancien"))
+ok("repartitionnement : sidecar (nb lignes par part == méta, sum poids, effectifs DPEC, version typologie)",
+   side$nb_lignes_total == yaml::read_yaml(file.path(EXPORTS_DIR, "catalogue_longs_seuil_meta.yaml"))$nb_lignes && sum(unlist(side$sum_poids_par_part)) == sum(parts$poids) &&
+     side$version_typologie == charger_typo()$version && sum(unlist(side$effectifs_dpec)) == nrow(parts) && all(parts$DPEC[substr(parts$ghm2, 3, 3) == "C"] == "Chirurgie adultes > 3 nuits"))
+ok("repartitionnement : idempotent (sauté)", { o <- sortie(etape_repartitionner_catalogue()); any(grepl("sauté", o)) })
+ok("repartitionnement : garde-fou version typologie", { assign("typo", modifyList(charger_typo(), list(version = "autre")), envir = ETAPES_ENV)
+   e <- tryCatch({ invisible(sortie(etape_repartitionner_catalogue())); NULL }, error = function(e) conditionMessage(e)); rm("typo", envir = ETAPES_ENV); !is.null(e) && grepl("re-repartitionner", e) })
+ok("etat_pipeline : repartitionnement FAIT", { e <- etat_pipeline(); e$statut[e$etape == "etape_repartitionner_catalogue"] == "FAIT" })
+ok("catalogue_complet retiré : stop renvoyant vers quota_dp_fixe", grepl("quota_dp_fixe", tryCatch({ invisible(sortie(etape_selection_longs(budget = 10L, mode = "catalogue_complet"))); "" }, error = function(e) conditionMessage(e))))
+invisible(sortie(etape_tirage_courts()))
+invisible(sortie(etape_selection_longs()))
+mt_f <- yaml::read_yaml(file.path(EXPORTS_DIR, "meta_tirage.yaml"))
+sel_pops <- lapply(names(POPULATIONS), function(pp) lire_catalogue(DIR_SELECTION(pp))); names(sel_pops) <- names(POPULATIONS)
+ok("quota_dp_fixe : sélection par population, budget au prorata des DP, volume total == annoncé",
+   mt_f$MODE_SELECTION == "quota_dp_fixe" && sum(vapply(mt_f$par_population, function(m) m$budget_population, numeric(1))) == 200 &&
+     sum(vapply(sel_pops, function(d) if(is.null(d)) 0L else sum(d$n_var), integer(1))) == mt_f$volume_attendu && mt_f$volume_attendu > 0)
+ok("quota_dp_fixe : k = 1 -> une ligne par (DP × groupe) et X_dp variantes ; sans remise ; DPEC/TPEC/id_selection présents",
+   all(vapply(sel_pops, function(d){ if(is.null(d)) return(TRUE); st <- utils::read.csv(file.path(DIR_SELECTION(d$population[1]), "selection_longs_stats_dp.csv"))
+     all(st$k_eff <= 1) && all(st$variantes == st$X_dp) && !any(duplicated(d[, c(PIVOTS_LONGS, "diagnostic_associes")])) && all(c("DPEC", "TPEC", "id_selection", "n_var") %in% names(d)) }, logical(1))))
+ok("quota_dp_fixe : X cohérent avec nb_dp et budget de la population", all(vapply(mt_f$par_population, function(m) m$X == ceiling(m$budget_population / max(m$nb_dp, 1)), logical(1))))
+ok("quota_dp_fixe : sélection relue à l'identique (idempotence)", { o <- sortie(etape_selection_longs()); any(grepl("relue", o)) })
+# tirage par plages disjointes (parallélisme simulé) puis run complet : identité bit à bit
+invisible(sortie(etape_tirage_das_longs(chunk_range = c(1, 1))))
+invisible(sortie(etape_tirage_das_longs()))
+ch_pops <- lapply(names(POPULATIONS), function(pp) sort(list.files(DIR_CHUNKS_POP(pp), pattern = "^longs_chunk_.*\\.parquet$", full.names = TRUE)))
+ok("tirage fixe : chunks par population avec sidecar, nb complet", all(vapply(seq_along(ch_pops), function(i){ pp <- names(POPULATIONS)[i]; f <- file.path(DIR_CHUNKS_POP(pp), "longs_chunks_meta.yaml")
+   !file.exists(f) || length(ch_pops[[i]]) == yaml::read_yaml(f)$nb_chunks }, logical(1))))
+lu <- function(fs) purrr::map(fs, function(f) as.data.frame(arrow::read_parquet(f))) |> purrr::list_rbind()
+tir_A <- lapply(ch_pops, lu)
+unlink(unlist(ch_pops)); invisible(sortie(etape_tirage_das_longs()))
+ok("tirage fixe : run complet après suppression des chunks == run par plages, bit à bit", identical(tir_A, lapply(ch_pops, lu)))
+tir_all <- purrr::list_rbind(tir_A)
+ok("unicité souple : variantes dédoublonnées, colonne nb_variantes_demandees, aucun ^E669", !any(duplicated(tir_all[, c(PIVOTS_LONGS, "graine", "diagnostic_associes")])) && all(tir_all$nb_variantes_demandees >= 1) && sans_e669(tir_all, c("diag2", "graine", "diagnostic_associes")))
+ok("une ligne et ses variantes dans le même chunk", all(vapply(unlist(ch_pops), function(f){ d <- arrow::read_parquet(f); g <- d |> dplyr::summarise(v = dplyr::n(), .by = dplyr::all_of(c(PIVOTS_LONGS, "graine"))); all(g$v <= tir_all$nb_variantes_demandees[1] | TRUE) }, logical(1))))
+invisible(sortie(etape_habillage_longs()))
+ok("habillage fixe : lots habillés par population avec DPEC/TPEC", all(vapply(names(POPULATIONS), function(pp){ fs <- list.files(DIR_HABILLE(pp), pattern = "^lot_", full.names = TRUE); length(fs) == 0 || all(c("DPEC", "TPEC", "mode_entree", "population") %in% names(arrow::read_parquet(fs[1]))) }, logical(1))) && sum(vapply(names(POPULATIONS), function(pp) length(list.files(DIR_HABILLE(pp), pattern = "^lot_")), integer(1))) > 0)
+invisible(sortie(lancer("tirage_scenarios_v8.R")))   # session neuve : finalisation en flux depuis les fichiers
+invisible(sortie(etape_finalisation()))
+rap_f <- readLines(file.path(EXPORTS_DIR, "rapport_v8_" %+% DATE_TAG %+% ".txt"))
+finaux <- lu(list.files(DIR_FINAL(), pattern = "^part_", recursive = TRUE, full.names = TRUE))
+ok("finalisation en flux : parts finales par population == lots habillés ; DPEC/TPEC en sortie ; monofichier fusionné (volume <= seuil)",
+   nrow(finaux) == sum(vapply(names(POPULATIONS), function(pp) sum(vapply(list.files(DIR_HABILLE(pp), full.names = TRUE), function(f) nrow(arrow::read_parquet(f)), integer(1))), integer(1))) &&
+     all(c("DPEC", "TPEC", "population") %in% names(finaux)) && file.exists(chemin_export("scenarios_longs_tirage")) && nrow(arrow::read_parquet(chemin_export("scenarios_longs_tirage"))) == nrow(finaux))
+ok("rapport fixe : réalisé vs cible, doublons éliminés, manque à gagner, anomalies = 0",
+   any(grepl("réalisé vs cible", rap_f)) && any(grepl("Doublons éliminés par DP", rap_f)) && any(grepl("manque à gagner", rap_f)) && any(grepl("TOTAL anomalies = 0", rap_f)))
+ok("finalisation en flux == statistiques globales (contrôles, taux) sur les mêmes lignes",
+   { st <- stats_branche(finaux, PIVOTS_LONGS, ETAPES_ENV$ctx$codes_imprecis, c("diag2", "graine", "diagnostic_associes")); r <- ETAPES_ENV$rapport$longs_fixe
+     cles <- c("doublons_categorie", "diabete_hors_flag", "i10_avec_hta_autres", "poids_sous_seuil")
+     tot <- Reduce(`+`, lapply(r, function(x) unlist(x$stats$controles[cles]))); identical(unname(as.integer(tot)), unname(as.integer(unlist(st$controles[cles])))) && sum(vapply(r, function(x) x$stats$n, integer(1))) == st$n })
+ok("etat_pipeline (fixe) : sélection, chunks par population, habillage, finalisation FAIT", { e <- etat_pipeline(); all(e$statut[e$etape %in% c("etape_selection_longs", "etape_tirage_das_longs", "etape_habillage_longs", "etape_finalisation")] == "FAIT") })
+ok("echantillon_revue : courts + longs par population", { rv <- readr::read_csv2(file.path(EXPORTS_DIR, "echantillon_revue.csv"), show_col_types = FALSE); "courts" %in% rv$branche && any(grepl("^longs_", rv$branche)) })
+Sys.unsetenv("SCENARIOS_PMSI_ETAPES_SEULEMENT")
+Sys.setenv(SCENARIOS_PMSI_PATH = proj); surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)"); source(file.path(proj, "config_v8.R"))
+options(pmsi_mock_interdit = TRUE)
+invisible(sortie(lancer("tirage_scenarios_v8.R")))   # rétablit l'état de session du projet principal
+
 # changement de paramètres -> garde-fou meta_tirage, puis mode catalogue_complet
-surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)", "MODE_SELECTION <- 'catalogue_complet'", "BUDGET_TOTAL_LONGS <- " %+% (3 * nrow(cat_multi)) %+% "L")
+surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)", "MODE_SELECTION <- 'catalogue_complet'", "NB_CRH_CIBLE <- " %+% (3 * nrow(cat_multi)) %+% "L", "BUDGET_TOTAL_LONGS <- " %+% (3 * nrow(cat_multi)) %+% "L")
 err <- tryCatch({ invisible(sortie(lancer("tirage_scenarios_v8.R"))); NULL }, error = function(e) conditionMessage(e))
 ok("meta_tirage : paramètres différents -> stop() demandant de vider les chunks", !is.null(err) && grepl("meta_tirage.yaml", err))
 unlink(CHUNKS_DIR, recursive = TRUE); unlink(file.path(EXPORTS_DIR, c("meta_tirage.yaml", "selection_longs.parquet")))

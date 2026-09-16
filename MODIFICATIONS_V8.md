@@ -204,9 +204,9 @@ Tous dans les **helpers purs** (§0.3 : « là où tu peux écrire du code neuf 
 
 - `referentiels.R` : B11 ; `comp_sat_diab <- codes_comp_sat_diab` ; `neo_codes_diabete` (§5.10). Rien d'autre.
 - `referentiels/exclusions_paires.yaml` : créé (§6.4), 4 paires évidentes, structure `- [A, B]`.
-- `tests/test_helpers.R` : §8.1 + briefs industrialisation §8, conversion §7, mémoire, orchestration et chunking dynamique, 220 assertions (`stopifnot`, sans testthat). Source `config_v8.R` puis `helpers_v8.R`. Repli arrow par paquet mock (section 11).
+- `tests/test_helpers.R` : §8.1 + briefs industrialisation §8, conversion §7, mémoire, orchestration, chunking dynamique et aval production, 269 assertions (`stopifnot`, sans testthat). Source `config_v8.R` puis `helpers_v8.R`. Repli arrow par paquet mock (section 11).
 - `tests/test_chaines_sqlite.R` : les **scripts réels** (extraction puis tirage) sur SQLite **fichier**
-  avec un faux paquet `pRatihque` (mock interdit pendant le tirage), 97 assertions : chaînes dbplyr
+  avec un faux paquet `pRatihque` (mock interdit pendant le tirage), 118 assertions : chaînes dbplyr
   (§5.9a, B1-10, refs, §7.5/§7.6), sessions multiples et résolution des besoins, cache des partiels,
   reprise, FORCER_REFS, garde-fou `partiels_meta`, tirage sans base, reprise des chunks, identité
   parquet, livrables, mode `catalogue_complet`. Ne valide PAS le dialecte ni les colonnes réelles.
@@ -266,8 +266,8 @@ Tous dans les **helpers purs** (§0.3 : « là où tu peux écrire du code neuf 
 ```
 Rscript -e 'parse("extraction_associations_codes_v8.R")'        # syntaxe OK
 Rscript -e 'for(f in c("config_v8.R","helpers_v8.R","extraction_associations_codes_v8.R","tirage_scenarios_v8.R")) parse(f)'
-Rscript tests/test_helpers.R                                     # 220 assertions vertes (217 sans arrow : chemin (a) non testé)
-R_LIBS_TEST=<lib avec dbplyr/DBI/RSQLite[/arrow]> Rscript tests/test_chaines_sqlite.R   # 97 assertions vertes (avec ou sans arrow)
+Rscript tests/test_helpers.R                                     # 269 assertions vertes (266 sans arrow : chemin (a) non testé)
+R_LIBS_TEST=<lib avec dbplyr/DBI/RSQLite[/arrow]> Rscript tests/test_chaines_sqlite.R   # 118 assertions vertes (avec ou sans arrow)
 grep -n 'filter_chap\|sexe_ ==sexe_\|v2025\|slice(1:2)\|<<-\|distinct(.*\.keep_all' config_v8.R helpers_v8.R extraction_associations_codes_v8.R tirage_scenarios_v8.R
 grep -c 'pRatihque::' tirage_scenarios_v8.R                       # 0 attendu
 #  -> uniquement des commentaires, plus l'unique distinct(.keep_all) HTA commenté « déterministe » (B1 #5)
@@ -780,3 +780,107 @@ avec les anciens scripts conservée (`CHUNK_SIZE <- 40L` ajouté à la surcharge
   sans chunk présent, il est simplement réécrit au run suivant (pas de garde-fou déclenché).
 - **Q31 — `CHUNK_SIZE_MIN = 500` en diagnostic** : les courts (~78 000 pivots) donnent 50 chunks
   de ~1 560 ; le tirage longs de 1 000 lignes donne 2 chunks de 500 (au lieu de 5 de 200).
+
+---
+
+## 16. Chantier « aval production »
+
+Contexte : le catalogue longs de production existe (21 607 117 lignes, `catalogue_longs_seuil.parquet`,
+produit en dépassement RAM toléré) et ne doit **jamais** être reconstruit sur ce périmètre. Goulots
+aval : RAM de tout ce qui lit le catalogue, temps du tirage. Production par campagnes itératives ;
+`NB_CRH_CIBLE` est un ordre de grandeur. Doctrine : représentativité des DIAGNOSTICS (DP) avant celle
+des situations cliniques, la diversité des contextes se reconstituant ENTRE les campagnes. Aucune
+chaîne base concernée : tout est post-parquets (helpers section E, étapes, config, doc).
+
+### 16.1 Typologie DPEC / TPEC
+- `referentiels/typologie_sejours.yaml` (version `2026-09-16-b`) : listes et libellés DPEC / TPEC recopiés
+  TELS QUELS du code STREAM `with_typologie` (fourni après la première livraison ; la version `-a`,
+  incomplète, est remplacée), y compris le chevauchement BB_MED / BB_CHIR sur 15M10/11/13/14
+  (inoffensif : l'ordre prime) et le commentaire « critère à confirmer (CMD 22) ». `typologie_sejour()`
+  (helpers) est une traduction fidèle de l'ordre des `.when()` ; `racine` = substr(ghm2, 1, 5) (identique à la
+  colonne de prep_data) ; `col_age` accepte l'âge numérique (`agean >= 18`) ou la classe `ge_18`/`lt_18`
+  (pivot age des longs) ; `duree_defaut = 3` pour les longs (périmètre 3-100 : classes < 3 nuits / HDJ /
+  séances inaccessibles, attendu) ; les courts seront typés avec leur vraie durée. Vérifications contre le
+  STREAM : un cas par classe, précédences (15M10, 14Z13T, 14Z13A, 14Z10 IMG_FC avant ACC_PATHO, Z511 âge 15,
+  CMD 28 avant M/Z), défaut TPEC « Autre ».
+### 16.2 Repartitionnement one-shot du catalogue
+`etape_repartitionner_catalogue()` : lecture par morceaux de lettres (jamais tout en RAM), ajout de
+`lettre`, `DPEC`, `TPEC`, écriture `EXPORTS_DIR/catalogue_longs_seuil/part_<L>.parquet` + `_sidecar.yaml`
+(nb lignes par part, sum(poids), effectifs DPEC, version de typologie, date, provenance), vérification
+nb_lignes == méta, monofichier renommé `.ancien` (jamais supprimé). Idempotente ; version de typologie
+différente du sidecar → stop proposant de re-repartitionner. Lecteur unique `lire_catalogue(lettres,
+colonnes)` (dataset arrow filtré ; mock : rbind des parts ; monofichier : message de dépréciation, schéma
+inchangé) ; `lettres_catalogue()`. Toutes les lectures (sélection, tirage, `etat_pipeline`) passent par lui.
+### 16.3 Sélection `quota_dp_fixe` (production) — `catalogue_complet` retiré
+Config : `NB_CRH_CIBLE` (remplace `BUDGET_TOTAL_LONGS`, alias de compatibilité conservé pour les anciens
+scripts / surcharges), `NB_LIGNES_PAR_DP = 1`, `POPULATIONS` (partition exacte des cages, vérifiée),
+`PLAFONDS_DPEC`, `MODE_SELECTION = "quota_dp_fixe"` en production (`quota_dp` conservé pour le diagnostic).
+Politique, par population (budget au prorata du nb de DP, `repartir_budget_populations`) : X =
+ceiling(budget_pop / nb_dp) ; par DP, plafond par (DP × DPEC plafonné) — X_dp = min(X, plafond), le reste
+du DP suit X ; k lignes DISTINCTES au poids sans remise (`choisir_lignes_dp`) ; n_var = ceiling(X_dp / k)
+variantes par ligne, dernière tronquée pour totaliser X_dp (`variantes_par_ligne`) ; planchers par type
+d'unité seulement si k >= nb de types (sinon désactivés, comptés au méta / rapport). Exécution lettre par
+lettre (pic RAM = une lettre), seed stable `SEED + 7e6 + 1e4 × index(population) + utf8ToInt(lettre)`.
+Sorties `selection_longs/<population>/part_<L>.parquet`, `selection_longs_effectifs.csv`,
+`selection_longs_stats_dp.csv`, `meta_tirage.yaml` par population + global (garde-fou sur MODE, NB_CRH_CIBLE,
+k, chunking, SEED, version typologie). Manque à gagner (sélection) = Σ max(0, X_dp − lignes disponibles)
+(slots servis par des variantes de lignes déjà utilisées : risque de doublons) ; 30 DP les plus pauvres au
+rapport. `catalogue_complet` : stop() si budget < nb lignes du catalogue, renvoyant vers quota_dp_fixe.
+### 16.4 Tirage : index, unicité souple, plages, atomicité, populations
+- `indexer_ref_das` (split par la clé exacte du filtre de `sample_das_long`) construit une fois à l'entrée
+  d'`etape_tirage_das_longs` ; `sample_das_long` accepte l'index (accès direct) ; identité avec le filtre
+  prouvée sous seed. Idem `indexer_ref_chronique` / `candidats_chroniques` pour les courts (identité prouvée ;
+  non branché dans `etape_tirage_courts`, Q34). Débit imprimé par chunk.
+- Unicité souple : `sample_das_long(dedoublonner = TRUE)` — les n_var variantes d'une ligne sont tirées
+  groupées puis dédoublonnées sur le jeu complet de DAS (ordre indifférent), AUCUN re-tirage, colonne
+  `nb_variantes_demandees` ; doublons éliminés chiffrés par DP au rapport ; le réalisé peut être < cible.
+- `pmap_chunks(chunk_range = c(i, j), assembler)` : plages disjointes pour des sessions parallèles sur le
+  même dossier (sidecar partagé, vérifié, pas réécrit s'il concorde) ; écriture atomique `.tmp` +
+  `file.rename` (un `.tmp` orphelin est ignoré et recalculé) ; le découpage est par LIGNES de sélection,
+  une ligne et ses variantes vivent dans le même chunk. Mode fixe : chunks par population
+  (`chunks/<population>/`, seed `SEED + 1e5 + 1e4 × index(population)`), rien d'assemblé en RAM.
+- `etape_habillage_longs` (fixe) : relecture des chunks par lots (`lire_chunks_par_lots`,
+  `LOT_CHUNKS_FINALISATION`), jointure `v_admin_longs.parquet`, slice_sample par lot (seed dérivé), DPEC/TPEC
+  recalculés (duree = 3, comme le catalogue), lots `habille/<population>/`. Complétude des chunks exigée.
+- `etape_finalisation` (fixe) : relecture des lots en flux, contrôles §8.2 et statistiques agrégés par lot
+  (`acc_stats_*`, égalité avec les statistiques globales prouvée), export
+  `scenarios_longs_tirage_v8_<date>/<population>/part_*.parquet` + monofichier fusionné si volume ≤
+  `SEUIL_EXPORT_MONOFICHIER` ou `fusionner = TRUE` ; rapport : réalisé vs cible par population, lignes
+  plafonnées par DPEC, 30 DP au plus fort manque à gagner, doublons éliminés par DP ; DPEC/TPEC jusqu'aux
+  sorties finales. Modes historiques (quota_dp, catalogue_complet autorisé) : flux inchangé.
+### 16.4b Notebook dédié
+`RUN_aval.Rmd` : notebook de la phase aval (session sans base, paramètres effectifs, repartitionnement,
+sélection, palier 100 k avec extrapolation du débit, campagne parallèle par plages, habillage, finalisation,
+lecture du corpus en flux, mémo de cache) ; `RUN.Rmd` reste le notebook de l'amont et le référence.
+
+### 16.5 Hygiène mémoire
+`memoire_session()` (objets par taille dans globalenv / ETAPES_ENV / CACHE_E669, puis gc()) ; discipline
+« Restart R avant chaque étape lourde » dans RUN.md / RUN.Rmd.
+### 16.6 Tests
+test_helpers.R : typologie (un cas par classe, ordres 15M10 / 14Z13T / 14Z13A / Z511 âge 15 / CMD 28 avant
+M-Z, défaut TPEC, classe d'âge + durée constante), `lire_catalogue` (parts, colonnes, monofichier déprécié,
+dataset arrow si réel), sélection (partition, prorata, `variantes_par_ligne`, k = 1, plafond 14Z13A vs
+14Z13B, sans remise, planchers désactivés, manque à gagner, k = 3 avec planchers actifs, DP pauvre,
+déterminisme, seeds), `dedoublonner_variantes`, index (long et court : identité), unicité souple (strate
+riche / pauvre, déterminisme), `pmap_chunks` (variantes dans le même chunk, plages disjointes == complet,
+assemblage refusé si chunk manquant, sidecar partagé, atomicité), `lire_chunks_par_lots`, `acc_stats`,
+`memoire_session`. test_chaines_sqlite.R : projet de production (quota_dp_fixe, `CHUNK_SIZE_FIXE` petit,
+lots de 2) : repartitionnement (recomposition == monofichier + colonnes, sidecar, idempotence, garde-fou
+version), catalogue_complet refusé, sélection (prorata, volume annoncé, k = 1, sans remise, idempotence),
+tirage par plages puis complet == bit à bit, unicité, chunks par population, habillage et finalisation en
+flux (== statistiques globales), rapport, `etat_pipeline`, revue par population. Identité avec les anciens
+scripts conservée (mode quota_dp).
+### 16.7 Questions
+- **Q32 — listes STREAM (RÉSOLUE)** : le code STREAM a été fourni après la première livraison ; listes et
+  libellés recopiés tels quels (version `2026-09-16-b`). Un catalogue repartitionné avec la version `-a`
+  doit être re-repartitionné (le garde-fou de version l'impose).
+- **Q33 — plafond par (DP × DPEC plafonné)** : interprété comme un groupe séparé du DP avec X_dp =
+  min(X, plafond), le reste du DP (DPEC non plafonnés) gardant X ; un DP mixte peut donc porter jusqu'à
+  X + min(X, plafond).
+- **Q34 — index des courts** : `indexer_ref_chronique` est disponible et prouvé mais `etape_tirage_courts`
+  garde le filtre (identité bit à bit avec les anciens scripts conservée par le test) ; à brancher si le
+  temps des courts devient un goulot.
+- **Q35 — manque à gagner** : défini à la sélection comme Σ max(0, X_dp − lignes disponibles) ; le vrai
+  écart réalisé est le compteur de doublons éliminés (finalisation).
+- **Q36 — revue longs** : un échantillon par population (`longs_<population>`), tiré par lots puis
+  ré-échantillonné (25 par population).

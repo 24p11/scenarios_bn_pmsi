@@ -13,6 +13,7 @@ PATH_PROJET <- Sys.getenv("SCENARIOS_PMSI_PATH",
 if(!grepl("/$", PATH_PROJET)) PATH_PROJET <- paste0(PATH_PROJET, "/")
 PATH_RESULTS        <- paste0(PATH_PROJET, "results/")
 PATH_PAIRES_EXCLUES <- paste0(PATH_PROJET, "referentiels/exclusions_paires.yaml")
+PATH_TYPOLOGIE      <- paste0(PATH_PROJET, "referentiels/typologie_sejours.yaml")   # typologie DPEC / TPEC (chantier aval)
 
 # Profil d'exécution : "diagnostic" (apport marginal de chaque (établissements, année),
 # validation de la complétion sur petit volume) ou "production". Sélectionne le bloc PROFIL
@@ -132,19 +133,29 @@ REFS_CHRONIQUES <- c("ref_das_chronique", "distribution_e660", "ref_nb_chronique
 if(PROFIL == "diagnostic"){
   ANS_HISTORIQUE     <- 17:AN_REF           # TOUTES les années
   TYPES_ETBS_LONGS   <- c("CHR/U", "CH")    # LES DEUX catégories (ordre v7.2 : CHR/U puis CH)
-  MODE_SELECTION     <- "quota_dp"
-  BUDGET_TOTAL_LONGS <- 1000L
+  MODE_SELECTION     <- "quota_dp"          # avec remise (conservé pour le diagnostic)
+  NB_CRH_CIBLE       <- 1000L               # volume de la campagne (ex BUDGET_TOTAL_LONGS)
   EXPORTS_DIR        <- paste0(PATH_RESULTS, "exports_diagnostic/")
 } else {
   # À choisir d'après diagnostic_apports.csv (RUN.md, étape 2)
   ANS_HISTORIQUE     <- 17:AN_REF
   TYPES_ETBS_LONGS   <- c("CHR/U", "CH")
-  MODE_SELECTION     <- "catalogue_complet"
-  BUDGET_TOTAL_LONGS <- 10000000L
+  MODE_SELECTION     <- "quota_dp_fixe"     # k lignes par DP, variantes déduites (catalogue_complet retiré pour ce corpus)
+  NB_CRH_CIBLE       <- 500000L             # volume de la campagne : un ORDRE DE GRANDEUR, pas un engagement
   EXPORTS_DIR        <- paste0(PATH_RESULTS, "exports/")
 }
 PARTIELS_DIR        <- paste0(PATH_RESULTS, "partiels/")   # PARTAGÉ entre profils (cache inter-profils)
 QUOTA_MIN_PAR_UNITE <- 5L        # mode quota_dp : plancher par type_unite présent au catalogue du DP
+# Mode quota_dp_fixe (production par campagnes ; doctrine : représentativité des DP avant celle des
+# situations cliniques, la diversité des contextes se reconstituant ENTRE les campagnes).
+NB_LIGNES_PAR_DP <- 1L           # k : lignes distinctes tirées par DP (sans remise), variantes déduites
+POPULATIONS <- list(              # partition EXACTE des modalités de cage (vérifiée, stop sinon)
+  pediatrie = c("[0-1[", "[1-5[", "[5-10[", "[10-15[", "[15-18["),
+  adulte    = c("[18-30[", "[30-40[", "[40-50[", "[50-60[", "[60-70[", "[70-80[", "[80-[")
+)
+PLAFONDS_DPEC <- list("Accouchement normal mère" = 100L, "Bébé normal" = 100L)   # plafond par (DP × DPEC plafonné) ; extensible
+LOT_CHUNKS_FINALISATION <- 10L   # finalisation en flux : nb de chunks relus par lot
+SEUIL_EXPORT_MONOFICHIER <- 2000000L   # au-delà, l'export final reste en parts (pas de monofichier)
 # Chunking DYNAMIQUE (les deux profils) : la taille des chunks est dimensionnée par les données,
 # taille_chunk(n) = max(CHUNK_SIZE_MIN, ceiling(n / NB_CHUNKS_MAX)) -> au plus NB_CHUNKS_MAX chunks
 # par tirage, jamais de chunks minuscules. CHUNK_SIZE_FIXE non-NA court-circuite le calcul.
@@ -163,7 +174,8 @@ SURCHARGE_CONFIG <- Sys.getenv("SCENARIOS_PMSI_SURCHARGE", unset = "")
 if(nzchar(SURCHARGE_CONFIG)) source(SURCHARGE_CONFIG, local = FALSE)
 
 ## ---- Dérivés (après surcharges) ----
-if(!MODE_SELECTION %in% c("catalogue_complet", "quota_dp")) stop("MODE_SELECTION inconnu : " %+% MODE_SELECTION)
+if(!MODE_SELECTION %in% c("catalogue_complet", "quota_dp", "quota_dp_fixe")) stop("MODE_SELECTION inconnu : " %+% MODE_SELECTION)
+if(!exists("BUDGET_TOTAL_LONGS")) BUDGET_TOTAL_LONGS <- NB_CRH_CIBLE   # alias de compatibilité (anciens scripts / surcharges)
 CHUNKS_DIR  <- paste0(EXPORTS_DIR, "chunks/")
 ANSEQTA_REF <- anseqta_de(AN_REF)
 
@@ -173,7 +185,7 @@ NOMS_CONFIG_META <- c("PROFIL", "VERSION_SCRIPT", "AN_REF", "ANS_HISTORIQUE", "T
                       "SEUIL_PIVOT", "SEUIL_REF_DAS", "SEUIL_REF_IMPRECIS", "SEUIL_REF_PAIRES",
                       "DUREE_COURTS", "DUREE_LONGS", "DUREE_MIN_REF", "NBDA_MAX", "K_GRAINE_LONGS",
                       "NB_TIRAGES_COURTS", "NB_VARIANTES_ADMIN_COURTS", "NB_VARIANTES_ADMIN_LONGS",
-                      "MODE_SELECTION", "BUDGET_TOTAL_LONGS", "QUOTA_MIN_PAR_UNITE", "NB_CHUNKS_MAX", "CHUNK_SIZE_MIN", "CHUNK_SIZE_FIXE",
+                      "MODE_SELECTION", "NB_CRH_CIBLE", "NB_LIGNES_PAR_DP", "QUOTA_MIN_PAR_UNITE", "NB_CHUNKS_MAX", "CHUNK_SIZE_MIN", "CHUNK_SIZE_FIXE",
                       "GARDER_CHUNKS", "FORCER_REFS", "EXPORTS_DIR", "PARTIELS_DIR", "PIVOTS_LONGS",
                       "CONVERSION_E669", "BARE_E669_DEFAUT", "COLLECT_PAR_MORCEAUX", "SEUIL_ALERTE_GO")
 valeurs_effectives_config <- function(env = globalenv()){

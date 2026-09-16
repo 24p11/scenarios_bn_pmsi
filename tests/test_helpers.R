@@ -558,4 +558,132 @@ ok("schéma du csv : etiquette, horodatage, taille_objet_mo, memoire_utilisee_go
    identical(names(jm), c("etiquette", "horodatage", "taille_objet_mo", "memoire_utilisee_go", "pic_go", "alerte")) && nrow(jm) == 2 && is.na(jm$taille_objet_mo[2]) && jm$taille_objet_mo[1] > 0 && all(!jm$alerte))
 ok("seuil d'alerte : avertissement et colonne alerte", { w <- NULL; j3 <- withCallingHandlers(mesurer_memoire("gros", NULL, NULL, 0.000001, verbose = FALSE), warning = function(x){ w <<- conditionMessage(x); invokeRestart("muffleWarning") }); j3$alerte && grepl("SEUIL_ALERTE_GO", w) })
 
+
+# ============================================================ aval production ==
+cat("\n# typologie_sejour\n")
+typo <- charger_typologie(file.path(racine, "referentiels", "typologie_sejours.yaml"))
+ok("yaml == listes STREAM (recopiées telles quelles)", identical(typo$RACINES_GREFFES_CART, c("27Z02", "27Z03")) && identical(typo$RACINES_TRANSPLANT, c("27C02", "27C03", "27C04", "27C05", "27C06", "27C07")) &&
+     identical(typo$RACINES_IMG_FC, c("14Z04", "14C05", "14C06", "14C09", "14Z10", "14Z15", "14Z09")) && identical(typo$RACINES_BB_CHIR, c("15C02", "15C03", "15C04", "15C05", "15C06", "15M10", "15M11", "15M13", "15M14")) &&
+     identical(typo$RACINES_AUTRE_NEONAT, c("15M02", "15M03", "15M04")) && length(typo$DPEC_TO_TPEC) == 22 && typo$DPEC_TO_TPEC[["Chirurgie adultes > 3 nuits"]] == "Chirurgie et interventionnel")
+cas <- tibble::tibble(
+  ghm2 = c("27Z02Z", "27C06A", "22Z02B", "14Z08Z", "14Z04Z", "14Z13T", "14Z13B", "14Z13A", "15M05A", "15M10B", "15C02A", "15M02A", "28Z04Z", "28Z07Z", "28Z07Z", "28Z01Z", "04M05B", "04M05B", "04M05B", "06C04B", "06C04B", "05K10A", "05K10A", "90H00Z"),
+  diag2 = c(rep("J449", 12), "Z04801", "Z511", "Z511", "Z512", rep("J449", 8)),
+  age = c(rep(70, 14), 15, 70, rep(70, 8)), duree = c(rep(5, 16), 5, 2, 5, 5, 2, 5, 2, 5),
+  mode_hospit = c(rep("HC", 18), "HP", rep("HC", 5)))
+r <- typologie_sejour(cas, typo)
+attendu <- c("Greffes de moelle, CAR-T Cells", "Transplantations", "Brûlés", "IVG", "IMG & fausses couches", "Accouchement normal mère", "Accouchement pathologique mère", "Accouchement normal mère",
+             "Bébé normal", "Bébé néonat med", "Bébé néonat chir", "Autre néonat", "Séance polysomno", "Séance chimiothérapie simple adulte", "Séances simples", "Séances simples",
+             "Médecine adultes > 3 nuits", "Médecine adultes < 3 nuits", "HDJ médecine adultes", "Chirurgie adultes > 3 nuits", "Chirurgie adultes < 3 nuits", "Interventionnel adultes > 3 nuits", "Interventionnel adultes < 3 nuits", "Autre")
+ok("typologie : un cas par classe atteignable (libellés STREAM)", identical(r$DPEC, attendu))
+ok("ordre : 15M10 -> Bébé néonat med malgré BB_CHIR ; 14Z13T -> accouchement normal ; 14Z13A (sévérité A) -> normal, pas pathologique",
+   r$DPEC[10] == "Bébé néonat med" && r$DPEC[6] == "Accouchement normal mère" && r$DPEC[8] == "Accouchement normal mère" && r$DPEC[7] == "Accouchement pathologique mère")
+ok("ordre : Z511 age 15 -> Séances simples (pas chimio adulte) ; CMD 28 avant M/Z", r$DPEC[15] == "Séances simples" && r$DPEC[13] == "Séance polysomno")
+ok("ordre : 14Z10 (IMG_FC et ACC_PATHO) -> IMG & fausses couches (IMG_FC testé avant)", typologie_sejour(tibble::tibble(ghm2 = "14Z10B", diag2 = "O03", age = 30, duree = 2, mode_hospit = "HC"), typo)$DPEC == "IMG & fausses couches")
+ok("TPEC via DPEC_TO_TPEC, défaut Autre", r$TPEC[1] == "Séjours complexes" && r$TPEC[6] == "Obstétrique" && r$TPEC[24] == "Autre" && all(r$TPEC[17:19] == "Médecine") && all(r$TPEC[20:23] == "Chirurgie et interventionnel") && r$TPEC[13] == "Médecine")
+ok("âge en classe ge_18/lt_18 et durée constante (catalogue longs)",
+   { c2 <- typologie_sejour(tibble::tibble(ghm2 = c("28Z07Z", "28Z07Z", "04M05B"), diag2 = "Z511", age = c("ge_18", "lt_18", "ge_18"), mode_hospit = "HC"), typo, duree_defaut = 3)
+     identical(c2$DPEC, c("Séance chimiothérapie simple adulte", "Séances simples", "Médecine adultes > 3 nuits")) })
+ok("chevauchement BB_MED/BB_CHIR présent dans le yaml (inoffensif, l'ordre prime)", all(c("15M10", "15M11", "15M13", "15M14") %in% typo$RACINES_BB_CHIR))
+
+cat("\n# lire_catalogue / parts par lettre\n")
+dcat <- file.path(tempdir(), "cat_ds"); unlink(dcat, recursive = TRUE); dir.create(dcat)
+cat_fx2 <- tibble::tibble(diag2 = c("J449", "J440", "I500", "K802"), cage = c("[60-70[", "[60-70[", "[70-80[", "[1-5["), poids = c(5, 3, 8, 2), age = c("ge_18", "ge_18", "ge_18", "lt_18"),
+                          type_unite = "HC", ghm2 = "04M053", mode_hospit = "HC", diagnostic_associes = "I10")
+cat_fx2$lettre <- lettre_de(cat_fx2$diag2)
+for(L in unique(cat_fx2$lettre)) arrow::write_parquet(cat_fx2[cat_fx2$lettre == L, ], file.path(dcat, nom_part_lettre(L)))
+ok("lettres_catalogue", identical(lettres_catalogue(dcat), c("I", "J", "K")))
+ok("lire_catalogue : parts filtrées par lettres et colonnes", { d <- lire_catalogue(dcat, lettres = c("J", "K"), colonnes = c("diag2", "poids")); setequal(d$diag2, c("J449", "J440", "K802")) && identical(names(d), c("diag2", "poids")) })
+ok("lire_catalogue : toutes les parts == fixture", setequal(lire_catalogue(dcat)$diag2, cat_fx2$diag2) && nrow(lire_catalogue(dcat)) == 4)
+ok("lire_catalogue : lettre absente -> NULL", is.null(lire_catalogue(dcat, lettres = "Z")))
+mono <- file.path(tempdir(), "mono.parquet"); arrow::write_parquet(cat_fx2[, setdiff(names(cat_fx2), "lettre")], mono)
+ok("lire_catalogue : monofichier déprécié (message) avec lettre ajoutée", { msg <- NULL; d <- withCallingHandlers(lire_catalogue(file.path(tempdir(), "inexistant"), mono, lettres = "I"), message = function(m){ msg <<- conditionMessage(m); invokeRestart("muffleMessage") }); grepl("déprécié", msg) && d$diag2 == "I500" })
+ok("lire_catalogue : ni dataset ni monofichier -> stop actionnable", grepl("etape_repartitionner", tryCatch(lire_catalogue(file.path(tempdir(), "x"), file.path(tempdir(), "y.parquet")), error = function(e) conditionMessage(e))))
+if(!ARROW_MOCK) ok("lire_catalogue : chemin dataset arrow (réel)", arrow_dataset_disponible() && nrow(lire_catalogue(dcat, lettres = "J")) == 2) else ok("lire_catalogue : dataset arrow non testé (mock, note)", TRUE)
+
+cat("\n# sélection quota_dp_fixe\n")
+pops <- list(pediatrie = c("[0-1[", "[1-5[", "[5-10[", "[10-15[", "[15-18["), adulte = c("[18-30[", "[30-40[", "[40-50[", "[50-60[", "[60-70[", "[70-80[", "[80-["))
+ok("partition des cages exhaustive et exclusive", isTRUE(verifier_populations(pops, c("[1-5[", "[60-70["))))
+ok("partition : cage absente -> stop", grepl("absentes", tryCatch(verifier_populations(pops, "[99-["), error = function(e) conditionMessage(e))))
+ok("partition : cage en double -> stop", grepl("en double", tryCatch(verifier_populations(list(a = "[1-5[", b = "[1-5["), "[1-5["), error = function(e) conditionMessage(e))))
+ok("population_de", identical(population_de(c("[1-5[", "[80-["), pops), c("pediatrie", "adulte")))
+ok("budget au prorata du nb de DP, total exact", { b <- repartir_budget_populations(1000L, c(pediatrie = 30L, adulte = 70L)); identical(b, c(pediatrie = 300L, adulte = 700L)) && sum(repartir_budget_populations(1001L, c(a = 1L, b = 2L))) == 1001 })
+ok("variantes_par_ligne : k=1 -> X ; k=3, X=10 -> 4/4/2 ; total exact", identical(variantes_par_ligne(1, 7L), 7L) && identical(variantes_par_ligne(3, 10L), c(4L, 4L, 2L)) && sum(variantes_par_ligne(4, 9L)) == 9)
+cat_sel <- tibble::tibble(
+  diag2 = c(rep("J449", 6), rep("I500", 2), "K802", "O800", "O800", "O800"),
+  ghm2 = c(rep("04M053", 3), rep("04M052", 3), "05M093", "05M093", "06C041", "14Z13A", "14Z13B", "14Z13A"),
+  type_unite = c("HC", "HC", "SC", "HC", "GERIATRIE", "HC", "HC", "UHCD", "HC", "HC", "HC", "SC"),
+  poids = c(50, 40, 30, 20, 15, 12, 20, 20, 30, 300, 200, 100), cage = "[60-70[", age = "ge_18", mode_hospit = "HC",
+  diagnostic_associes = c("I10", "E785", "N189", "I10 E785", "I48", "G20", "I10", "E785", "I10", "Z370", "Z370 O342", "Z371"))
+cat_sel$lettre <- lettre_de(cat_sel$diag2)
+cat_sel <- typologie_sejour(cat_sel, typo, duree_defaut = 3)
+ok("fixture : 14Z13A -> Accouchement normal mère (plafonné), 14Z13B -> pathologique (non plafonné)", cat_sel$DPEC[10] == "Accouchement normal mère" && cat_sel$DPEC[11] == "Accouchement pathologique mère")
+set.seed(1); r1 <- selection_quota_dp_fixe_lettre(cat_sel, X = 10L, k = 1L, plafonds_dpec = list("Accouchement normal mère" = 3L))
+ok("k = 1 : une ligne par (DP × groupe), X_dp variantes ; total exact", all(r1$stats$k_eff == 1) && all(r1$stats$variantes == r1$stats$X_dp) && sum(r1$selection$n_var) == sum(r1$stats$X_dp))
+ok("plafond par (DP × DPEC plafonné) : O800 normal -> X_dp = 3 ; O800 reste -> 10", { st <- r1$stats[r1$stats$dp == "O800", ]; st$X_dp[st$groupe == "Accouchement normal mère"] == 3 && st$X_dp[st$groupe == ".reste"] == 10 && st$plafonne[st$groupe == "Accouchement normal mère"] })
+ok("sans remise : aucune ligne dupliquée hors variantes", !any(duplicated(r1$selection[, c("diag2", "ghm2", "type_unite", "diagnostic_associes")])))
+ok("planchers d'unités désactivés à k = 1 (mention)", all(!r1$stats$planchers_actifs) && sum(!r1$stats$planchers_actifs & r1$stats$lignes_disponibles > 1) >= 1)
+ok("manque à gagner = max(0, X_dp - lignes disponibles)", r1$stats$manque_a_gagner[r1$stats$dp == "K802"] == 9 && r1$stats$manque_a_gagner[r1$stats$dp == "J449"] == 4)
+set.seed(2); r3 <- selection_quota_dp_fixe_lettre(cat_sel, X = 10L, k = 3L)
+ok("k = 3 : J449 -> 3 lignes distinctes, variantes 4/4/2 (dernière tronquée) ; K802 (1 ligne) -> 1 ligne × 10", { sj <- r3$selection[r3$selection$diag2 == "J449", ]; sk <- r3$selection[r3$selection$diag2 == "K802", ]
+   nrow(sj) == 3 && identical(sort(sj$n_var, decreasing = TRUE), c(4L, 4L, 2L)) && nrow(sk) == 1 && sk$n_var == 10 })
+ok("k = 3 : planchers actifs pour J449 (3 types, k >= 3) : un type par ligne", { sj <- r3$selection[r3$selection$diag2 == "J449", ]; r3$stats$planchers_actifs[r3$stats$dp == "J449"] && length(unique(sj$type_unite)) == 3 })
+ok("DP à moins de k lignes -> toutes ses lignes", nrow(r3$selection[r3$selection$diag2 == "I500", ]) == 2)
+set.seed(1); r1b <- selection_quota_dp_fixe_lettre(cat_sel, X = 10L, k = 1L, plafonds_dpec = list("Accouchement normal mère" = 3L))
+ok("déterminisme sous seed", identical(r1$selection, r1b$selection))
+ok("seed stable par (population, lettre)", seed_selection(1, "adulte", "J", pops) == seed_selection(1, "adulte", "J", pops) && seed_selection(1, "adulte", "J", pops) != seed_selection(1, "pediatrie", "J", pops) && seed_selection(1, "adulte", "J", pops) != seed_selection(1, "adulte", "K", pops))
+ok("dedoublonner_variantes : jeux identiques à l'ordre près éliminés", { d <- tibble::tibble(diagnostic_associes = c("I10 E785", "E785 I10", "I10 N189"), variante = 1:3); nrow(dedoublonner_variantes(d)) == 2 })
+
+cat("\n# index des références et tirage indexé\n")
+idx <- indexer_ref_das(ref_aigu_fx)
+ok("indexer_ref_das : une entrée par strate", length(idx) == 2 && inherits(idx, "index_ref_das"))
+set.seed(21); a <- purrr::map(1:30, ~ sample_das_long("HC", "1", "ge_18", "[60-70[", "04M05", "04M053", "E11i", "I10", "J449", 4, "I500 N189", ref_das_aigu = ref_aigu_fx, refs = refs_fx, nb_tirage = 2)) |> purrr::list_rbind()
+set.seed(21); b <- purrr::map(1:30, ~ sample_das_long("HC", "1", "ge_18", "[60-70[", "04M05", "04M053", "E11i", "I10", "J449", 4, "I500 N189", ref_das_aigu = idx, refs = refs_fx, nb_tirage = 2)) |> purrr::list_rbind()
+ok("sample_das_long indexé == filtré sous même seed (identité)", identical(a, b))
+ok("indexé : strate absente -> NULL", is.null(sample_das_long("HP", "1", "ge_18", "[60-70[", "04M05", "04M053", "N", "N", "J449", 4, "I500", ref_das_aigu = idx, refs = refs_fx)))
+idx_c <- indexer_ref_chronique(ref_chro_fx)
+set.seed(22); a <- purrr::map(1:20, ~ sample_das_court("HC", "1", "[60-70[", "04M05", "J449", 1, ref_chro = ref_chro_fx, ref_nb_chro = ref_nb_fx, refs = refs_fx, nb_tirages = 2)) |> purrr::list_rbind()
+set.seed(22); b <- purrr::map(1:20, ~ sample_das_court("HC", "1", "[60-70[", "04M05", "J449", 1, ref_chro = idx_c, ref_nb_chro = ref_nb_fx, refs = refs_fx, nb_tirages = 2)) |> purrr::list_rbind()
+ok("sample_das_court indexé == filtré (strate et repli)", identical(a, b) && identical(candidats_chroniques("ZZZ", "2", "[60-70[", idx_c, 20)$source, "repli"))
+# unicité souple
+set.seed(23)
+u_riche <- sample_das_long("HC", "1", "ge_18", "[60-70[", "04M05", "04M053", "N", "N", "J449", 4, "I500", ref_das_aigu = idx, refs = refs_fx, nb_tirage = 5, dedoublonner = TRUE)
+ok("unicité souple : strate riche -> jeux distincts, colonne nb_variantes_demandees", nrow(u_riche) >= 4 && all(u_riche$nb_variantes_demandees == 5) && !any(duplicated(vapply(split_das(u_riche$diagnostic_associes), function(v) paste(sort(v), collapse = " "), character(1)))))
+ref_pauvre <- ref_aigu_fx[ref_aigu_fx$sexe == "1", ][1:2, ]; ref_pauvre$das <- c("N10", "N11")
+set.seed(24)
+u_pauvre <- sample_das_long("HC", "1", "ge_18", "[60-70[", "04M05", "04M053", "N", "N", "J449", 1, "I500", ref_das_aigu = indexer_ref_das(ref_pauvre), refs = refs_fx, nb_tirage = 5, dedoublonner = TRUE)
+ok("unicité souple : strate pauvre (2 jeux possibles, n_var = 5) -> <= 2 variantes, aucun re-tirage", nrow(u_pauvre) <= 2 && all(u_pauvre$nb_variantes_demandees == 5) && all(u_pauvre$variante <= 5))
+set.seed(24); u2 <- sample_das_long("HC", "1", "ge_18", "[60-70[", "04M05", "04M053", "N", "N", "J449", 1, "I500", ref_das_aigu = indexer_ref_das(ref_pauvre), refs = refs_fx, nb_tirage = 5, dedoublonner = TRUE)
+ok("unicité souple : déterminisme inchangé", identical(u_pauvre, u2))
+
+cat("\n# pmap_chunks : plages, atomicité, lots\n")
+f_var <- function(id, nb_tirage){ tibble::tibble(id = id, variante = seq_len(nb_tirage), u = round(stats::runif(nb_tirage), 6)) }
+df_v <- tibble::tibble(id = 1:23, nb_tirage = c(rep(3L, 11), rep(2L, 12)))
+dA <- file.path(tempdir(), "pl_A"); dB <- file.path(tempdir(), "pl_B"); unlink(c(dA, dB), recursive = TRUE)
+rA <- pmap_chunks(df_v, f_var, chunk_size = 5, dossier = dA, prefixe = "p", seed_base = 9, ecrire = ecrire_t, lire = lire_t, ext = ext_t, verbose = FALSE)
+ok("une ligne et ses variantes vivent dans le même chunk", all(vapply(1:5, function(i){ d <- lire_t(file.path(dA, sprintf("p_chunk_%04d%s", i, ext_t))); all(table(d$id) == df_v$nb_tirage[match(unique(d$id), df_v$id)]) }, logical(1))))
+r_none <- pmap_chunks(df_v, f_var, chunk_size = 5, dossier = dB, prefixe = "p", seed_base = 9, ecrire = ecrire_t, lire = lire_t, ext = ext_t, verbose = FALSE, chunk_range = c(1, 2))
+ok("plage 1..2 : 2 chunks écrits, sidecar écrit, pas d'assemblage", is.null(r_none) && length(list.files(dB, pattern = "^p_chunk_")) == 2 && file.exists(file.path(dB, "p_chunks_meta.yaml")))
+pmap_chunks(df_v, f_var, chunk_size = 5, dossier = dB, prefixe = "p", seed_base = 9, ecrire = ecrire_t, lire = lire_t, ext = ext_t, verbose = FALSE, chunk_range = c(4, 5))
+err <- tryCatch({ pmap_chunks(df_v, f_var, chunk_size = 5, dossier = dB, prefixe = "p", seed_base = 9, ecrire = ecrire_t, lire = lire_t, ext = ext_t, verbose = FALSE, chunk_range = c(1, 2), assembler = TRUE); NULL }, error = function(e) conditionMessage(e))
+ok("assemblage demandé alors qu'un chunk hors plage manque -> stop listant le chunk", !is.null(err) && grepl("p_chunk_0003", err))
+rB <- pmap_chunks(df_v, f_var, chunk_size = 5, dossier = dB, prefixe = "p", seed_base = 9, ecrire = ecrire_t, lire = lire_t, ext = ext_t, verbose = FALSE, chunk_range = c(3, 3), assembler = TRUE)
+ok("plages disjointes couvrant tout == run complet bit à bit", identical(rA, rB))
+ok("sidecar partagé non réécrit entre sessions (même contenu)", identical(yaml::read_yaml(file.path(dA, "p_chunks_meta.yaml"))[c("n", "chunk_size", "seed_base", "nb_chunks")], yaml::read_yaml(file.path(dB, "p_chunks_meta.yaml"))[c("n", "chunk_size", "seed_base", "nb_chunks")]))
+unlink(file.path(dB, sprintf("p_chunk_%04d%s", 2, ext_t))); writeLines("partiel", file.path(dB, sprintf("p_chunk_%04d%s.tmp", 2, ext_t)))
+rC <- pmap_chunks(df_v, f_var, chunk_size = 5, dossier = dB, prefixe = "p", seed_base = 9, ecrire = ecrire_t, lire = lire_t, ext = ext_t, verbose = FALSE)
+ok("atomicité : .tmp orphelin ignoré et chunk recalculé, résultat identique", identical(rA, rC) && !file.exists(file.path(dB, sprintf("p_chunk_%04d%s.tmp", 2, ext_t))))
+lots <- list(); lire_chunks_par_lots(dA, "p", 2, function(d, i) lots[[i]] <<- nrow(d), ext = ext_t, lire = lire_t)
+ok("lire_chunks_par_lots : 5 chunks en lots de 2 -> 3 lots, total conservé", length(lots) == 3 && sum(unlist(lots)) == nrow(rA))
+
+cat("\n# statistiques accumulées par lot et mémoire de session\n")
+df_st <- dplyr::bind_rows(sc_st1 <- tibble::tibble(mode_hospit = "HC", sexe = "1", age = "ge_18", cage = c("[60-70[", "[60-70[", "[70-80["), racine = "04M05", ghm2 = "04M053", diabete = "N", hta = "N", diag2 = "J449", nbda = 2L, type_unite = "HC", prep_sc = 0,
+                                                    poids = 11, graine = "I10", diabete_scenario = "N", diagnostic_associes = c("I10 E785", "I10 N189", "I10 E785 J440")))
+ref_st <- stats_branche_test <- list(n = nrow(df_st), distribution = distribution_nb_das(df_st), top = top_das_par_cmd(df_st, 30), taux = taux_imprecis(df_st, c("J440")), e660 = effectifs_e660(df_st, c("diag2", "diagnostic_associes")))
+acc <- acc_stats_init(); acc <- acc_stats_ajouter(acc, df_st[1:2, ], PIVOTS_LONGS, c("J440"), hta_autres_fx, 10, c("diag2", "graine", "diagnostic_associes")); acc <- acc_stats_ajouter(acc, df_st[3, ], PIVOTS_LONGS, c("J440"), hta_autres_fx, 10, c("diag2", "graine", "diagnostic_associes"))
+fs <- acc_stats_final(acc)
+ok("acc_stats par lots == stats globales (n, distribution, top, taux, contrôles)",
+   fs$n == 3 && identical(as.data.frame(fs$distribution)[, c("cage", "n", "moy", "min", "max")], as.data.frame(ref_st$distribution)[, c("cage", "n", "moy", "min", "max")]) &&
+     identical(as.data.frame(fs$top_das), as.data.frame(ref_st$top)) && fs$taux_imprecis == ref_st$taux && fs$controles$doublons_categorie == 0 && fs$pivots == 2)
+ok("memoire_session : tableau trié décroissant", { m <- utils::capture.output(d <- memoire_session(list(g = environment()), n_max = 5)); is.data.frame(d) && all(diff(d$taille_mo) <= 0) && all(c("env", "objet", "classe", "taille_mo") %in% names(d)) })
+
 cat("\nTOUS LES TESTS SONT VERTS :", n_ok, "assertions\n")

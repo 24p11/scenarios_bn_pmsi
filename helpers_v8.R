@@ -168,6 +168,12 @@ prep_ref_chronique <- function(ref_das_chronique){
 
 # Codes candidats d'une strate, avec repli si moins de seuil_ref codes (§6.2)
 candidats_chroniques <- function(diag, sexe_, cage_, ref_chro, seuil_ref){
+  if(inherits(ref_chro$strate, "index_ref_chro")){   # accès direct (indexer_ref_chronique) : identique au filtre
+    tmp <- ref_chro$strate[[cle_strate(diag, sexe_, cage_)]]; if(is.null(tmp)) tmp <- vide_comme(ref_chro$colonnes_strate)
+    source <- "strate"
+    if(nrow(tmp) < seuil_ref){ tmp <- ref_chro$repli[[cle_strate(sexe_, cage_)]]; if(is.null(tmp)) tmp <- vide_comme(ref_chro$colonnes_repli); source <- "repli" }
+    return(list(tmp = tmp, source = source))
+  }
   tmp <- ref_chro$strate |> dplyr::filter(diag2 == diag, sexe == sexe_, cage == cage_)
   source <- "strate"
   if(nrow(tmp) < seuil_ref){
@@ -256,7 +262,7 @@ sample_das_court <- function(mode_hospit, sexe, cage, ghm2, diag2, duree, nb = N
 # tables de référence en argument. Retourne NULL si la strate est vide.
 sample_das_long <- function(mode_hospit, sexe, age, cage, racine, ghm2, diabete, hta, diag2, nbda,
                             diagnostic_associes, type_unite = NA, prep_sc = NA, poids = NA,
-                            ref_das_aigu, refs, nb_tirage = 1){
+                            ref_das_aigu, refs, nb_tirage = 1, dedoublonner = FALSE, ...){
   
   mode_hospit_ = as.character(mode_hospit)
   sexe_ = as.character(sexe)
@@ -277,7 +283,13 @@ sample_das_long <- function(mode_hospit, sexe, age, cage, racine, ghm2, diabete,
   
   nbda_ = as.integer(nbda)
   
+  if(inherits(ref_das_aigu, "index_ref_das")){   # accès direct à la strate (indexer_ref_das) : identique au filtre, prouvé en test
+    tmp <- ref_das_aigu[[cle_strate(diag, mode_hospit_, sexe_, cage_, ghm2_)]]
+    if(is.null(tmp)) return(NULL)
+    tmp <- tmp[!tmp$das %in% da, , drop = FALSE]
+  } else {
   ref_das_aigu |> dplyr::filter(diag2 == diag,mode_hospit == mode_hospit_, sexe == sexe_, cage== cage_,ghm2==ghm2_,!das%in%da )  -> tmp   # §5.1 (ex sexe_ ==sexe_)
+  }
   
   if(nrow(tmp)<1) return(NULL)
   
@@ -311,6 +323,13 @@ sample_das_long <- function(mode_hospit, sexe, age, cage, racine, ghm2, diabete,
                    diagnostic_associes = paste(das_samples, collapse = " ")) |>
       dplyr::bind_rows(df_tmp) -> df_tmp
     
+  }
+  
+  # Unicité souple (quota_dp_fixe) : les nb_tirage variantes d'une même ligne sont dédoublonnées
+  # sur le jeu complet de DAS (graine + complétion + doctrine, ordre indifférent) ; AUCUN re-tirage.
+  if(isTRUE(dedoublonner) && !is.null(df_tmp)){
+    df_tmp$nb_variantes_demandees <- as.integer(nb_tirage)
+    df_tmp <- dedoublonner_variantes(df_tmp, "diagnostic_associes")
   }
   
   return(df_tmp)
@@ -399,9 +418,14 @@ verifier_chunks_meta <- function(existant, courant, dossier, prefixe){
 # pmap(f, ...), écriture du chunk. Fin : relecture de tous les chunks, retour assemblé. Le seed
 # par chunk garantit : reprise après plantage == exécution complète, bit à bit. `ecrire`/`lire`
 # sont injectables (arrow par défaut ; les tests peuvent passer saveRDS/readRDS).
+# chunk_range = c(i, j) : ne traite que les chunks i..j (PARALLÉLISME par sessions sur plages
+# disjointes du même dossier ; sidecar partagé, vérifié, pas réécrit s'il existe et concorde) ;
+# assembler = FALSE (défaut quand une plage est donnée) : pas de relecture finale. Écriture
+# ATOMIQUE de chaque chunk (.tmp puis file.rename) : un plantage ne laisse jamais un chunk
+# partiel pris pour complet (les .tmp orphelins sont ignorés et recalculés). Débit imprimé.
 pmap_chunks <- function(df, f, chunk_size = NULL, dossier, prefixe, seed_base, ...,
                         garder_chunks = TRUE, ecrire = arrow::write_parquet, lire = arrow::read_parquet,
-                        ext = ".parquet", verbose = TRUE){
+                        ext = ".parquet", verbose = TRUE, chunk_range = NULL, assembler = is.null(chunk_range)){
   stopifnot(is.data.frame(df))
   if(!dir.exists(dossier)) dir.create(dossier, recursive = TRUE)
   n <- nrow(df)
@@ -412,32 +436,57 @@ pmap_chunks <- function(df, f, chunk_size = NULL, dossier, prefixe, seed_base, .
   # Garde-fou de reprise (sidecar)
   f_meta <- file.path(dossier, prefixe %+% "_chunks_meta.yaml")
   courant <- list(n = as.integer(n), chunk_size = as.integer(chunk_size), seed_base = as.numeric(seed_base), nb_chunks = n_chunks, date = as.character(Sys.Date()))
-  chunks_presents <- list.files(dossier, pattern = "^" %+% prefixe %+% "_chunk_[0-9]{4}")
-  if(length(chunks_presents) > 0){
+  motif_chunk <- "^" %+% prefixe %+% "_chunk_[0-9]{4}" %+% gsub(".", "\\.", ext, fixed = TRUE) %+% "$"
+  chunks_presents <- list.files(dossier, pattern = motif_chunk)
+  if(length(chunks_presents) > 0 || file.exists(f_meta)){
     msg <- verifier_chunks_meta(if(file.exists(f_meta)) yaml::read_yaml(f_meta) else NULL, courant, dossier, prefixe)
     if(!is.null(msg)) stop(msg, call. = FALSE)
-  } else {
-    yaml::write_yaml(courant, f_meta)   # écrit AVANT le premier chunk
   }
-  fichiers <- character(0)
-  for(i in seq_len(n_chunks)){
-    fichier <- file.path(dossier, sprintf("%s_chunk_%04d%s", prefixe, i, ext))
-    fichiers <- c(fichiers, fichier)
+  if(!file.exists(f_meta)) yaml::write_yaml(courant, f_meta)   # écrit AVANT le premier chunk ; jamais réécrit s'il concorde
+  a_traiter <- seq_len(n_chunks)
+  if(!is.null(chunk_range)){
+    stopifnot(length(chunk_range) == 2, chunk_range[1] >= 1, chunk_range[2] >= chunk_range[1])
+    a_traiter <- a_traiter[a_traiter >= chunk_range[1] & a_traiter <= chunk_range[2]]
+    if(verbose) cat(sprintf("  [chunks %s] plage traitée : %d..%d\n", prefixe, chunk_range[1], min(chunk_range[2], n_chunks)))
+  }
+  fichiers <- file.path(dossier, sprintf("%s_chunk_%04d%s", prefixe, seq_len(n_chunks), ext))
+  for(i in a_traiter){
+    fichier <- fichiers[i]
     if(file.exists(fichier)){
       if(verbose) cat(sprintf("  chunk %s %04d/%04d : déjà présent, sauté\n", prefixe, i, n_chunks))
       next
     }
     idx <- ((i - 1) * chunk_size + 1):min(i * chunk_size, n)
+    t0 <- Sys.time()
     set.seed(seed_base + i)
     res <- purrr::pmap(df[idx, , drop = FALSE], f, ...) |> purrr::list_rbind()
     if(is.null(res) || nrow(res) == 0 || ncol(res) == 0) res <- tibble::tibble(.chunk_vide = logical(0))
-    ecrire(res, fichier)
-    if(verbose) cat(sprintf("  chunk %s %04d/%04d : %d lignes\n", prefixe, i, n_chunks, nrow(res)))
+    tmp <- fichier %+% ".tmp"
+    ecrire(res, tmp); if(!file.rename(tmp, fichier)) stop("pmap_chunks : échec du renommage atomique de " %+% tmp, call. = FALSE)
+    d <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    if(verbose) cat(sprintf("  chunk %s %04d/%04d : %d lignes (%d entrées) en %.1f s — débit %.0f scénarios/s\n", prefixe, i, n_chunks, nrow(res), length(idx), d, if(d > 0) nrow(res) / d else NA))
   }
+  if(!assembler) return(invisible(NULL))
+  manquants <- fichiers[!file.exists(fichiers)]
+  if(length(manquants) > 0) stop("pmap_chunks : assemblage impossible, chunks manquants : " %+% paste(basename(manquants), collapse = ", "), call. = FALSE)
   out <- purrr::map(fichiers, function(fi) tibble::as_tibble(lire(fi))) |> purrr::list_rbind()
   if(".chunk_vide" %in% names(out)) out$.chunk_vide <- NULL
   if(!garder_chunks) unlink(fichiers)
   out
+}
+
+# Relecture des chunks d'un dossier par lots (finalisation en flux) : applique f(df_lot, i_lot)
+lire_chunks_par_lots <- function(dossier, prefixe, taille_lot, f, ext = ".parquet", lire = arrow::read_parquet){
+  motif <- "^" %+% prefixe %+% "_chunk_[0-9]{4}" %+% gsub(".", "\\.", ext, fixed = TRUE) %+% "$"
+  fichiers <- sort(list.files(dossier, pattern = motif, full.names = TRUE))
+  if(length(fichiers) == 0) return(invisible(0L))
+  lots <- split(fichiers, ceiling(seq_along(fichiers) / taille_lot))
+  for(i in seq_along(lots)){
+    d <- purrr::map(lots[[i]], function(fi) tibble::as_tibble(lire(fi))) |> purrr::list_rbind()
+    if(".chunk_vide" %in% names(d)) d$.chunk_vide <- NULL
+    f(d, i); rm(d); gc()
+  }
+  invisible(length(lots))
 }
 
 # --- B2. Sélection des séjours longs -------------------------------------------------
@@ -1028,4 +1077,244 @@ mesurer_memoire <- function(etiquette, objet = NULL, journal = NULL, seuil_alert
                           if(pic_go > seuil_alerte_go) "  <<< AVERTISSEMENT : pic > SEUIL_ALERTE_GO" else ""))
   if(pic_go > seuil_alerte_go) warning(sprintf("Pic mémoire %.2f Go > SEUIL_ALERTE_GO (%s) à l'étape « %s »", pic_go, seuil_alerte_go, etiquette), call. = FALSE)
   rbind(journal, ligne)
+}
+
+## ---- E. Aval production : typologie, catalogue partitionné, sélection quota_dp_fixe, index, mémoire ----
+
+# --- E1. Typologie DPEC / TPEC ------------------------------------------------------------
+charger_typologie <- function(chemin){
+  t <- yaml::read_yaml(chemin)
+  stopifnot(!is.null(t$version))
+  for(k in c("RACINES_GREFFES_CART", "RACINES_TRANSPLANT", "RACINES_IMG_FC", "GHM_ACC_NORMAL", "RACINES_ACC_PATHO",
+             "GHM_BB_NORMAL", "RACINES_BB_MED", "RACINES_BB_CHIR", "RACINES_AUTRE_NEONAT")) t[[k]] <- as.character(unlist(t[[k]]))
+  t$DPEC_TO_TPEC <- unlist(t$DPEC_TO_TPEC)
+  t
+}
+
+# Traduction fidèle du STREAM (with_typologie, polars) en case_when ; ORDRE = précédence : séjours
+# complexes (CMD 27 CAR-T / transplantations, CMD 22 brûlés) ; obstétrique (IVG 14Z08Z, IMG/FC,
+# accouchement normal, ACC_PATHO & sévérité hors A/T) ; néonat (BB_NORMAL, BB_MED, BB_CHIR,
+# AUTRE_NEONAT) ; séances CMD 28 (polysomno Z04801, chimio Z511 & adulte, simples) ; médecine M/Z
+# (HDJ si HP, puis duree >= 3 / < 3) ; chirurgie C / interventionnel K (même borne) ; sinon "Autre".
+# racine = substr(ghm2, 1, 5) (identique à la colonne racine de prep_data). col_age : numérique
+# (agean >= 18) ou classe "ge_18"/"lt_18" (pivot age des longs). Catalogue longs : duree_defaut = 3
+# (périmètre 3-100 par construction ; classes < 3 nuits / HDJ / séances inaccessibles, attendu) ;
+# les courts seront typés avec leur vraie durée.
+typologie_sejour <- function(df, typo, col_age = "age", col_duree = "duree", col_mode = "mode_hospit", duree_defaut = NA){
+  ghm2 <- as.character(df$ghm2)
+  cmd <- substr(ghm2, 1, 2); type_ghm <- substr(ghm2, 3, 3); racine <- substr(ghm2, 1, 5); sev <- substr(ghm2, nchar(ghm2), nchar(ghm2))
+  age <- df[[col_age]]
+  adulte <- if(is.numeric(age)) !is.na(age) & age >= 18 else !is.na(age) & as.character(age) == "ge_18"
+  duree <- if(col_duree %in% names(df)) as.numeric(df[[col_duree]]) else rep(as.numeric(duree_defaut), nrow(df))
+  hdj <- if(col_mode %in% names(df)) as.character(df[[col_mode]]) == "HP" else rep(FALSE, nrow(df))
+  dp <- as.character(df$diag2)
+  dpec <- dplyr::case_when(
+    # --- Séjours complexes (CMD 27, 22)
+    racine %in% typo$RACINES_GREFFES_CART ~ "Greffes de moelle, CAR-T Cells",
+    racine %in% typo$RACINES_TRANSPLANT ~ "Transplantations",
+    cmd == "22" ~ "Brûlés",   # critère à confirmer (CMD 22), comme dans STREAM
+    # --- Obstétrique
+    ghm2 == "14Z08Z" ~ "IVG",
+    racine %in% typo$RACINES_IMG_FC ~ "IMG & fausses couches",
+    ghm2 %in% typo$GHM_ACC_NORMAL ~ "Accouchement normal mère",
+    racine %in% typo$RACINES_ACC_PATHO & !sev %in% c("A", "T") ~ "Accouchement pathologique mère",
+    # --- Néonatalogie
+    ghm2 %in% typo$GHM_BB_NORMAL ~ "Bébé normal",
+    racine %in% typo$RACINES_BB_MED ~ "Bébé néonat med",
+    racine %in% typo$RACINES_BB_CHIR ~ "Bébé néonat chir",
+    racine %in% typo$RACINES_AUTRE_NEONAT ~ "Autre néonat",
+    # --- Médecine : séances (les spécifiques avant le tout-venant CMD 28)
+    cmd == "28" & dp == "Z04801" ~ "Séance polysomno",
+    cmd == "28" & dp == "Z511" & adulte ~ "Séance chimiothérapie simple adulte",
+    cmd == "28" ~ "Séances simples",
+    # --- Médecine hors séances (HDJ d'abord, puis durée ; 3 nuits et plus => « > 3 nuits »)
+    hdj & type_ghm %in% c("M", "Z") ~ "HDJ médecine adultes",
+    !is.na(duree) & duree >= 3 & type_ghm %in% c("M", "Z") ~ "Médecine adultes > 3 nuits",
+    !is.na(duree) & duree < 3 & type_ghm %in% c("M", "Z") ~ "Médecine adultes < 3 nuits",
+    # --- Chirurgie et interventionnel (même borne à 3)
+    !is.na(duree) & duree < 3 & type_ghm == "K" ~ "Interventionnel adultes < 3 nuits",
+    !is.na(duree) & duree < 3 & type_ghm == "C" ~ "Chirurgie adultes < 3 nuits",
+    !is.na(duree) & duree >= 3 & type_ghm == "K" ~ "Interventionnel adultes > 3 nuits",
+    !is.na(duree) & duree >= 3 & type_ghm == "C" ~ "Chirurgie adultes > 3 nuits",
+    TRUE ~ "Autre")
+  tpec <- unname(typo$DPEC_TO_TPEC[dpec]); tpec[is.na(tpec)] <- "Autre"
+  df$DPEC <- dpec; df$TPEC <- tpec
+  df
+}
+
+# --- E2. Catalogue partitionné par lettre ---------------------------------------------------
+# Disposition : <dir>/part_<L>.parquet (colonne `lettre` = substr(diag2, 1, 1) dans chaque part),
+# sidecar <dir>/_sidecar.yaml (ignoré par arrow::open_dataset : préfixe "_").
+lettre_de <- function(diag2) substr(as.character(diag2), 1, 1)
+nom_part_lettre <- function(lettre) sprintf("part_%s.parquet", lettre)
+
+# Lecteur UNIQUE du catalogue : dataset arrow filtré (lettres, colonnes) ; mock arrow (sans
+# open_dataset) : rbind des parts demandées ; monofichier : lecture dépréciée avec message.
+lire_catalogue <- function(dir_dataset, monofichier = NULL, lettres = NULL, colonnes = NULL){
+  if(dir.exists(dir_dataset) && length(list.files(dir_dataset, pattern = "^part_.*\\.parquet$")) > 0){
+    parts <- list.files(dir_dataset, pattern = "^part_.*\\.parquet$", full.names = TRUE)
+    if(!is.null(lettres)) parts <- parts[sub("^part_(.*)\\.parquet$", "\\1", basename(parts)) %in% lettres]
+    if(length(parts) == 0) return(NULL)
+    if(arrow_dataset_disponible()){
+      ds <- arrow::open_dataset(parts)
+      if(!is.null(colonnes)) ds <- dplyr::select(ds, dplyr::all_of(unique(c(colonnes))))
+      return(tibble::as_tibble(dplyr::collect(ds)))
+    }
+    out <- purrr::map(parts, function(p){ d <- tibble::as_tibble(arrow::read_parquet(p)); if(!is.null(colonnes)) d[, unique(colonnes), drop = FALSE] else d }) |> purrr::list_rbind()
+    return(out)
+  }
+  if(!is.null(monofichier) && file.exists(monofichier)){
+    message("lire_catalogue : lecture du MONOFICHIER ", basename(monofichier), " (déprécié : lancez etape_repartitionner_catalogue() pour un catalogue partitionné par lettre).")
+    d <- tibble::as_tibble(arrow::read_parquet(monofichier))
+    let <- if("lettre" %in% names(d)) as.character(d$lettre) else lettre_de(d$diag2)
+    if(!is.null(lettres)) d <- d[let %in% lettres, , drop = FALSE]
+    if(!is.null(colonnes) && "lettre" %in% colonnes && !"lettre" %in% names(d)) d$lettre <- lettre_de(d$diag2)
+    if(!is.null(colonnes)) d <- d[, unique(colonnes), drop = FALSE]
+    return(d)   # schéma du monofichier inchangé (pas de colonne lettre ajoutée d'office)
+  }
+  stop("lire_catalogue : ni dataset partitionné (" %+% dir_dataset %+% ") ni monofichier (" %+% monofichier %+% "). Lancez etape_catalogue() puis etape_repartitionner_catalogue().", call. = FALSE)
+}
+lettres_catalogue <- function(dir_dataset, monofichier = NULL){
+  if(dir.exists(dir_dataset)){
+    p <- list.files(dir_dataset, pattern = "^part_.*\\.parquet$")
+    if(length(p) > 0) return(sort(sub("^part_(.*)\\.parquet$", "\\1", p)))
+  }
+  if(!is.null(monofichier) && file.exists(monofichier)) return(sort(unique(lettre_de(lire_catalogue(dir_dataset, monofichier, colonnes = "diag2")$diag2))))
+  character(0)
+}
+
+# --- E3. Sélection quota_dp_fixe ----------------------------------------------------------
+# Partition des cages : exhaustive et exclusive, sinon stop
+verifier_populations <- function(populations, cages){
+  toutes <- unlist(populations)
+  dup <- unique(toutes[duplicated(toutes)]); manq <- setdiff(cages, toutes)
+  if(length(dup) > 0 || length(manq) > 0)
+    stop("POPULATIONS : partition des cages invalide", if(length(dup)) " ; en double : " %+% paste(dup, collapse = ", ") else "",
+         if(length(manq)) " ; absentes : " %+% paste(manq, collapse = ", ") else "", call. = FALSE)
+  invisible(TRUE)
+}
+population_de <- function(cage, populations){
+  m <- stats::setNames(rep(names(populations), lengths(populations)), unlist(populations))
+  unname(m[as.character(cage)])
+}
+# Budget par population au prorata du nb de DP (arrondi, dernier ajusté pour totaliser)
+repartir_budget_populations <- function(budget, nb_dp){
+  if(sum(nb_dp) == 0) return(stats::setNames(rep(0L, length(nb_dp)), names(nb_dp)))
+  b <- round(budget * nb_dp / sum(nb_dp)); b[length(b)] <- budget - sum(b[-length(b)])
+  stats::setNames(as.integer(b), names(nb_dp))
+}
+# Seed stable par (population, lettre)
+seed_selection <- function(seed, population, lettre, populations) as.integer(seed + 7e6 + 1e4 * match(population, names(populations)) + utf8ToInt(substr(lettre, 1, 1)))
+
+# Choix de k lignes distinctes d'un groupe, au poids, sans remise ; planchers par type d'unité
+# seulement si k >= nb de types présents (sinon désactivés, mention au rapport).
+choisir_lignes_dp <- function(d, k, col_poids = "poids", col_unite = "type_unite"){
+  k_eff <- min(k, nrow(d))
+  types <- unique(as.character(d[[col_unite]]))
+  planchers <- length(types) > 1 && k_eff >= length(types)
+  if(planchers){
+    idx <- integer(0)
+    for(u in types){ cand <- which(d[[col_unite]] == u); idx <- c(idx, if(length(cand) == 1) cand else cand[sample.int(length(cand), 1, prob = d[[col_poids]][cand])]) }
+    reste <- setdiff(seq_len(nrow(d)), idx)
+    if(k_eff - length(idx) > 0 && length(reste) > 0) idx <- c(idx, if(length(reste) == 1) reste else reste[sample.int(length(reste), k_eff - length(idx), prob = d[[col_poids]][reste])])
+  } else {
+    idx <- if(nrow(d) == 1) 1L else sample.int(nrow(d), k_eff, prob = d[[col_poids]])
+  }
+  list(lignes = d[idx, , drop = FALSE], planchers = planchers)
+}
+# Variantes : n_var = ceiling(X / k_eff) par ligne, dernière ligne tronquée pour totaliser X
+variantes_par_ligne <- function(k_eff, X){
+  if(k_eff == 0 || X <= 0) return(integer(0))
+  n_var <- as.integer(ceiling(X / k_eff)); v <- rep(n_var, k_eff)
+  v[k_eff] <- as.integer(X - n_var * (k_eff - 1))
+  v
+}
+# Sélection d'UNE population sur UNE lettre (df déjà filtré) : X par DP (plafonds DPEC par
+# (DP × DPEC plafonné), le reste du DP suit X), k lignes distinctes au poids sans remise,
+# n_var variantes par ligne. Retourne list(selection, stats).
+selection_quota_dp_fixe_lettre <- function(df, X, k, plafonds_dpec = list(), col_dp = "diag2", col_dpec = "DPEC", col_poids = "poids", col_unite = "type_unite"){
+  if(nrow(df) == 0) return(list(selection = df[0, ], stats = NULL))
+  df$.grp <- ifelse(df[[col_dpec]] %in% names(plafonds_dpec), df[[col_dpec]], ".reste")
+  cles <- unique(df[, c(col_dp, ".grp"), drop = FALSE])
+  out <- vector("list", nrow(cles)); st <- vector("list", nrow(cles))
+  for(i in seq_len(nrow(cles))){
+    d <- df[df[[col_dp]] == cles[[col_dp]][i] & df$.grp == cles$.grp[i], , drop = FALSE]
+    X_dp <- if(cles$.grp[i] == ".reste") X else min(X, as.integer(plafonds_dpec[[cles$.grp[i]]]))
+    ch <- choisir_lignes_dp(d, k, col_poids, col_unite)
+    nv <- variantes_par_ligne(nrow(ch$lignes), X_dp)
+    l <- ch$lignes; l$n_var <- nv; l <- l[l$n_var > 0, , drop = FALSE]
+    out[[i]] <- l
+    st[[i]] <- data.frame(dp = cles[[col_dp]][i], groupe = cles$.grp[i], lignes_disponibles = nrow(d), X_dp = X_dp, k_eff = nrow(ch$lignes),
+                          variantes = sum(nv), planchers_actifs = ch$planchers, plafonne = cles$.grp[i] != ".reste",
+                          manque_a_gagner = max(0L, X_dp - nrow(d)), stringsAsFactors = FALSE)
+  }
+  sel <- dplyr::bind_rows(out); sel$.grp <- NULL
+  list(selection = sel, stats = dplyr::bind_rows(st))
+}
+
+# Dédoublonnage souple des variantes d'une même ligne sur le jeu complet de DAS (ordre indifférent)
+dedoublonner_variantes <- function(df, col_combo = "diagnostic_associes"){
+  if(nrow(df) <= 1) return(df)
+  cle <- vapply(split_das(df[[col_combo]]), function(v) paste(sort(unique(v), method = "radix"), collapse = " "), character(1))
+  df[!duplicated(cle), , drop = FALSE]
+}
+
+# --- E4. Index des tables de référence (accès direct au lieu du filtre) ------------------
+cle_strate <- function(...) do.call(paste, c(lapply(list(...), as.character), sep = "\r"))
+indexer_ref_das <- function(ref){
+  cle <- cle_strate(ref$diag2, ref$mode_hospit, ref$sexe, ref$cage, ref$ghm2)
+  idx <- split(ref, cle)
+  structure(idx, class = c("index_ref_das", "list"))
+}
+indexer_ref_chronique <- function(ref_chro){
+  list(strate = structure(split(ref_chro$strate, cle_strate(ref_chro$strate$diag2, ref_chro$strate$sexe, ref_chro$strate$cage)), class = c("index_ref_chro", "list")),
+       repli  = structure(split(ref_chro$repli, cle_strate(ref_chro$repli$sexe, ref_chro$repli$cage)), class = c("index_ref_chro", "list")),
+       colonnes_strate = names(ref_chro$strate), colonnes_repli = names(ref_chro$repli))
+}
+vide_comme <- function(cols) tibble::as_tibble(stats::setNames(replicate(length(cols), character(0), simplify = FALSE), cols))
+
+# --- E5. Mémoire de session -------------------------------------------------------------
+memoire_session <- function(envs = list(globalenv = globalenv(), ETAPES_ENV = if(exists("ETAPES_ENV")) ETAPES_ENV else NULL, CACHE_E669 = if(exists("CACHE_E669")) CACHE_E669 else NULL), n_max = 30){
+  rows <- list()
+  for(nom_env in names(envs)){
+    e <- envs[[nom_env]]; if(is.null(e)) next
+    for(o in ls(e, all.names = TRUE)){
+      obj <- get(o, envir = e)
+      rows[[length(rows) + 1]] <- data.frame(env = nom_env, objet = o, classe = class(obj)[1], taille_mo = round(as.numeric(utils::object.size(obj)) / 1024^2, 2), stringsAsFactors = FALSE)
+    }
+  }
+  if(length(rows) == 0) return(data.frame(env = character(0), objet = character(0), classe = character(0), taille_mo = numeric(0)))
+  d <- do.call(rbind, rows); d <- d[order(-d$taille_mo), ]; rownames(d) <- NULL
+  print(utils::head(d, n_max), row.names = FALSE)
+  g <- gc(); cat(sprintf("gc() : utilisé %.2f Go ; pic %.2f Go (le RSS de R ne redescend pas toujours après gc() : Restart R avant une étape lourde)\n", sum(g[, 2]) / 1024, sum(g[, ncol(g)]) / 1024))
+  invisible(d)
+}
+
+# --- E6. Statistiques accumulées par lot (finalisation en flux) --------------------------
+acc_stats_init <- function() list(n = 0L, pivots = NULL, nb_das = NULL, top_das = NULL, e660 = NULL, imprecis_num = 0L, imprecis_den = 0L,
+                                  controles = c(doublons_categorie = 0L, diabete_hors_flag = 0L, i10_avec_hta_autres = 0L, poids_sous_seuil = 0L), e669_residuels = 0L)
+acc_stats_ajouter <- function(acc, df, pivots, codes_imprecis, hta_autres, seuil_pivot, cols_e669){
+  if(nrow(df) == 0) return(acc)
+  acc$n <- acc$n + nrow(df)
+  acc$pivots <- dplyr::distinct(dplyr::bind_rows(acc$pivots, dplyr::distinct(df[, intersect(pivots, names(df))])))
+  das <- split_das(df$diagnostic_associes)
+  acc$nb_das <- dplyr::bind_rows(acc$nb_das, tibble::tibble(cage = as.character(df$cage), nb_das = lengths(das)) |> dplyr::count(cage, nb_das, name = "n")) |>
+    dplyr::summarise(n = sum(n), .by = c(cage, nb_das))
+  acc$top_das <- dplyr::bind_rows(acc$top_das, tibble::tibble(cmd = rep(substr(df$ghm2, 1, 2), lengths(das)), das = unname(unlist(das))) |> dplyr::count(cmd, das, name = "n")) |>
+    dplyr::summarise(n = sum(n), .by = c(cmd, das))
+  acc$e660 <- dplyr::bind_rows(acc$e660, effectifs_e660(df, c("diag2", "diagnostic_associes"))) |> dplyr::summarise(n = sum(n), .by = code)
+  v <- unlist(das); acc$imprecis_num <- acc$imprecis_num + sum(v %in% codes_imprecis); acc$imprecis_den <- acc$imprecis_den + length(v)
+  cc <- controler_scenarios(df, hta_autres, seuil_pivot)
+  for(k in names(acc$controles)) acc$controles[[k]] <- acc$controles[[k]] + (if(is.na(cc[[k]])) 0L else cc[[k]])
+  acc$e669_residuels <- acc$e669_residuels + compter_e669(df, cols_e669)
+  acc
+}
+acc_stats_final <- function(acc, n_top = 30){
+  if(acc$n == 0) return(list(n = 0L, pivots = 0L, distribution = NULL, top_das = NULL, taux_imprecis = NA_real_, controles = as.list(acc$controles), e669_residuels = 0L, e660 = NULL))
+  nb <- acc$nb_das
+  distribution <- nb |> dplyr::summarise(n = sum(n), moy = round(sum(nb_das * n) / sum(n), 2), min = min(nb_das), q50 = { o <- order(nb_das); cs <- cumsum(n[o]); nb_das[o][which(cs >= sum(n) / 2)[1]] }, max = max(nb_das), .by = cage) |> dplyr::arrange(cage)
+  top <- acc$top_das |> dplyr::summarise(n = sum(n), .by = c(cmd, das)) |> dplyr::arrange(cmd, dplyr::desc(n), das) |> dplyr::mutate(rang = dplyr::row_number(), .by = cmd) |> dplyr::filter(rang <= n_top)
+  list(n = acc$n, pivots = nrow(acc$pivots), distribution = distribution, top_das = top,
+       taux_imprecis = if(acc$imprecis_den > 0) round(acc$imprecis_num / acc$imprecis_den, 4) else NA_real_,
+       controles = as.list(acc$controles), e669_residuels = acc$e669_residuels, e660 = acc$e660 |> dplyr::arrange(code))
 }

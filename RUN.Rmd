@@ -9,7 +9,9 @@ output: html_notebook
 knitr::opts_chunk$set(eval = FALSE)
 ```
 
-Version notebook de `RUN.md` (qui reste la référence texte). Fichiers du pipeline :
+Version notebook de `RUN.md` (qui reste la référence texte) pour l'AMONT ; la phase aval
+(exploitation du catalogue parquet : repartitionnement, sélection de campagne, palier de débit,
+campagnes parallèles, habillage, finalisation) a son propre notebook : `RUN_aval.Rmd`. Fichiers du pipeline :
 `config_v8.R` (config + profils), `helpers_v8.R`, `etapes_v8.R` (chaînes base + fonctions
 d'étape + `etat_pipeline()`), `extraction_associations_codes_v8.R` (entrée extraction),
 `tirage_scenarios_v8.R` (entrée tirage, **sans base**). Journal : `MODIFICATIONS_V8.md`.
@@ -92,19 +94,43 @@ etape_catalogue(ans = ANS_CHOISIES, etbs = ETBS_CHOISIS)
 cat(readLines(list.files(EXPORTS_DIR, "^rapport_extraction", full.names = TRUE)[1]), sep = "\n")
 ```
 
-## 3.3 Sélection
+## 3.2b Production : repartitionner + typer le catalogue (une fois, sans base)
+
+Le catalogue de production (21,6 M lignes) ne doit JAMAIS être reconstruit sur ce périmètre.
+Parts par lettre de DP + DPEC/TPEC (`referentiels/typologie_sejours.yaml`, version tracée) ;
+monofichier renommé `.ancien`. Restart R avant.
+
+```{r repartitionner}
+etape_repartitionner_catalogue()
+memoire_session()
+```
+
+## 3.3 Sélection de campagne
+
+`quota_dp_fixe` (production) : k = `NB_LIGNES_PAR_DP` lignes distinctes par DP, variantes
+déduites, par population, plafonds `PLAFONDS_DPEC`. `NB_CRH_CIBLE` est un ordre de grandeur.
 
 ```{r selection}
-etape_selection_longs()    # diagnostic : quota_dp, 1 000 ; production : catalogue_complet ; budget = 100000L pour un palier
+etape_selection_longs()    # diagnostic : quota_dp, 1 000 ; production : quota_dp_fixe, NB_CRH_CIBLE
 ```
 
-## 3.4 Tirage DAS par chunks (reprise : relancer tel quel, mêmes paramètres de découpage)
+## 3.3b Palier 100 k : mesurer le débit
+
+```{r palier_100k}
+writeLines("NB_CRH_CIBLE <- 100000L", "palier.R"); Sys.setenv(SCENARIOS_PMSI_SURCHARGE = normalizePath("palier.R"))
+source("tirage_scenarios_v8.R")   # session (ETAPES_SEULEMENT)
+etape_selection_longs(); etape_tirage_das_longs()   # débit (scénarios/s) imprimé par chunk
+# extrapolation : temps campagne ≈ volume_attendu / débit ; sessions parallèles ≈ ceiling(temps / durée acceptable)
+```
+
+## 3.4 Tirage DAS par chunks (reprise : relancer tel quel ; parallélisme par plages)
 
 ```{r tirage_das}
-etape_tirage_das_longs()
+etape_tirage_das_longs()                                                  # tout
+# etape_tirage_das_longs(chunk_range = c(1, 10), populations = "adulte")  # une session par plage disjointe
 ```
 
-## 3.5 Habillage admin
+## 3.5 Habillage admin (flux par lots)
 
 ```{r habillage}
 etape_habillage_longs()
@@ -149,7 +175,10 @@ if (JE_CONFIRME) {
 - Refs : sautées si le parquet existe ; `etape_refs(forcer = TRUE)` après changement d'`AN_REF`,
   d'un `SEUIL_REF_*`, de `CONVERSION_E669` ou correction amont.
 - Chunks / sélection / `meta_tirage.yaml` : reprise telle quelle ; à vider après changement de
-  `MODE_SELECTION`, `BUDGET_TOTAL_LONGS`, `QUOTA_MIN_PAR_UNITE`, `SEED` ou du catalogue.
+  `MODE_SELECTION`, `NB_CRH_CIBLE`, `NB_LIGNES_PAR_DP`, `QUOTA_MIN_PAR_UNITE`, `SEED`, de la
+  version de typologie ou du catalogue. Chunks par population (`chunks/<population>/`).
+- Hygiène mémoire : `memoire_session()` ; **Restart R avant chaque étape lourde** (le RSS de R
+  ne redescend pas après `gc()` ; l'état utile est sur disque, `etat_pipeline()` réoriente).
 - Chunking dynamique : `taille_chunk(n) = max(CHUNK_SIZE_MIN, ceiling(n / NB_CHUNKS_MAX))`
   (au plus 50 chunks par tirage, plancher 500 ; `CHUNK_SIZE_FIXE` pour imposer une taille).
   Sidecar `<prefixe>_chunks_meta.yaml` par dossier : reprise acceptée uniquement avec les mêmes

@@ -3,7 +3,8 @@
 Fichiers : `config_v8.R` (config + profils), `helpers_v8.R` (helpers purs), `etapes_v8.R`
 (chaînes base déplacées telles quelles + fonctions d'étape + `etat_pipeline()`),
 `extraction_associations_codes_v8.R` (script d'entrée extraction : n'appelle que les étapes),
-`tirage_scenarios_v8.R` (script d'entrée tirage, **sans base**). Version notebook : `RUN.Rmd`.
+`tirage_scenarios_v8.R` (script d'entrée tirage, **sans base**). Notebooks : `RUN.Rmd` (amont : extraction,
+diagnostic, courts) et `RUN_aval.Rmd` (exploitation du catalogue parquet : repartitionnement, campagnes).
 Spécification : `SPEC_V8.md` ; journal : `MODIFICATIONS_V8.md`.
 
 Variables d'environnement : `SCENARIOS_PMSI_PATH` (racine du projet), `SCENARIOS_PMSI_PROFIL`
@@ -23,12 +24,17 @@ actionnable (« lancez etape_X d'abord », « fichier Y manquant ») si elle est
 | `etape_prep_data(ans = NULL)` | extraction (base) | tables temporaires `prep_data_<an>` (et `prep_das_chro_<AN_REF>` si une ref chronique manque) ; `partiels_meta.yaml` | à chaque nouvelle session avant refs / partiels (les tables temporaires disparaissent à la déconnexion) ; `ans` force des années | plan = partiels et refs manquants ; garde-fou `partiels_meta.yaml` (K, NBDA_MAX, DUREE_LONGS, PIVOTS_LONGS) |
 | `etape_refs(forcer = FORCER_REFS)` | extraction (base) | 10 refs parquet dans `EXPORTS_DIR` (dont `distribution_e660`, `pivots_courts`, `v_admin_*`) | après changement d'`AN_REF`, des seuils de refs, de `CONVERSION_E669` (`forcer = TRUE`) | ref sautée si son parquet existe |
 | `etape_partiels_longs(iterations = NULL)` | extraction (base) | `PARTIELS_DIR/catalogue_partiel_<etbs>_<an>.parquet` manquants ; `diagnostic_apports.csv` ; `recouvrement.csv` | ajout d'années / de catégories au plan ; `iterations = data.frame(etbs, an)` pour une itération isolée (supprimer son partiel pour le recalculer) | partiel sauté s'il existe ; partiels en codes bruts, partagés entre profils |
-| `etape_catalogue(ans = ANS_HISTORIQUE, etbs = TYPES_ETBS_LONGS)` | extraction (**sans base**) | `catalogue_longs_seuil.parquet` + `_meta.yaml` (trace du périmètre passé), `rapport_extraction_v8_<date>.txt`, `diagnostic_memoire.csv` | **décision de périmètre** : relancer avec les `ans`/`etbs` retenus | agrégation deux étages hors RAM depuis les partiels du périmètre ; conversion E669 puis seuil |
+| `etape_catalogue(ans = ANS_HISTORIQUE, etbs = TYPES_ETBS_LONGS)` | extraction (**sans base**) | `catalogue_longs_seuil.parquet` + `_meta.yaml` (trace du périmètre passé), `rapport_extraction_v8_<date>.txt`, `diagnostic_memoire.csv` | **décision de périmètre** : relancer avec les `ans`/`etbs` retenus. **Le catalogue de production (21,6 M lignes) existe : ne JAMAIS le reconstruire sur ce périmètre** | agrégation deux étages hors RAM depuis les partiels du périmètre ; conversion E669 puis seuil |
+| `etape_repartitionner_catalogue()` | aval (**sans base**) | `catalogue_longs_seuil/part_<L>.parquet` (par lettre de DP, + `lettre`, `DPEC`, `TPEC`) + `_sidecar.yaml` ; monofichier renommé `.ancien` | une fois par catalogue, et après changement de version de `typologie_sejours.yaml` (le garde-fou l'impose) | idempotente ; lecture par morceaux de lettres |
 | `etape_tirage_courts()` | tirage | `chunks/courts_chunk_*.parquet` (+ sidecar `courts_chunks_meta.yaml`), `scenarios_courts_v8_<date>.parquet` | une fois par jeu de refs (AN_REF uniquement) | chunks présents sautés (reprise bit à bit, mêmes paramètres de découpage exigés) |
-| `etape_selection_longs(budget = BUDGET_TOTAL_LONGS, mode = MODE_SELECTION)` | tirage | `selection_longs.parquet` (quota_dp), `selection_longs_effectifs.csv`, `meta_tirage.yaml` | changement de budget / mode : vider d'abord chunks + sélection + méta (garde-fou `meta_tirage.yaml`) | sélection relue si présente, jamais re-tirée |
-| `etape_tirage_das_longs()` | tirage | `chunks/longs_chunk_*.parquet` (+ sidecar `longs_chunks_meta.yaml`), assemblé en mémoire de session | reprise après plantage : relancer telle quelle | chunks présents sautés ; sélection relue si la session est neuve ; mêmes paramètres de découpage exigés |
-| `etape_habillage_longs()` | tirage | scénarios habillés en mémoire de session (jointure `v_admin_longs.parquet` relu, jamais `prep_data`) | après `etape_tirage_das_longs()` ; relit les chunks si la session est neuve | — |
-| `etape_finalisation()` | tirage | `scenarios_longs_tirage_v8_<date>.parquet`, `rapport_v8_<date>.txt`, `echantillon_revue.csv`, `top30_das_par_cmd.csv` | après habillage ; reconstruit ce qui manque en session (chunks, stats des courts depuis leur parquet) | — |
+| `etape_selection_longs(budget = NB_CRH_CIBLE, mode = MODE_SELECTION, k = NB_LIGNES_PAR_DP)` | tirage | **quota_dp_fixe** (production) : `selection_longs/<population>/part_<L>.parquet`, `selection_longs_effectifs.csv`, `selection_longs_stats_dp.csv`, `meta_tirage.yaml` par population + global ; quota_dp (diagnostic) : `selection_longs.parquet` | changement de budget / mode / k : vider d'abord chunks + sélection + méta (garde-fou `meta_tirage.yaml`) | sélection relue si présente, jamais re-tirée ; `catalogue_complet` retiré (stop si budget < catalogue) |
+| `etape_tirage_das_longs(chunk_range = NULL, populations = …)` | tirage | `chunks/<population>/longs_chunk_*.parquet` (+ sidecar) ; rien en RAM (fixe) | reprise : relancer telle quelle ; **parallélisme** : une session par plage `chunk_range = c(i, j)` disjointe, même dossier | chunks présents sautés ; écriture atomique (.tmp) ; `ref_das_aigu` indexé une fois ; débit imprimé par chunk |
+| `etape_habillage_longs(populations = …)` | tirage | `habille/<population>/lot_*.parquet` (jointure `v_admin_longs.parquet` relu par lots de `LOT_CHUNKS_FINALISATION` chunks, DPEC/TPEC recalculés) | après un jeu de chunks complet (stop sinon) | réécrit les lots |
+| `etape_finalisation(fusionner = NULL, populations = …)` | tirage | `scenarios_longs_tirage_v8_<date>/<population>/part_*.parquet` (+ monofichier fusionné si volume ≤ `SEUIL_EXPORT_MONOFICHIER` ou `fusionner = TRUE`), `rapport_v8_<date>.txt` (réalisé vs cible, doublons éliminés, manque à gagner), `echantillon_revue.csv`, `top30_das_par_cmd.csv` | après habillage ; relecture des lots en flux, contrôles agrégés par lot | — |
+
+`memoire_session()` : objets par taille (Mo) dans globalenv, `ETAPES_ENV` et `CACHE_E669`, triés,
+puis `gc()`. Discipline : **Restart R avant chaque étape lourde** (le RSS de R ne redescend pas
+après `gc()` ; l'état utile est sur disque, `etat_pipeline()` réoriente).
 
 `etat_pipeline()` : tableau de bord FAIT / PARTIEL / À FAIRE par étape pour le profil courant,
 avec preuves (partiels présents / attendus, refs / 10, catalogue + date + périmètre, sélection +
@@ -81,6 +87,29 @@ courts sont repris dans le rapport de `etape_finalisation()`.
    rapport (critère : « TOTAL anomalies = 0 », dont ^E669 résiduels), `echantillon_revue.csv`
    (50 scénarios, revue humaine DIM avant production), `top30_das_par_cmd.csv`.
 
+## Séquence PRODUCTION (campagnes itératives, mode `quota_dp_fixe`)
+
+Doctrine : représentativité des DIAGNOSTICS (DP) avant celle des situations cliniques ; la
+diversité des contextes se reconstituera ENTRE les campagnes (registre, chantier suivant).
+`NB_CRH_CIBLE` (500 000 par défaut) est un ordre de grandeur, pas un engagement : le réalisé est
+inférieur (doublons éliminés, chiffrés au rapport).
+
+1. **Repartitionner + typer, une fois** : `etape_repartitionner_catalogue()` (monofichier →
+   parts par lettre + DPEC/TPEC, typologie `referentiels/typologie_sejours.yaml` versionnée ;
+   monofichier renommé `.ancien`). Toute lecture du catalogue passe ensuite par `lire_catalogue()`.
+2. **Sélection de campagne** : `etape_selection_longs()` (`NB_CRH_CIBLE`, `NB_LIGNES_PAR_DP = 1`) :
+   par population (`POPULATIONS`, budget au prorata des DP), k lignes distinctes par DP au poids
+   sans remise, variantes déduites, plafonds `PLAFONDS_DPEC` par (DP × DPEC), planchers d'unités
+   désactivés à k = 1 (mention au rapport). Lettre par lettre : pic RAM = une lettre.
+3. **Palier 100 k qui MESURE le débit** : surcharge `NB_CRH_CIBLE <- 100000L`, puis
+   `etape_tirage_das_longs()` ; le débit (scénarios/s) est imprimé par chunk. Extrapolation :
+   temps campagne ≈ volume_attendu / débit ; sessions parallèles suggérées ≈ ceiling(temps / durée
+   de session acceptable), plages `chunk_range` disjointes.
+4. **Campagne parallèle** : une session par plage et par population, même dossier
+   (`etape_tirage_das_longs(chunk_range = c(i, j), populations = "adulte")`), sidecar partagé,
+   écriture atomique. Puis `etape_habillage_longs()` et `etape_finalisation()` (flux par lots).
+   Restart R entre chaque étape.
+
 Passage diagnostic → production : éditer le bloc `production` de `config_v8.R` (ANS_HISTORIQUE,
 TYPES_ETBS_LONGS) d'après apports + recouvrement, puis `SCENARIOS_PMSI_PROFIL=production` et les
 mêmes étapes ; les partiels sont réutilisés, seules les refs sont recalculées dans `exports/`
@@ -99,8 +128,12 @@ mêmes étapes ; les partiels sont réutilisés, seules les refs sont recalculé
 - Refs (`exports*/`) : sautées si le parquet existe ; `etape_refs(forcer = TRUE)` après changement
   d'`AN_REF`, d'un `SEUIL_REF_*`, de `CONVERSION_E669` / `BARE_E669_DEFAUT` ou correction amont.
 - Chunks / sélection / `meta_tirage.yaml` : reprise après plantage telle quelle (identité bit à bit par
-  seed par chunk) ; à vider après changement de `MODE_SELECTION`, `BUDGET_TOTAL_LONGS`,
-  `QUOTA_MIN_PAR_UNITE`, `SEED` ou du catalogue (le garde-fou `meta_tirage.yaml` le demande).
+  seed par chunk) ; à vider après changement de `MODE_SELECTION`, `NB_CRH_CIBLE`, `NB_LIGNES_PAR_DP`,
+  `QUOTA_MIN_PAR_UNITE`, `SEED`, de la version de typologie ou du catalogue (le garde-fou
+  `meta_tirage.yaml` le demande). Chunks par population dans `chunks/<population>/`.
+- Catalogue partitionné (`catalogue_longs_seuil/`) : sidecar avec version de typologie ; changer
+  la typologie ⇒ supprimer le dossier, restaurer le `.ancien` en `catalogue_longs_seuil.parquet`,
+  relancer `etape_repartitionner_catalogue()`.
 - **Chunking dynamique** : la taille des chunks est calculée par les données,
   `taille_chunk(n) = max(CHUNK_SIZE_MIN, ceiling(n / NB_CHUNKS_MAX))` — au plus `NB_CHUNKS_MAX` (50)
   chunks par tirage, plancher `CHUNK_SIZE_MIN` (500) ; `CHUNK_SIZE_FIXE` (NA par défaut) impose une

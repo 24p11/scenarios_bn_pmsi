@@ -1,0 +1,42 @@
+# typologie_sejours.yaml — typologie DPEC (détail) / TPEC (type de prise en charge) des séjours.
+# Listes et libellés recopiés TELS QUELS du code STREAM (with_typologie, polars) ; consommé par
+# typologie_sejour() (helpers_v8.R, section E), traduction fidèle dont l'ORDRE fait la précédence :
+# séjours complexes, obstétrique, néonatalogie, séances CMD 28, médecine M/Z (HDJ puis durée),
+# chirurgie C / interventionnel K (borne 3 nuits), sinon "Autre".
+# La `version` est tracée dans le sidecar du catalogue repartitionné : la changer impose
+# etape_repartitionner_catalogue(). Chevauchement BB_MED / BB_CHIR sur 15M10/11/13/14 : inoffensif,
+# l'ordre prime (BB_MED testé avant BB_CHIR).
+version: "2026-09-16-b"
+RACINES_GREFFES_CART: [27Z02, 27Z03]
+RACINES_TRANSPLANT: [27C02, 27C03, 27C04, 27C05, 27C06, 27C07]
+RACINES_IMG_FC: [14Z04, 14C05, 14C06, 14C09, 14Z10, 14Z15, 14Z09]
+GHM_ACC_NORMAL: [14C03A, 14C07A, 14C08A, 14Z11A, 14Z12A, 14Z13A, 14Z13T, 14Z14A, 14Z14T]
+RACINES_ACC_PATHO: [14C07, 14C08, 14Z10, 14Z11, 14Z12, 14Z13, 14Z14]
+GHM_BB_NORMAL: [15M05A, 15M06A, 15M07A, 15M08A, 15M09A, 15M10A, 15M11A, 15M13A, 15M14A]
+RACINES_BB_MED: [15M05, 15M06, 15M07, 15M08, 15M09, 15M10, 15M11, 15M13, 15M14]
+RACINES_BB_CHIR: [15C02, 15C03, 15C04, 15C05, 15C06, 15M10, 15M11, 15M13, 15M14]
+RACINES_AUTRE_NEONAT: [15M02, 15M03, 15M04]
+# DPEC -> TPEC ; défaut "Autre" pour tout DPEC absent (replace_strict(default = "Autre"))
+DPEC_TO_TPEC:
+  "Séances simples": "Médecine"
+  "Séance polysomno": "Médecine"
+  "Séance chimiothérapie simple adulte": "Médecine"
+  "HDJ médecine adultes": "Médecine"
+  "Médecine adultes > 3 nuits": "Médecine"
+  "Médecine adultes < 3 nuits": "Médecine"
+  "Interventionnel adultes < 3 nuits": "Chirurgie et interventionnel"
+  "Chirurgie adultes < 3 nuits": "Chirurgie et interventionnel"
+  "Interventionnel adultes > 3 nuits": "Chirurgie et interventionnel"
+  "Chirurgie adultes > 3 nuits": "Chirurgie et interventionnel"
+  "Greffes de moelle, CAR-T Cells": "Séjours complexes"
+  "Transplantations": "Séjours complexes"
+  "Brûlés": "Séjours complexes"
+  "IVG": "Obstétrique"
+  "IMG & fausses couches": "Obstétrique"
+  "Accouchement normal mère": "Obstétrique"
+  "Accouchement pathologique mère": "Obstétrique"
+  "Bébé normal": "Néonatalogie"
+  "Bébé néonat med": "Néonatalogie"
+  "Bébé néonat chir": "Néonatalogie"
+  "Autre néonat": "Néonatalogie"
+  "Autre": "Autre"
