@@ -1172,7 +1172,7 @@ lire_catalogue <- function(dir_dataset, monofichier = NULL, lettres = NULL, colo
     if(!is.null(colonnes)) d <- d[, unique(colonnes), drop = FALSE]
     return(d)   # schéma du monofichier inchangé (pas de colonne lettre ajoutée d'office)
   }
-  stop("lire_catalogue : ni dataset partitionné (" %+% dir_dataset %+% ") ni monofichier (" %+% monofichier %+% "). Lancez etape_catalogue() puis etape_repartitionner_catalogue().", call. = FALSE)
+  stop(message_catalogue_absent("lire_catalogue", dirname(dir_dataset), dirname(dirname(dir_dataset))), call. = FALSE)
 }
 lettres_catalogue <- function(dir_dataset, monofichier = NULL){
   if(dir.exists(dir_dataset)){
@@ -1317,4 +1317,51 @@ acc_stats_final <- function(acc, n_top = 30){
   list(n = acc$n, pivots = nrow(acc$pivots), distribution = distribution, top_das = top,
        taux_imprecis = if(acc$imprecis_den > 0) round(acc$imprecis_num / acc$imprecis_den, 4) else NA_real_,
        controles = as.list(acc$controles), e669_residuels = acc$e669_residuels, e660 = acc$e660 |> dplyr::arrange(code))
+}
+
+## ---- F. Finitions exploitation : migration inter-profils, message catalogue absent ----
+CLES_Q13 <- c("AN_REF", "SEUIL_REF_DAS", "SEUIL_REF_IMPRECIS", "SEUIL_REF_PAIRES", "CONVERSION_E669", "BARE_E669_DEFAUT")
+
+# Produits copiables d'un profil à l'autre (catalogue + méta + refs) ; noms de base relatifs à EXPORTS_DIR.
+fichiers_migration_catalogue <- function(noms_refs = NOMS_REFS){
+  c("catalogue_longs_seuil.parquet", "catalogue_longs_seuil_meta.yaml", nom_ref(noms_refs))
+}
+
+# Localise un catalogue dans les dossiers d'exports (exports*/) d'un PATH_RESULTS, hors dossier courant.
+# Retourne un data.frame (dossier, monofichier, dataset, meta) — 0 ligne si rien.
+localiser_catalogue <- function(path_results, exports_dir_courant = NULL){
+  dirs <- list.dirs(path_results, recursive = FALSE, full.names = TRUE)
+  dirs <- dirs[grepl("^exports", basename(dirs))]
+  if(!is.null(exports_dir_courant)) dirs <- dirs[normalizePath(dirs, mustWork = FALSE) != normalizePath(sub("/$", "", exports_dir_courant), mustWork = FALSE)]
+  rows <- lapply(dirs, function(d){
+    mono <- file.exists(file.path(d, "catalogue_longs_seuil.parquet"))
+    ds <- dir.exists(file.path(d, "catalogue_longs_seuil")) && length(list.files(file.path(d, "catalogue_longs_seuil"), pattern = "^part_")) > 0
+    if(!mono && !ds) return(NULL)
+    data.frame(dossier = d, monofichier = mono, dataset = ds, meta = file.exists(file.path(d, "catalogue_longs_seuil_meta.yaml")), stringsAsFactors = FALSE)
+  })
+  rows <- rows[!vapply(rows, is.null, logical(1))]
+  if(length(rows) == 0) return(data.frame(dossier = character(0), monofichier = logical(0), dataset = logical(0), meta = logical(0)))
+  do.call(rbind, rows)
+}
+
+# Condition de validité Q13 d'une copie inter-profils : mêmes AN_REF, SEUIL_REF_*, CONVERSION_E669,
+# BARE_E669_DEFAUT entre la config source (ex. méta du catalogue) et la config courante.
+condition_q13 <- function(config_source, config_courante, cles = CLES_Q13){
+  diff <- cles[vapply(cles, function(k) !identical(as.character(unlist(config_source[[k]])), as.character(unlist(config_courante[[k]]))), logical(1))]
+  list(ok = length(diff) == 0, differences = diff,
+       message = if(length(diff) == 0) "condition Q13 satisfaite : copie sûre" else
+         "condition Q13 NON satisfaite (" %+% paste(sprintf("%s : source = %s, courant = %s", diff,
+           vapply(diff, function(k) paste(unlist(config_source[[k]]), collapse = ","), character(1)),
+           vapply(diff, function(k) paste(unlist(config_courante[[k]]), collapse = ","), character(1))), collapse = " ; ") %+%
+         ") : ne pas copier les refs, lancez etape_refs(forcer = TRUE) après copie du seul catalogue, ou recalculez.")
+}
+
+# Message à trois branches quand le catalogue longs est absent du dossier d'exports effectif.
+message_catalogue_absent <- function(etape, exports_dir, path_results){
+  autres <- tryCatch(localiser_catalogue(path_results, exports_dir), error = function(e) NULL)
+  ou <- if(!is.null(autres) && nrow(autres) > 0) " (trouvé dans : " %+% paste(autres$dossier, collapse = ", ") %+% ")" else ""
+  sprintf(paste0("%s : catalogue_longs_seuil.parquet absent de %s (ni catalogue_longs_seuil/ partitionné). ",
+                 "S'il existe sous un autre profil (exports_diagnostic/ <-> exports/)%s, copiez-le — chunk de migration de RUN_aval.Rmd ou RUN.md, règles de cache, ",
+                 "condition Q13 (mêmes AN_REF, SEUIL_REF_DAS, SEUIL_REF_IMPRECIS, SEUIL_REF_PAIRES, CONVERSION_E669, BARE_E669_DEFAUT) — ; ",
+                 "sinon lancez etape_catalogue() (extraction, coûteux)."), etape, sub("/$", "", exports_dir), ou)
 }

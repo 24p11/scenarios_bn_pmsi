@@ -662,6 +662,13 @@ DIR_CHUNKS_POP <- function(pop) file.path(CHUNKS_DIR, pop)
 DIR_HABILLE    <- function(pop) file.path(EXPORTS_DIR, "habille", pop)
 DIR_FINAL      <- function(pop = NULL) if(is.null(pop)) file.path(EXPORTS_DIR, "scenarios_longs_tirage_v8_" %+% DATE_TAG) else file.path(EXPORTS_DIR, "scenarios_longs_tirage_v8_" %+% DATE_TAG, pop)
 seed_population <- function(pop) as.integer(SEED + 1e5 + 1e4 * match(pop, names(POPULATIONS)))   # seed de tirage dérivé par population
+# diagnostic_memoire.csv : journal mémoire de la session, écrit (idempotent, mêmes lignes) en fin
+# d'etape_refs, d'etape_partiels_longs et d'etape_catalogue ; character(0) si aucune mesure.
+ecrire_diagnostic_memoire <- function(){
+  j <- get("journal", envir = MEMOIRE_ENV)
+  if(is.null(j)) return(character(0))
+  f <- file.path(EXPORTS_DIR, "diagnostic_memoire.csv"); utils::write.csv(j, f, row.names = FALSE); f
+}
 charger_typo <- function(){ if(!exists("typo", envir = ETAPES_ENV)) assign("typo", charger_typologie(PATH_TYPOLOGIE), envir = ETAPES_ENV); get("typo", envir = ETAPES_ENV) }
 chemin_export <- function(nom) file.path(EXPORTS_DIR, nom %+% "_v8_" %+% DATE_TAG %+% ".parquet")
 FICHIER_PARTIELS_META <- function() file.path(PARTIELS_DIR, "partiels_meta.yaml")
@@ -729,7 +736,8 @@ etape_refs <- function(forcer = FORCER_REFS){
     fichiers <- c(fichiers, fichier)
   }
   purger_cache_e669()  # P3.2 : au cas où ref_das_chronique a été calculée sans distribution_e660
-  banniere_fin("etape_refs", t0, fichiers)
+  f_mem <- ecrire_diagnostic_memoire()
+  banniere_fin("etape_refs", t0, c(fichiers, f_mem))
 }
 
 # Étape 3 — partiels des séjours longs : calcul/écriture des partiels manquants (boucle sans
@@ -775,7 +783,8 @@ etape_partiels_longs <- function(iterations = NULL){
   cat("== Recouvrement entre partiels ==\n")
   recouvrement <- mesurer_recouvrement(PAIRES_RECOUVREMENT)
   f_rec <- file.path(EXPORTS_DIR, "recouvrement.csv")
-  banniere_fin("etape_partiels_longs", t0, c(fichiers, f_apports, if(file.exists(f_rec)) f_rec))
+  f_mem <- ecrire_diagnostic_memoire()
+  banniere_fin("etape_partiels_longs", t0, c(fichiers, f_apports, if(file.exists(f_rec)) f_rec, f_mem))
 }
 
 mesurer_recouvrement <- function(paires){
@@ -902,8 +911,7 @@ etape_catalogue <- function(ans = ANS_HISTORIQUE, etbs = TYPES_ETBS_LONGS){
   lignes_rx <- c(lignes_rx, "", "== 4. Apports par partiel (diagnostic_apports.csv) ==", fmt_df(lire_csv(file.path(EXPORTS_DIR, "diagnostic_apports.csv"))),
                  "", "== 5. Recouvrement entre partiels (recouvrement.csv) ==", fmt_df(lire_csv(file.path(EXPORTS_DIR, "recouvrement.csv"))),
                  "", "== 6. Mémoire (diagnostic_memoire.csv ; SEUIL_ALERTE_GO = " %+% SEUIL_ALERTE_GO %+% ") ==", fmt_df(get("journal", envir = MEMOIRE_ENV)))
-  f_mem <- file.path(EXPORTS_DIR, "diagnostic_memoire.csv")
-  utils::write.csv(get("journal", envir = MEMOIRE_ENV), f_mem, row.names = FALSE)
+  f_mem <- ecrire_diagnostic_memoire()
   f_rx <- file.path(EXPORTS_DIR, "rapport_extraction_v8_" %+% DATE_TAG %+% ".txt")
   writeLines(lignes_rx, f_rx)
   cat("Rapport d'extraction : ", f_rx, "\n", sep = "")
@@ -927,7 +935,7 @@ etape_repartitionner_catalogue <- function(){
     cat("catalogue partitionné déjà présent (", length(side$nb_lignes_par_part), " parts, typologie ", side$version_typologie, ") : sauté\n", sep = "")
     return(banniere_fin("etape_repartitionner_catalogue", t0, character(0)))
   }
-  exiger_fichiers(mono, "etape_repartitionner_catalogue", "etape_catalogue()")
+  if(!file.exists(mono)) stop(message_catalogue_absent("etape_repartitionner_catalogue", EXPORTS_DIR, PATH_RESULTS), call. = FALSE)
   f_meta <- file.path(EXPORTS_DIR, "catalogue_longs_seuil_meta.yaml")
   meta <- if(file.exists(f_meta)) yaml::read_yaml(f_meta) else NULL
   if(!dir.exists(dir_ds)) dir.create(dir_ds, recursive = TRUE)
@@ -966,7 +974,7 @@ charger_contexte_tirage <- function(requis, etape){
   if("catalogue" %in% requis){
     requis <- setdiff(requis, "catalogue")
     if(!(dir.exists(DIR_CATALOGUE()) && length(list.files(DIR_CATALOGUE(), pattern = "^part_")) > 0) && !file.exists(MONO_CATALOGUE()))
-      stop(etape %+% " : catalogue longs absent (ni " %+% DIR_CATALOGUE() %+% "/ ni " %+% basename(MONO_CATALOGUE()) %+% "). Lancez etape_catalogue() puis etape_repartitionner_catalogue() d'abord.", call. = FALSE)
+      stop(message_catalogue_absent(etape, EXPORTS_DIR, PATH_RESULTS), call. = FALSE)
   }
   exiger_fichiers(file.path(EXPORTS_DIR, requis), etape, "extraction (etape_refs / etape_catalogue)")
   if(!exists("ctx", envir = ETAPES_ENV)){
@@ -1085,6 +1093,8 @@ etape_selection_longs <- function(budget = NB_CRH_CIBLE, mode = MODE_SELECTION, 
         metas_pop[[pop]] <- yaml::read_yaml(f_meta_pop); next
       }
       cat(sprintf("== Sélection %s : %d DP, budget %d, X = %d par DP, k = %d ==\n", pop, nb_dp[[pop]], budgets[[pop]], X[[pop]], k))
+      if(X[[pop]] * nb_dp[[pop]] > budgets[[pop]]) cat(sprintf("   minimum %d par DP (X = ceiling(budget / nb_DP)) : volume final = X × nb_DP = %d > budget %d (plafonds en moins)\n", X[[pop]], X[[pop]] * nb_dp[[pop]], budgets[[pop]]))
+      if(k < 2) cat("   planchers par type d'unité INACTIFS au quota courant (k = ", k, " < nb de types) : la couverture des unités relèvera du registre inter-campagnes\n", sep = "")
       stats_pop <- NULL; eff <- NULL; vol <- 0L
       for(L in lettres){
         d <- lire_catalogue(dir_ds, mono, L)
@@ -1519,7 +1529,8 @@ etat_pipeline <- function(){
   n_p <- sum(!plan$iterations$a_faire)
   ajouter("etape_partiels_longs", statut3(n_p, nrow(plan$iterations)), sprintf("partiels présents %d / %d attendus du plan (%s × %s)%s", n_p, nrow(plan$iterations),
           paste(TYPES_ETBS_LONGS, collapse = ","), paste(range(ANS_HISTORIQUE), collapse = "-"),
-          if(n_p < nrow(plan$iterations)) " ; manquants : " %+% paste(plan$iterations$fichier[plan$iterations$a_faire], collapse = ", ") else ""))
+          if(n_p < nrow(plan$iterations)) " ; manquants : " %+% paste(plan$iterations$fichier[plan$iterations$a_faire], collapse = ", ") else "") %+%
+            " ; diagnostic_memoire.csv : " %+% if(file.exists(file.path(EXPORTS_DIR, "diagnostic_memoire.csv"))) "présent" else "absent")
   # 4. catalogue
   m <- lire_yaml(file.path(EXPORTS_DIR, "catalogue_longs_seuil_meta.yaml"))
   ds_ok <- dir.exists(DIR_CATALOGUE()) && length(list.files(DIR_CATALOGUE(), pattern = "^part_")) > 0

@@ -204,9 +204,9 @@ Tous dans les **helpers purs** (§0.3 : « là où tu peux écrire du code neuf 
 
 - `referentiels.R` : B11 ; `comp_sat_diab <- codes_comp_sat_diab` ; `neo_codes_diabete` (§5.10). Rien d'autre.
 - `referentiels/exclusions_paires.yaml` : créé (§6.4), 4 paires évidentes, structure `- [A, B]`.
-- `tests/test_helpers.R` : §8.1 + briefs industrialisation §8, conversion §7, mémoire, orchestration, chunking dynamique et aval production, 269 assertions (`stopifnot`, sans testthat). Source `config_v8.R` puis `helpers_v8.R`. Repli arrow par paquet mock (section 11).
+- `tests/test_helpers.R` : §8.1 + briefs industrialisation §8, conversion §7, mémoire, orchestration, chunking dynamique et aval production et finitions exploitation, 278 assertions (`stopifnot`, sans testthat). Source `config_v8.R` puis `helpers_v8.R`. Repli arrow par paquet mock (section 11).
 - `tests/test_chaines_sqlite.R` : les **scripts réels** (extraction puis tirage) sur SQLite **fichier**
-  avec un faux paquet `pRatihque` (mock interdit pendant le tirage), 118 assertions : chaînes dbplyr
+  avec un faux paquet `pRatihque` (mock interdit pendant le tirage), 119 assertions : chaînes dbplyr
   (§5.9a, B1-10, refs, §7.5/§7.6), sessions multiples et résolution des besoins, cache des partiels,
   reprise, FORCER_REFS, garde-fou `partiels_meta`, tirage sans base, reprise des chunks, identité
   parquet, livrables, mode `catalogue_complet`. Ne valide PAS le dialecte ni les colonnes réelles.
@@ -266,8 +266,8 @@ Tous dans les **helpers purs** (§0.3 : « là où tu peux écrire du code neuf 
 ```
 Rscript -e 'parse("extraction_associations_codes_v8.R")'        # syntaxe OK
 Rscript -e 'for(f in c("config_v8.R","helpers_v8.R","extraction_associations_codes_v8.R","tirage_scenarios_v8.R")) parse(f)'
-Rscript tests/test_helpers.R                                     # 269 assertions vertes (266 sans arrow : chemin (a) non testé)
-R_LIBS_TEST=<lib avec dbplyr/DBI/RSQLite[/arrow]> Rscript tests/test_chaines_sqlite.R   # 118 assertions vertes (avec ou sans arrow)
+Rscript tests/test_helpers.R                                     # 278 assertions vertes (275 sans arrow : chemin (a) non testé)
+R_LIBS_TEST=<lib avec dbplyr/DBI/RSQLite[/arrow]> Rscript tests/test_chaines_sqlite.R   # 119 assertions vertes (avec ou sans arrow)
 grep -n 'filter_chap\|sexe_ ==sexe_\|v2025\|slice(1:2)\|<<-\|distinct(.*\.keep_all' config_v8.R helpers_v8.R extraction_associations_codes_v8.R tirage_scenarios_v8.R
 grep -c 'pRatihque::' tirage_scenarios_v8.R                       # 0 attendu
 #  -> uniquement des commentaires, plus l'unique distinct(.keep_all) HTA commenté « déterministe » (B1 #5)
@@ -884,3 +884,21 @@ scripts conservée (mode quota_dp).
   écart réalisé est le compteur de doublons éliminés (finalisation).
 - **Q36 — revue longs** : un échantillon par population (`longs_<population>`), tiré par lots puis
   ré-échantillonné (25 par population).
+
+---
+
+## 17. Lot « finitions exploitation » (premières exécutions réelles en espace sécurisé)
+
+Aucune chaîne base, aucune logique de calcul modifiée.
+
+| Item | Statut | Où |
+|---|---|---|
+| 1. Chunk de MIGRATION inter-profils en tête de RUN_aval.Rmd (après le setup, avant le repartitionnement) : présence du catalogue dans `EXPORTS_DIR`, sinon `localiser_catalogue()` dans les autres `exports*/` du même `PATH_RESULTS`, copie (catalogue + méta + 10 refs) derrière `JE_CONFIRME_COPIE`, condition Q13 affichée (`condition_q13`) — refs non copiées si Q13 non satisfaite ; chemins absolus uniquement | fait | RUN_aval.Rmd chunk `migration_catalogue` ; helpers section F (`localiser_catalogue`, `condition_q13`, `fichiers_migration_catalogue`, `CLES_Q13`) |
+| 2. Message à trois branches quand le catalogue est absent (chemin effectif cherché ; copie inter-profils avec les dossiers où il a été trouvé et la condition Q13 ; sinon `etape_catalogue()` coûteux) | fait | `message_catalogue_absent()` (helpers F), utilisé par `etape_repartitionner_catalogue`, `charger_contexte_tirage` (toute étape aval exigeant le catalogue) et `lire_catalogue` |
+| 3. En-tête de RUN_aval.Rmd : session sans connexion base par conception, extraction dans RUN.Rmd, chemins absolus | fait | RUN_aval.Rmd |
+| 4a. `diagnostic_memoire.csv` écrit en fin d'`etape_refs` ET d'`etape_partiels_longs` (mêmes lignes qu'`etape_catalogue`, idempotent : `ecrire_diagnostic_memoire()`), garde `file.exists()` dans RUN.Rmd, listé par `etat_pipeline()` | fait (non traité antérieurement : le lot « finitions avant espace sécurisé », section 11, ne le couvrait pas) | etapes_v8.R, RUN.Rmd chunk `apports`, `etat_pipeline` (preuve de la ligne partiels) |
+| 4b. Bannière d'`etape_selection_longs` : phrase explicite quand X × nb_DP > budget (« minimum X par DP … volume final = … ») et quand les planchers d'unités sont inactifs au quota courant (k < 2) | fait | etapes_v8.R (mode quota_dp_fixe) |
+| 4c. RUN.md + RUN.Rmd : documentation de chaque valeur des lignes de log de la sélection ; chunk `couverture_dp` (DP distincts des partiels agrégés via `nom_partiel` / `agreger_partiels`, chemins absolus, conversion E669 appliquée avant comparaison, vs catalogue, DP perdus triés par effectif) | fait | RUN.md (séquence production 1b, sélection), RUN.Rmd chunk `couverture_dp` |
+| 5. Tests : message à trois branches (contenu, chemin effectif, dossier trouvé) ; helpers de migration purs (`localiser_catalogue` avec dossier courant exclu et dataset partitionné, `condition_q13` satisfaite / non satisfaite, `fichiers_migration_catalogue`) ; `diagnostic_memoire.csv` après `etape_refs` et `etape_partiels_longs` + `etat_pipeline` (projet SQLite dédié) | fait | test_helpers.R (10 assertions), test_chaines_sqlite.R (1 assertion composite) |
+
+Tests : 278 (helpers, 275 sans arrow) + 119 (SQLite) assertions vertes.

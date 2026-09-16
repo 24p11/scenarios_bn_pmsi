@@ -597,7 +597,7 @@ ok("lire_catalogue : toutes les parts == fixture", setequal(lire_catalogue(dcat)
 ok("lire_catalogue : lettre absente -> NULL", is.null(lire_catalogue(dcat, lettres = "Z")))
 mono <- file.path(tempdir(), "mono.parquet"); arrow::write_parquet(cat_fx2[, setdiff(names(cat_fx2), "lettre")], mono)
 ok("lire_catalogue : monofichier déprécié (message) avec lettre ajoutée", { msg <- NULL; d <- withCallingHandlers(lire_catalogue(file.path(tempdir(), "inexistant"), mono, lettres = "I"), message = function(m){ msg <<- conditionMessage(m); invokeRestart("muffleMessage") }); grepl("déprécié", msg) && d$diag2 == "I500" })
-ok("lire_catalogue : ni dataset ni monofichier -> stop actionnable", grepl("etape_repartitionner", tryCatch(lire_catalogue(file.path(tempdir(), "x"), file.path(tempdir(), "y.parquet")), error = function(e) conditionMessage(e))))
+ok("lire_catalogue : ni dataset ni monofichier -> stop à trois branches (copie inter-profils / etape_catalogue coûteux)", { m <- tryCatch(lire_catalogue(file.path(tempdir(), "x", "catalogue_longs_seuil"), file.path(tempdir(), "x", "y.parquet")), error = function(e) conditionMessage(e)); grepl("copiez-le", m) && grepl("etape_catalogue\\(\\) \\(extraction, coûteux\\)", m) })
 if(!ARROW_MOCK) ok("lire_catalogue : chemin dataset arrow (réel)", arrow_dataset_disponible() && nrow(lire_catalogue(dcat, lettres = "J")) == 2) else ok("lire_catalogue : dataset arrow non testé (mock, note)", TRUE)
 
 cat("\n# sélection quota_dp_fixe\n")
@@ -685,5 +685,28 @@ ok("acc_stats par lots == stats globales (n, distribution, top, taux, contrôles
    fs$n == 3 && identical(as.data.frame(fs$distribution)[, c("cage", "n", "moy", "min", "max")], as.data.frame(ref_st$distribution)[, c("cage", "n", "moy", "min", "max")]) &&
      identical(as.data.frame(fs$top_das), as.data.frame(ref_st$top)) && fs$taux_imprecis == ref_st$taux && fs$controles$doublons_categorie == 0 && fs$pivots == 2)
 ok("memoire_session : tableau trié décroissant", { m <- utils::capture.output(d <- memoire_session(list(g = environment()), n_max = 5)); is.data.frame(d) && all(diff(d$taille_mo) <= 0) && all(c("env", "objet", "classe", "taille_mo") %in% names(d)) })
+
+
+# ============================================================ finitions exploitation ==
+cat("\n# migration inter-profils : localiser_catalogue, condition_q13, message à trois branches\n")
+pr <- file.path(tempdir(), "results_mig"); unlink(pr, recursive = TRUE)
+dir.create(file.path(pr, "exports_diagnostic"), recursive = TRUE); dir.create(file.path(pr, "exports"), recursive = TRUE); dir.create(file.path(pr, "partiels"))
+ok("aucun catalogue nulle part -> 0 ligne", nrow(localiser_catalogue(pr, file.path(pr, "exports"))) == 0)
+arrow::write_parquet(tibble::tibble(diag2 = "J449", poids = 12), file.path(pr, "exports_diagnostic", "catalogue_longs_seuil.parquet"))
+yaml::write_yaml(list(AN_REF = 26L, SEUIL_REF_DAS = 20L, SEUIL_REF_IMPRECIS = 20L, SEUIL_REF_PAIRES = 50L, CONVERSION_E669 = TRUE, BARE_E669_DEFAUT = "0"), file.path(pr, "exports_diagnostic", "catalogue_longs_seuil_meta.yaml"))
+loc <- localiser_catalogue(pr, file.path(pr, "exports"))
+ok("catalogue trouvé dans exports_diagnostic (hors dossier courant), monofichier + méta", nrow(loc) == 1 && basename(loc$dossier) == "exports_diagnostic" && loc$monofichier && !loc$dataset && loc$meta)
+ok("dossier courant exclu même s'il contient le catalogue", nrow(localiser_catalogue(pr, file.path(pr, "exports_diagnostic"))) == 0 && nrow(localiser_catalogue(pr)) == 1)
+dir.create(file.path(pr, "exports", "catalogue_longs_seuil")); arrow::write_parquet(tibble::tibble(diag2 = "J449"), file.path(pr, "exports", "catalogue_longs_seuil", "part_J.parquet"))
+ok("dataset partitionné détecté", { l <- localiser_catalogue(pr); nrow(l) == 2 && l$dataset[basename(l$dossier) == "exports"] })
+cfg <- list(AN_REF = 26L, SEUIL_REF_DAS = 20L, SEUIL_REF_IMPRECIS = 20L, SEUIL_REF_PAIRES = 50L, CONVERSION_E669 = TRUE, BARE_E669_DEFAUT = "0")
+ok("condition_q13 satisfaite", condition_q13(yaml::read_yaml(file.path(pr, "exports_diagnostic", "catalogue_longs_seuil_meta.yaml")), cfg)$ok)
+q <- condition_q13(cfg, modifyList(cfg, list(AN_REF = 25L, CONVERSION_E669 = FALSE)))
+ok("condition_q13 non satisfaite : différences listées et consigne FORCER_REFS", !q$ok && setequal(q$differences, c("AN_REF", "CONVERSION_E669")) && grepl("forcer = TRUE", q$message) && grepl("AN_REF : source = 26, courant = 25", q$message))
+ok("fichiers_migration_catalogue : catalogue + méta + 10 refs", { f <- fichiers_migration_catalogue(); length(f) == 12 && all(c("catalogue_longs_seuil.parquet", "catalogue_longs_seuil_meta.yaml", "distribution_e660.parquet", "pivots_courts.parquet", "v_admin_longs.parquet", "referentiel_paires_chroniques.parquet") %in% f) })
+m <- message_catalogue_absent("etape_repartitionner_catalogue", file.path(pr, "exports"), pr)
+ok("message à trois branches : chemin effectif, copie inter-profils (dossier trouvé), condition Q13, etape_catalogue coûteux",
+   grepl(file.path(pr, "exports"), m, fixed = TRUE) && grepl("exports_diagnostic", m) && grepl("copiez-le", m) && grepl("Q13", m) && grepl("etape_catalogue\\(\\) \\(extraction, coûteux\\)", m))
+ok("message sans autre catalogue : pas de dossier cité", !grepl("trouvé dans", message_catalogue_absent("x", file.path(pr, "exports"), file.path(tempdir(), "vide_mig"))))
 
 cat("\nTOUS LES TESTS SONT VERTS :", n_ok, "assertions\n")

@@ -79,7 +79,8 @@ apports <- read.csv(file.path(EXPORTS_DIR, "diagnostic_apports.csv")); apports
 plot(seq_len(nrow(apports)), cumsum(apports$nb_diag2_nouveaux), type = "b",
      xlab = "itération (CHR/U 17..26 puis CH 17..26)", ylab = "diag2 nouveaux cumulés")
 recouvrement <- read.csv(file.path(EXPORTS_DIR, "recouvrement.csv")); recouvrement
-memoire <- read.csv(file.path(EXPORTS_DIR, "diagnostic_memoire.csv")); memoire[order(-memoire$pic_go), ][1:10, ]
+f_mem <- file.path(EXPORTS_DIR, "diagnostic_memoire.csv")   # écrit en fin d'etape_refs / etape_partiels_longs / etape_catalogue
+if (file.exists(f_mem)) { memoire <- read.csv(f_mem); memoire[order(-memoire$pic_go), ][1:10, ] } else cat("diagnostic_memoire.csv absent (aucune mesure dans cette session)\n")
 ```
 
 ## 3.2 DÉCISION de périmètre -> catalogue (sans base)
@@ -92,6 +93,20 @@ ANS_CHOISIES  <- 17:26                 # <- À ÉDITER (ex. 22:26)
 ETBS_CHOISIS  <- c("CHR/U", "CH")      # <- À ÉDITER (ex. "CHR/U")
 etape_catalogue(ans = ANS_CHOISIES, etbs = ETBS_CHOISIS)
 cat(readLines(list.files(EXPORTS_DIR, "^rapport_extraction", full.names = TRUE)[1]), sep = "\n")
+```
+
+Contrôle de couverture avant / après seuil : DP distincts des partiels agrégés (conversion E669
+appliquée avant comparaison) vs DP du catalogue ; liste des DP perdus au seuil, triée par effectif.
+Chemins absolus (`PARTIELS_DIR`, `EXPORTS_DIR`).
+
+```{r couverture_dp}
+fichiers <- file.path(PARTIELS_DIR, nom_partiel(rep(ETBS_CHOISIS, each = length(ANS_CHOISIES)), rep(ANS_CHOISIES, times = length(ETBS_CHOISIS))))
+piv <- agreger_partiels(fichiers, c("diag2", "cage", "sexe"), "n")
+if (CONVERSION_E669) piv <- convertir_e669_comptes(piv, "diag2", c("cage", "sexe"), "n", arrow::read_parquet(file.path(EXPORTS_DIR, "distribution_e660.parquet")), BARE_E669_DEFAUT)
+avant <- piv |> dplyr::summarise(n = sum(n), .by = diag2)
+apres <- unique(lire_catalogue(DIR_CATALOGUE(), MONO_CATALOGUE(), colonnes = "diag2")$diag2)
+perdus <- avant[!avant$diag2 %in% apres, ] |> dplyr::arrange(dplyr::desc(n))
+cat("DP distincts avant seuil :", nrow(avant), "; après :", length(apres), "; perdus :", nrow(perdus), "\n"); head(perdus, 30)
 ```
 
 ## 3.2b Production : repartitionner + typer le catalogue (une fois, sans base)

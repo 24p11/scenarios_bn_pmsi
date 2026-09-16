@@ -9,6 +9,11 @@ output: html_notebook
 knitr::opts_chunk$set(eval = FALSE)
 ```
 
+**Session SANS connexion base, par conception** : toute la chaîne aval lit des parquets. Les
+étapes d'extraction (prep_data, refs, partiels, catalogue) relèvent de `RUN.Rmd`. **N'ouvrez pas de
+connexion ici.** Tous les chemins sont absolus via `PATH_RESULTS` / `EXPORTS_DIR` (piège du working
+directory des notebooks) : ne jamais écrire de chemin relatif dans ce notebook.
+
 Notebook de la phase **aval** : tout part du catalogue longs déjà produit
 (`results/exports/catalogue_longs_seuil.parquet`, 21,6 M lignes, obtenu en dépassement RAM toléré :
 **ne JAMAIS le reconstruire sur ce périmètre**). Aucune connexion base : toutes les étapes lisent
@@ -53,6 +58,46 @@ str(POPULATIONS); str(PLAFONDS_DPEC)
 cat("NB_CHUNKS_MAX =", NB_CHUNKS_MAX, "; CHUNK_SIZE_MIN =", CHUNK_SIZE_MIN, "; CHUNK_SIZE_FIXE =", CHUNK_SIZE_FIXE,
     "; LOT_CHUNKS_FINALISATION =", LOT_CHUNKS_FINALISATION, "; SEUIL_EXPORT_MONOFICHIER =", SEUIL_EXPORT_MONOFICHIER, "\n")
 cat("typologie :", charger_typo()$version, "\n")
+```
+
+---
+
+# 0b. Migration inter-profils du catalogue (si absent d'EXPORTS_DIR)
+
+Le catalogue est produit par un profil (souvent `exports_diagnostic/`) et exploité par un autre
+(`exports/`). Ce chunk teste sa présence dans `EXPORTS_DIR` ; s'il est absent mais présent dans un
+autre dossier d'exports du même `PATH_RESULTS`, il propose la copie (catalogue + méta + refs +
+`distribution_e660` + `pivots_courts` + `v_admin_*` + `referentiel_*`) derrière `JE_CONFIRME_COPIE`,
+en affichant la **condition de validité Q13** : copie sûre si et seulement si `AN_REF`,
+`SEUIL_REF_DAS`, `SEUIL_REF_IMPRECIS`, `SEUIL_REF_PAIRES`, `CONVERSION_E669`, `BARE_E669_DEFAUT`
+sont identiques entre les deux profils ; sinon copier le seul catalogue et lancer
+`etape_refs(forcer = TRUE)` (RUN.Rmd, connexion requise) ou recalculer.
+
+```{r migration_catalogue}
+present <- file.exists(MONO_CATALOGUE()) || (dir.exists(DIR_CATALOGUE()) && length(list.files(DIR_CATALOGUE(), "^part_")) > 0)
+cat("EXPORTS_DIR effectif :", EXPORTS_DIR, "\ncatalogue présent :", present, "\n")
+if (!present) {
+  autres <- localiser_catalogue(PATH_RESULTS, EXPORTS_DIR)
+  if (nrow(autres) == 0) {
+    cat(message_catalogue_absent("migration", EXPORTS_DIR, PATH_RESULTS), "\n")
+  } else {
+    print(autres)
+    src <- autres$dossier[1]                                              # chemin ABSOLU (PATH_RESULTS/exports_xxx)
+    meta_src <- yaml::read_yaml(file.path(src, "catalogue_longs_seuil_meta.yaml"))
+    q13 <- condition_q13(meta_src, valeurs_effectives_config())
+    cat("source :", src, "\n", q13$message, "\n")
+    a_copier <- file.path(src, fichiers_migration_catalogue()); a_copier <- a_copier[file.exists(a_copier)]
+    if (!q13$ok) a_copier <- a_copier[basename(a_copier) %in% c("catalogue_longs_seuil.parquet", "catalogue_longs_seuil_meta.yaml")]
+    cat("fichiers à copier vers", EXPORTS_DIR, ":\n"); print(basename(a_copier))
+    JE_CONFIRME_COPIE <- FALSE   # passer à TRUE en connaissance de cause (condition Q13 lue ci-dessus)
+    if (JE_CONFIRME_COPIE) {
+      if (!dir.exists(EXPORTS_DIR)) dir.create(EXPORTS_DIR, recursive = TRUE)
+      ok <- file.copy(a_copier, EXPORTS_DIR, overwrite = FALSE); cat("copiés :", sum(ok), "/", length(ok), "\n")
+      if (!q13$ok) cat("Refs NON copiées (Q13) : lancer etape_refs(forcer = TRUE) depuis RUN.Rmd.\n")
+    } else cat("Rien copié : passer JE_CONFIRME_COPIE à TRUE d'abord.\n")
+  }
+}
+etat_pipeline()
 ```
 
 ---

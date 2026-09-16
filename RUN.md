@@ -97,10 +97,24 @@ inférieur (doublons éliminés, chiffrés au rapport).
 1. **Repartitionner + typer, une fois** : `etape_repartitionner_catalogue()` (monofichier →
    parts par lettre + DPEC/TPEC, typologie `referentiels/typologie_sejours.yaml` versionnée ;
    monofichier renommé `.ancien`). Toute lecture du catalogue passe ensuite par `lire_catalogue()`.
+1b. **Contrôle de couverture avant / après seuil** (chunk `couverture_dp` de RUN.Rmd) : DP distincts
+   des partiels agrégés (`agreger_partiels` sur `nom_partiel(...)`, chemins absolus, conversion E669
+   appliquée avant comparaison) vs DP du catalogue ; liste des DP perdus au seuil triée par effectif.
+1c. **Migration inter-profils** (chunk `migration_catalogue` de RUN_aval.Rmd) : si le catalogue est
+   absent d'`EXPORTS_DIR` mais présent dans un autre `exports*/` du même `PATH_RESULTS`, copie proposée
+   (catalogue + méta + refs) derrière confirmation, condition Q13 affichée (`condition_q13`,
+   `localiser_catalogue`, `fichiers_migration_catalogue` : helpers purs).
 2. **Sélection de campagne** : `etape_selection_longs()` (`NB_CRH_CIBLE`, `NB_LIGNES_PAR_DP = 1`) :
    par population (`POPULATIONS`, budget au prorata des DP), k lignes distinctes par DP au poids
    sans remise, variantes déduites, plafonds `PLAFONDS_DPEC` par (DP × DPEC), planchers d'unités
    désactivés à k = 1 (mention au rapport). Lettre par lettre : pic RAM = une lettre.
+   Ligne de log par population : `== Sélection <pop> : <nb_dp> DP, budget <b>, X = <x> par DP, k = <k> ==`
+   (nb_dp = DP distincts du catalogue de la population ; budget = part de NB_CRH_CIBLE au prorata des DP ;
+   X = ceiling(budget / nb_dp), minimum 1 par DP — si X × nb_dp > budget, le volume final dépasse le
+   budget, la bannière le dit ; planchers d'unités inactifs à k = 1, la bannière le dit), puis
+   `<pop> : <l> lignes sélectionnées, <v> variantes attendues ; plafonds appliqués = <p> ; manque à gagner = <m>`
+   (l = lignes distinctes retenues ; v = Σ n_var = volume attendu ; p = groupes (DP × DPEC) plafonnés ;
+   m = Σ max(0, X_dp − lignes disponibles)).
 3. **Palier 100 k qui MESURE le débit** : surcharge `NB_CRH_CIBLE <- 100000L`, puis
    `etape_tirage_das_longs()` ; le débit (scénarios/s) est imprimé par chunk. Extrapolation :
    temps campagne ≈ volume_attendu / débit ; sessions parallèles suggérées ≈ ceiling(temps / durée
@@ -125,6 +139,10 @@ mêmes étapes ; les partiels sont réutilisés, seules les refs sont recalculé
   **pas** de `SEUIL_PIVOT`, du périmètre d'années ni de `CONVERSION_E669` (partiels en codes bruts,
   conversion à la ré-agrégation). Vider après tout changement de ces clés ou de `prep_data` /
   `prep_scenarios2`. Partiels antérieurs au chantier mémoire : valides (équivalence prouvée).
+- Catalogue absent du dossier d'exports effectif : message à trois branches (chemin effectif cherché ;
+  s'il existe sous un autre profil, copiez-le via le chunk de migration de RUN_aval.Rmd — condition Q13 —,
+  sinon `etape_catalogue()`, extraction coûteuse). `diagnostic_memoire.csv` est écrit en fin
+  d'`etape_refs`, d'`etape_partiels_longs` et d'`etape_catalogue` (idempotent).
 - Refs (`exports*/`) : sautées si le parquet existe ; `etape_refs(forcer = TRUE)` après changement
   d'`AN_REF`, d'un `SEUIL_REF_*`, de `CONVERSION_E669` / `BARE_E669_DEFAUT` ou correction amont.
 - Chunks / sélection / `meta_tirage.yaml` : reprise après plantage telle quelle (identité bit à bit par
