@@ -576,7 +576,9 @@ unlink(unlist(ch_pops)); invisible(sortie(etape_tirage_das_longs()))
 ok("tirage fixe : run complet après suppression des chunks == run par plages, bit à bit", identical(tir_A, lapply(ch_pops, lu)))
 tir_all <- purrr::list_rbind(tir_A)
 ok("unicité souple : variantes dédoublonnées, colonne nb_variantes_demandees, aucun ^E669", !any(duplicated(tir_all[, c(PIVOTS_LONGS, "graine", "diagnostic_associes")])) && all(tir_all$nb_variantes_demandees >= 1) && sans_e669(tir_all, c("diag2", "graine", "diagnostic_associes")))
-ok("une ligne et ses variantes dans le même chunk", all(vapply(unlist(ch_pops), function(f){ d <- arrow::read_parquet(f); g <- d |> dplyr::summarise(v = dplyr::n(), .by = dplyr::all_of(c(PIVOTS_LONGS, "graine"))); all(g$v <= tir_all$nb_variantes_demandees[1] | TRUE) }, logical(1))))
+ok("une ligne et ses variantes dans le même chunk (aucune clé pivots × graine dans deux fichiers)",
+   { cles_par_fichier <- lapply(unlist(ch_pops), function(f){ d <- arrow::read_parquet(f); unique(do.call(paste, c(lapply(c(PIVOTS_LONGS, "graine"), function(cc) as.character(d[[cc]])), sep = "\r"))) })
+     toutes <- unlist(cles_par_fichier); length(cles_par_fichier) >= 2 && !any(duplicated(toutes)) && length(toutes) > 0 })
 invisible(sortie(etape_habillage_longs()))
 ok("habillage fixe : lots habillés par population avec DPEC/TPEC", all(vapply(names(POPULATIONS), function(pp){ fs <- list.files(DIR_HABILLE(pp), pattern = "^lot_", full.names = TRUE); length(fs) == 0 || all(c("DPEC", "TPEC", "mode_entree", "population") %in% names(arrow::read_parquet(fs[1]))) }, logical(1))) && sum(vapply(names(POPULATIONS), function(pp) length(list.files(DIR_HABILLE(pp), pattern = "^lot_")), integer(1))) > 0)
 invisible(sortie(lancer("tirage_scenarios_v8.R")))   # session neuve : finalisation en flux depuis les fichiers
