@@ -124,6 +124,15 @@ inférieur (doublons éliminés, chiffrés au rapport).
    écriture atomique. Puis `etape_habillage_longs()` et `etape_finalisation()` (flux par lots).
    Restart R entre chaque étape.
 
+5. **Cycle de campagne** (registre des tirages, `RUN_aval.Rmd` §5b) : (0) `etape_retro_inscrire(dossier_selection,
+   dossier_chunks, campagne)` pour une campagne tirée avant le chantier campagnes ; (1) `CAMPAGNE <- "Cn"`,
+   `REGISTRE_ACTIF <- TRUE` ; (2) `etape_selection_longs()` sous registre : chaque DP reçoit au moins 1 scénario
+   (plancher automatique : X ≥ 1 et règle de classe), lignes VIERGES d'abord (id_profil absent du registre),
+   sinon RECYCLAGE à variantes nouvelles (numérotation après variante_max, hash_das déjà enregistrés exclus,
+   sans re-tirage), colonne `origine_profil` ; (3) tirage / habillage / finalisation ; (4)
+   `etape_registre_campagne()` (automatique en fin de finalisation) ; (5) rapport de consommation.
+   Plafonds DPEC = plafond du TOTAL de la classe par population, 1 représentant par DP prime (dépassement consigné).
+
 Passage diagnostic → production : éditer le bloc `production` de `config_v8.R` (ANS_HISTORIQUE,
 TYPES_ETBS_LONGS) d'après apports + recouvrement, puis `SCENARIOS_PMSI_PROFIL=production` et les
 mêmes étapes ; les partiels sont réutilisés, seules les refs sont recalculées dans `exports/`
@@ -149,9 +158,12 @@ mêmes étapes ; les partiels sont réutilisés, seules les refs sont recalculé
   seed par chunk) ; à vider après changement de `MODE_SELECTION`, `NB_CRH_CIBLE`, `NB_LIGNES_PAR_DP`,
   `QUOTA_MIN_PAR_UNITE`, `SEED`, de la version de typologie ou du catalogue (le garde-fou
   `meta_tirage.yaml` le demande). Chunks par population dans `chunks/<population>/`.
-- Catalogue partitionné (`catalogue_longs_seuil/`) : sidecar avec version de typologie ; changer
-  la typologie ⇒ supprimer le dossier, restaurer le `.ancien` en `catalogue_longs_seuil.parquet`,
-  relancer `etape_repartitionner_catalogue()`.
+- Catalogue partitionné (`catalogue_longs_seuil/`) : sidecar avec version de typologie ET recette d'id
+  (`id_v1`) ; changer l'une ou l'autre ⇒ supprimer le dossier, restaurer le `.ancien` en
+  `catalogue_longs_seuil.parquet`, relancer `etape_repartitionner_catalogue()`, puis recalculer le registre
+  par rétro-inscription de toutes les campagnes. À relancer une fois après le chantier campagnes (id_profil).
+- Registre des tirages (`registre_tirages/`) : append-only, ne se vide JAMAIS (stop si réécriture divergente) ;
+  nouvelle campagne = vider chunks + sélection + `meta_tirage.yaml` + `habille/`, poser `CAMPAGNE`.
 - **Chunking dynamique** : la taille des chunks est calculée par les données,
   `taille_chunk(n) = max(CHUNK_SIZE_MIN, ceiling(n / NB_CHUNKS_MAX))` — au plus `NB_CHUNKS_MAX` (50)
   chunks par tirage, plancher `CHUNK_SIZE_MIN` (500) ; `CHUNK_SIZE_FIXE` (NA par défaut) impose une

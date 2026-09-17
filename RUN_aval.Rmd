@@ -223,6 +223,41 @@ etape_habillage_longs()      # populations = "adulte" pour une seule population
 
 ---
 
+# 5b. Cycle de campagne (registre des tirages, append-only)
+
+Le corpus se construit par **campagnes** puisées dans le catalogue permanent ; le registre
+(`registre_tirages/registre_<campagne>.parquet`, append-only, **jamais vidé**) tient la
+comptabilité inter-campagnes : identifiants stables (`id_profil` = hash du contenu de la ligne du
+catalogue, recette `id_v1` figée ; `id_scenario` = `id_profil-variante`), `hash_das` du jeu
+réellement tiré. Cycle : (0) rétro-inscrire une campagne antérieure à conserver ; (1) `CAMPAGNE <- "Cn"`
+en config (ou surcharge), `REGISTRE_ACTIF <- TRUE` ; (2) sélection sous registre (§2 : fraîcheur
+d'abord, recyclage à variantes nouvelles, plancher automatique 1 scénario par DP) ; (3) tirage /
+habillage / finalisation (§4-6) ; (4) `etape_registre_campagne()` — appelée automatiquement en fin de
+finalisation ; (5) lecture du rapport de consommation. Changer de campagne ⇒ vider chunks +
+sélection + `meta_tirage.yaml` + `habille/` (garde-fou sur `CAMPAGNE`), **pas** le registre.
+
+```{r retro_inscription}
+# (0) Campagne tirée AVANT le chantier campagnes (chunks sans id_profil) que l'on souhaite conserver :
+#     chemins ABSOLUS en clair, identifiant de campagne à choisir (ex. "C0"). Idempotente.
+DOSSIER_SELECTION_ANTERIEURE <- DIR_SELECTION()      # ex. file.path(PATH_RESULTS, "exports", "selection_longs")
+DOSSIER_CHUNKS_ANTERIEURS    <- CHUNKS_DIR           # ex. file.path(PATH_RESULTS, "exports", "chunks")
+# etape_retro_inscrire(DOSSIER_SELECTION_ANTERIEURE, DOSSIER_CHUNKS_ANTERIEURS, campagne = "C0")
+```
+
+```{r registre_etat}
+reg <- lire_registre(DIR_REGISTRE())
+cat("campagnes :", reg$nb_campagnes, "; scénarios cumulés :", reg$nb_scenarios, "; profils consommés :", nrow(reg$par_profil), "\n")
+reg$par_campagne; head(reg$par_dpec[order(-reg$par_dpec$nb_scenarios), ], 20)
+```
+
+```{r nouvelle_campagne}
+JE_CONFIRME_NOUVELLE_CAMPAGNE <- FALSE   # TRUE : vide chunks + sélection + méta + habillé (le registre reste)
+if (JE_CONFIRME_NOUVELLE_CAMPAGNE) {
+  unlink(c(CHUNKS_DIR, DIR_SELECTION(), file.path(EXPORTS_DIR, "habille"), file.path(EXPORTS_DIR, "meta_tirage.yaml")), recursive = TRUE)
+  cat("Prêt pour une nouvelle campagne : poser CAMPAGNE <- \"Cn\" (config ou surcharge), Restart R, §0 puis §2.\n")
+} else cat("Rien fait : passer JE_CONFIRME_NOUVELLE_CAMPAGNE à TRUE d'abord.\n")
+```
+
 # 6. Finalisation : parts finales, rapport, revue
 
 Relecture des lots en flux, contrôles §8.2 et statistiques agrégés par lot, doublons éliminés par DP,
@@ -236,7 +271,10 @@ etat_pipeline()
 ```
 
 **Critères** : rapport « TOTAL anomalies = 0 » (dont ^E669 résiduels) ; réalisé vs cible par
-population et doublons éliminés acceptables ; revue humaine de `echantillon_revue.csv`.
+population et doublons éliminés acceptables ; revue humaine de `echantillon_revue.csv`. En campagne :
+section « Campagne Cn » (DP vierges / partiellement consommés / recyclés), classes DPEC plafonnées
+(plafond de classe, dépassement si 1 représentant par DP > plafond), consommation cumulée du
+catalogue par DPEC, 30 DP les plus proches de l'épuisement total ; `registre_<Cn>.parquet` écrit.
 
 ```{r rapport}
 cat(readLines(list.files(EXPORTS_DIR, "^rapport_v8_", full.names = TRUE)[1]), sep = "\n")
@@ -265,3 +303,8 @@ ds |> dplyr::count(population, DPEC) |> dplyr::collect()
 - Chunks par population dans `chunks/<population>/` ; lots habillés dans `habille/<population>/`
   (réécrits à chaque habillage) ; parts finales dans `scenarios_longs_tirage_v8_<date>/<population>/`.
 - Une ligne de sélection et ses variantes vivent dans le même chunk (requis par le dédoublonnage).
+- Registre (`registre_tirages/`) : append-only, ne se vide **JAMAIS** ; changer de campagne vide chunks +
+  sélection + méta + habillé, pas le registre. Changer la recette d'id (`RECETTE_ID`) ou re-repartitionner
+  sous une autre version ⇒ stop ; procédure : supprimer `catalogue_longs_seuil/`, restaurer le `.ancien`,
+  relancer §1, puis recalculer le registre par rétro-inscription de TOUTES les campagnes. Le
+  repartitionnement doit être relancé une fois après ce chantier pour poser `id_profil` (garde-fou).

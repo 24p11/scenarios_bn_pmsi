@@ -111,7 +111,7 @@ set.seed(20260907)
 N <- 4000
 pool_das <- c("I10","I110","E1120","E1128","E102","E785","J449","N189","N185","F172","I48","G20","M199",
               "R2630","F050","F102","N083","E1198","I509","I500","K802","J440","C189","Z511","D649","E669","E6690","E6602","E6600")
-pool_ghm <- c("04M053","05M093","06C041","10M021","03K021","14Z081","90Z001","06C042")
+pool_ghm <- c("04M053","05M093","06C041","10M021","03K021","14Z081","90Z001","06C042","14Z13A")
 pool_dp  <- c("J449","I500","E1120","E102","Z511","K802","I10","E6690")
 conn0 <- DBI::dbConnect(RSQLite::SQLite(), db_file)
 gen_annee <- function(an){
@@ -532,7 +532,9 @@ invisible(sortie(lancer("tirage_scenarios_v8.R")))   # rétablit l'état de sess
 cat("\n# aval production : repartitionnement, quota_dp_fixe, tirage indexé par population, flux\n")
 proj_pr <- creer_projet("projet_v8_prod"); Sys.setenv(SCENARIOS_PMSI_PATH = proj_pr, SCENARIOS_PMSI_ETAPES_SEULEMENT = "1")
 options(pmsi_mock_interdit = FALSE)
-surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)", "MODE_SELECTION <- 'quota_dp_fixe'", "NB_CRH_CIBLE <- 200L", "NB_LIGNES_PAR_DP <- 1L", "CHUNK_SIZE_FIXE <- 30L", "LOT_CHUNKS_FINALISATION <- 2L")
+SURCHARGE_PROD <- c("ANS_HISTORIQUE <- c(17L, 20L, 26L)", "MODE_SELECTION <- 'quota_dp_fixe'", "NB_CRH_CIBLE <- 200L", "NB_LIGNES_PAR_DP <- 1L", "CHUNK_SIZE_FIXE <- 30L", "LOT_CHUNKS_FINALISATION <- 2L",
+                    'PLAFONDS_DPEC <- list("Accouchement normal mère" = 3L)')
+surcharger(SURCHARGE_PROD, "CAMPAGNE <- 'C1'", "REGISTRE_ACTIF <- FALSE")
 invisible(sortie(lancer("extraction_associations_codes_v8.R")))
 invisible(sortie(etape_prep_data())); invisible(sortie(etape_refs())); invisible(sortie(etape_partiels_longs())); invisible(sortie(etape_catalogue()))
 fermer(); rm(conn); options(pmsi_mock_interdit = TRUE)
@@ -558,6 +560,8 @@ parts <- lire_catalogue(DIR_CATALOGUE())
 ok("repartitionnement : parts recomposées == monofichier d'origine + colonnes lettre/DPEC/TPEC ; monofichier renommé .ancien",
    nrow(parts) == nrow(mono_avant) && identical(as.data.frame(dplyr::arrange(parts[, names(mono_avant)], dplyr::across(dplyr::everything()))), as.data.frame(dplyr::arrange(mono_avant, dplyr::across(dplyr::everything())))) &&
      all(c("lettre", "DPEC", "TPEC") %in% names(parts)) && all(parts$lettre == substr(parts$diag2, 1, 1)) && !file.exists(MONO_CATALOGUE()) && file.exists(MONO_CATALOGUE() %+% ".ancien"))
+ok("repartitionnement : id_profil posé (recette id_v1), unique, recalculable ; sidecar version_recette_id",
+   "id_profil" %in% names(parts) && !anyDuplicated(parts$id_profil) && identical(parts$id_profil, id_profil_de(parts)) && side$version_recette_id == RECETTE_ID)
 ok("repartitionnement : sidecar (nb lignes par part == méta, sum poids, effectifs DPEC, version typologie)",
    side$nb_lignes_total == yaml::read_yaml(file.path(EXPORTS_DIR, "catalogue_longs_seuil_meta.yaml"))$nb_lignes && sum(unlist(side$sum_poids_par_part)) == sum(parts$poids) &&
      side$version_typologie == charger_typo()$version && sum(unlist(side$effectifs_dpec)) == nrow(parts) && all(parts$DPEC[substr(parts$ghm2, 3, 3) == "C"] == "Chirurgie adultes > 3 nuits"))
@@ -577,6 +581,17 @@ ok("quota_dp_fixe : k = 1 -> une ligne par (DP × groupe) et X_dp variantes ; sa
    all(vapply(sel_pops, function(d){ if(is.null(d)) return(TRUE); st <- utils::read.csv(file.path(DIR_SELECTION(d$population[1]), "selection_longs_stats_dp.csv"))
      all(st$k_eff <= 1) && all(st$variantes == st$X_dp) && !any(duplicated(d[, c(PIVOTS_LONGS, "diagnostic_associes")])) && all(c("DPEC", "TPEC", "id_selection", "n_var") %in% names(d)) }, logical(1))))
 ok("quota_dp_fixe : X cohérent avec nb_dp et budget de la population", all(vapply(mt_f$par_population, function(m) m$X == ceiling(m$budget_population / max(m$nb_dp, 1)), logical(1))))
+sel_c1 <- purrr::list_rbind(purrr::compact(sel_pops))
+ok("plafond de CLASSE (Accouchement normal mère, plafond 3) : 1 représentant par DP prime, dépassement consigné, une ligne × 1 variante par DP de la classe",
+   { cl <- sel_c1[sel_c1$DPEC == "Accouchement normal mère", ]
+     all(vapply(names(POPULATIONS), function(pp){
+       m <- yaml::read_yaml(file.path(DIR_SELECTION(pp), "meta_tirage.yaml"))$classes_plafonnees; if(length(m) == 0) return(TRUE)
+       m <- m[[1]]; cp <- cl[cl$population == pp, ]
+       if(m$nb_dp == 0) return(nrow(cp) == 0)
+       !anyDuplicated(cp$diag2) && nrow(cp) == m$nb_dp && sum(cp$n_var) == m$total_retenu &&
+         (if(m$nb_dp >= m$plafond) all(cp$n_var == 1) && m$total_retenu == m$nb_dp && m$depassement == m$nb_dp - m$plafond else m$total_retenu == m$plafond && m$depassement == 0) }, logical(1))) &&
+       nrow(cl) > 3 && sum(vapply(names(POPULATIONS), function(pp){ m <- yaml::read_yaml(file.path(DIR_SELECTION(pp), "meta_tirage.yaml"))$classes_plafonnees; if(length(m)) m[[1]]$depassement else 0 }, numeric(1))) > 0 })
+ok("C1 sans registre : origine vierge partout, campagne tracée, id_profil dans la sélection", all(sel_c1$origine_profil == "vierge") && all(sel_c1$campagne == "C1") && all(nchar(sel_c1$id_profil) == 16))
 ok("quota_dp_fixe : sélection relue à l'identique (idempotence)", { o <- sortie(etape_selection_longs()); any(grepl("relue", o)) })
 # tirage par plages disjointes (parallélisme simulé) puis run complet : identité bit à bit
 invisible(sortie(etape_tirage_das_longs(chunk_range = c(1, 1))))
@@ -609,7 +624,69 @@ ok("finalisation en flux == statistiques globales (contrôles, taux) sur les mê
      cles <- c("doublons_categorie", "diabete_hors_flag", "i10_avec_hta_autres", "poids_sous_seuil")
      tot <- Reduce(`+`, lapply(r, function(x) unlist(x$stats$controles[cles]))); identical(unname(as.integer(tot)), unname(as.integer(unlist(st$controles[cles])))) && sum(vapply(r, function(x) x$stats$n, integer(1))) == st$n })
 ok("etat_pipeline (fixe) : sélection, chunks par population, habillage, finalisation FAIT", { e <- etat_pipeline(); all(e$statut[e$etape %in% c("etape_selection_longs", "etape_tirage_das_longs", "etape_habillage_longs", "etape_finalisation")] == "FAIT") })
-ok("echantillon_revue : courts + longs par population", { rv <- readr::read_csv2(file.path(EXPORTS_DIR, "echantillon_revue.csv"), show_col_types = FALSE); "courts" %in% rv$branche && any(grepl("^longs_", rv$branche)) })
+ok("echantillon_revue : courts + longs par population, id_scenario chez les longs", { rv <- readr::read_csv2(file.path(EXPORTS_DIR, "echantillon_revue.csv"), show_col_types = FALSE); "courts" %in% rv$branche && any(grepl("^longs_", rv$branche)) && "id_scenario" %in% names(rv) && all(!is.na(rv$id_scenario[grepl("^longs_", rv$branche)])) })
+ok("C1 sans registre : aucun registre écrit ; chunks porteurs d'id_scenario", !dir.exists(DIR_REGISTRE()) && "id_scenario" %in% names(finaux) && !anyDuplicated(finaux$id_scenario[!duplicated(finaux[, c("id_scenario")])]))
+# ---- rétro-inscription de C1 (campagne tirée sans registre), puis campagne C2 SOUS registre
+cat("\n# campagnes : rétro-inscription de C1, campagne C2 sous registre\n")
+invisible(sortie(etape_retro_inscrire(DIR_SELECTION(), CHUNKS_DIR, "C1")))
+reg1 <- lire_registre(DIR_REGISTRE())
+ok("rétro-inscription : registre_C1 == scénarios réellement tirés (id recalculés sur pivots + graine, DPEC via sélection)",
+   reg1$nb_campagnes == 1 && reg1$nb_scenarios == nrow(dplyr::distinct(finaux, id_scenario)) && setequal(reg1$lignes$id_scenario, unique(finaux$id_scenario)) && all(!is.na(reg1$lignes$DPEC)) && setequal(reg1$lignes$id_profil, sel_c1$id_profil[sel_c1$id_profil %in% reg1$lignes$id_profil]))
+ok("rétro-inscription idempotente", identical(sortie(etape_retro_inscrire(DIR_SELECTION(), CHUNKS_DIR, "C1")) |> length() > 0, TRUE) && reg1$nb_scenarios == lire_registre(DIR_REGISTRE())$nb_scenarios)
+ok("registre : réinscrire une campagne divergente -> stop append-only", grepl("append-only", tryCatch(ecrire_registre_campagne(dplyr::mutate(reg1$lignes, hash_das = "x"), "C1", DIR_REGISTRE()), error = function(e) conditionMessage(e))))
+ok("etat_pipeline : ligne registre", { e <- etat_pipeline(); e$statut[e$etape == "registre_tirages"] == "FAIT" && grepl("1 campagne", e$preuve[e$etape == "registre_tirages"]) })
+# Épuisement déterministe d'un DP (registre synthétique C1b) pour exercer le recyclage en C2 : toutes les lignes
+# adultes du DP le moins fourni (hors classe plafonnée) sont marquées consommées.
+parts$pop <- population_de(parts$cage, POPULATIONS)
+cand <- parts[parts$pop == "adulte" & !parts$DPEC %in% names(PLAFONDS_DPEC), ] |> dplyr::count(diag2) |> dplyr::arrange(n, diag2)
+dp_epuise <- cand$diag2[1]; lig_ep <- parts[parts$pop == "adulte" & parts$diag2 == dp_epuise, ]
+reg_c1b <- tibble::tibble(id_profil = lig_ep$id_profil, variante = 1L, id_scenario = id_scenario_de(lig_ep$id_profil, 1L), hash_das = paste0("synth", seq_len(nrow(lig_ep))),
+                          campagne = "C1b", population = "adulte", diag2 = dp_epuise, DPEC = lig_ep$DPEC, date = "2026-09-16")
+reg_c1b <- reg_c1b[!reg_c1b$id_scenario %in% reg1$lignes$id_scenario, ]   # ne pas dupliquer les id_scenario déjà tirés en C1
+if(nrow(reg_c1b) > 0) ecrire_registre_campagne(reg_c1b, "C1b", DIR_REGISTRE())
+reg1 <- lire_registre(DIR_REGISTRE())
+ok("registre synthétique C1b : DP " %+% dp_epuise %+% " entièrement consommé chez les adultes", all(lig_ep$id_profil %in% reg1$par_profil$id_profil) && reg1$nb_campagnes == 2)
+# changement de campagne : vider chunks + sélection + méta + habillé (le registre ne se vide JAMAIS)
+unlink(c(CHUNKS_DIR, DIR_SELECTION(), file.path(EXPORTS_DIR, "habille"), file.path(EXPORTS_DIR, "meta_tirage.yaml")), recursive = TRUE)
+surcharger(SURCHARGE_PROD, "CAMPAGNE <- 'C2'", "REGISTRE_ACTIF <- TRUE"); source(file.path(proj_pr, "config_v8.R"))
+invisible(sortie(lancer("tirage_scenarios_v8.R")))
+invisible(sortie(etape_selection_longs()))
+sel_c2 <- purrr::list_rbind(purrr::compact(lapply(names(POPULATIONS), function(pp) lire_catalogue(DIR_SELECTION(pp)))))
+vierges_c2 <- sel_c2[sel_c2$origine_profil == "vierge", ]; recycles_c2 <- sel_c2[sel_c2$origine_profil == "recycle", ]
+ok("C2 : anti-jointure effective (lignes vierges hors registre C1), recyclage seulement quand le DP n'a plus de ligne vierge",
+   !any(vierges_c2$id_profil %in% reg1$lignes$id_profil) && all(recycles_c2$id_profil %in% reg1$lignes$id_profil) && nrow(recycles_c2) > 0 &&
+     { grp <- function(d) ifelse(d$DPEC %in% names(PLAFONDS_DPEC), d$DPEC, ".reste"); parts$pop <- population_de(parts$cage, POPULATIONS); parts$grp <- grp(parts); recycles_c2$grp <- grp(recycles_c2)
+       all(vapply(seq_len(nrow(recycles_c2)), function(i){ lig <- parts[parts$diag2 == recycles_c2$diag2[i] & parts$pop == recycles_c2$population[i] & parts$grp == recycles_c2$grp[i], ]; all(lig$id_profil %in% reg1$lignes$id_profil) }, logical(1))) })
+ok("C2 : recyclage numéroté après variante_max de C1, hash_das de C1 exclus",
+   all(recycles_c2$variante_debut == reg1$par_profil$variante_max[match(recycles_c2$id_profil, reg1$par_profil$id_profil)] + 1L) && all(nzchar(recycles_c2$hash_exclus)) && all(vierges_c2$variante_debut == 1L))
+ok("C2 : plancher automatique — chaque DP du catalogue de la population sélectionné", all(unique(paste(population_de(parts$cage, POPULATIONS), parts$diag2)) %in% unique(paste(sel_c2$population, sel_c2$diag2))))
+mt2 <- yaml::read_yaml(file.path(EXPORTS_DIR, "meta_tirage.yaml"))
+ok("meta_tirage C2 : campagne, registre actif, recette tracés ; garde-fou sur CAMPAGNE", mt2$CAMPAGNE == "C2" && isTRUE(mt2$REGISTRE_ACTIF) && mt2$RECETTE_ID == RECETTE_ID && grepl("CAMPAGNE", verifier_meta_tirage(mt2, modifyList(mt2, list(CAMPAGNE = "C3")), c("CAMPAGNE"))))
+invisible(sortie(etape_tirage_das_longs())); invisible(sortie(etape_habillage_longs())); invisible(sortie(etape_finalisation()))
+reg2 <- lire_registre(DIR_REGISTRE())
+finaux2 <- lu(list.files(DIR_FINAL(), pattern = "^part_", recursive = TRUE, full.names = TRUE))
+ok("C2 : registre_C2 écrit automatiquement en fin de finalisation ; 3 campagnes (C1, C1b, C2) ; scénarios C2 == corpus C2", reg2$nb_campagnes == 3 && setequal(reg2$lignes$id_scenario[reg2$lignes$campagne == "C2"], unique(finaux2$id_scenario)))
+ok("C2 : le DP épuisé est recyclé (variantes numérotées après C1/C1b) et retenu par le plancher", dp_epuise %in% recycles_c2$diag2 && dp_epuise %in% sel_c2$diag2)
+ok("bout-en-bout : aucun id_scenario dupliqué dans l'union C1 ∪ C2 ; aucun hash_das réutilisé pour un même profil entre campagnes",
+   !anyDuplicated(reg2$lignes$id_scenario) && !anyDuplicated(reg2$lignes[, c("id_profil", "hash_das")]) && !anyDuplicated(c(unique(finaux$id_scenario), unique(finaux2$id_scenario))))
+dp_cat <- unique(parts$diag2)
+# Strates de référence vides (sample_das_long renvoie NULL : aucun candidat hors graine) : seules
+# causes admises d'absence d'un DP dans un corpus, avec les recyclages entièrement éliminés en C2.
+idx_t <- indexer_ref_das(arrow::read_parquet(file.path(EXPORTS_DIR, nom_ref("ref_das_aigu"))))
+strate_vide <- function(sel) vapply(seq_len(nrow(sel)), function(i){ tmp <- idx_t[[cle_strate(sel$diag2[i], sel$mode_hospit[i], sel$sexe[i], sel$cage[i], sel$ghm2[i])]]
+  is.null(tmp) || nrow(tmp[!tmp$das %in% split_das(sel$diagnostic_associes[i])[[1]], , drop = FALSE]) == 0 }, logical(1))
+dp_vides <- function(sel){ v <- strate_vide(sel); setdiff(unique(sel$diag2), unique(sel$diag2[!v])) }
+ok("plancher : chaque DP du catalogue sélectionné en C1 comme en C2", all(dp_cat %in% sel_c1$diag2) && all(dp_cat %in% sel_c2$diag2))
+ok("chaque DP présent dans le corpus C1 sauf strates de référence vides ; dans C2 sauf strates vides et recyclages entièrement éliminés (souplesse actée, comptés)",
+   { m1 <- setdiff(dp_cat, unique(reg2$lignes$diag2[reg2$lignes$campagne == "C1"])); m2 <- setdiff(dp_cat, unique(reg2$lignes$diag2[reg2$lignes$campagne == "C2"]))
+     cat("   DP absents : C1 =", length(m1), "(strates vides", length(dp_vides(sel_c1)), ") ; C2 =", length(m2), "\n")
+     all(m1 %in% dp_vides(sel_c1)) && all(m2 %in% c(dp_vides(sel_c2), recycles_c2$diag2)) && length(m2) < length(dp_cat) })
+ok("classe plafonnée aux volumes attendus dans les deux campagnes (1 par DP de la classe)",
+   { c1 <- reg2$lignes[reg2$lignes$campagne == "C1" & reg2$lignes$DPEC == "Accouchement normal mère", ]; c2 <- reg2$lignes[reg2$lignes$campagne == "C2" & reg2$lignes$DPEC == "Accouchement normal mère", ]
+     nrow(c1) == dplyr::n_distinct(paste(c1$population, c1$diag2)) && nrow(c2) <= dplyr::n_distinct(paste(sel_c2$population[sel_c2$DPEC == "Accouchement normal mère"], sel_c2$diag2[sel_c2$DPEC == "Accouchement normal mère"])) && nrow(c1) > 3 })
+ok("rapport C2 : section campagne (vierges / recyclés), consommation cumulée par DPEC, DP proches de l'épuisement",
+   { r2 <- readLines(file.path(EXPORTS_DIR, "rapport_v8_" %+% DATE_TAG %+% ".txt")); any(grepl("Campagne C2 \\(registre actif\\)", r2)) && any(grepl("consommation cumulée du catalogue par DPEC", r2)) && any(grepl("épuisement total", r2)) && any(grepl("Classes DPEC plafonnées", r2)) })
+ok("corpus C2 : id_scenario, origine des profils et DPEC/TPEC en sortie", all(c("id_scenario", "id_profil", "hash_das", "DPEC", "TPEC") %in% names(finaux2)) && "recycle" %in% sel_c2$origine_profil)
 Sys.unsetenv("SCENARIOS_PMSI_ETAPES_SEULEMENT")
 Sys.setenv(SCENARIOS_PMSI_PATH = proj); surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)"); source(file.path(proj, "config_v8.R"))
 options(pmsi_mock_interdit = TRUE)

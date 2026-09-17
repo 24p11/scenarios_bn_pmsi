@@ -262,7 +262,8 @@ sample_das_court <- function(mode_hospit, sexe, cage, ghm2, diag2, duree, nb = N
 # tables de référence en argument. Retourne NULL si la strate est vide.
 sample_das_long <- function(mode_hospit, sexe, age, cage, racine, ghm2, diabete, hta, diag2, nbda,
                             diagnostic_associes, type_unite = NA, prep_sc = NA, poids = NA,
-                            ref_das_aigu, refs, nb_tirage = 1, dedoublonner = FALSE, ...){
+                            ref_das_aigu, refs, nb_tirage = 1, dedoublonner = FALSE,
+                            id_profil = NA_character_, variante_debut = 1L, hash_exclus = "", ...){
   
   mode_hospit_ = as.character(mode_hospit)
   sexe_ = as.character(sexe)
@@ -317,7 +318,7 @@ sample_das_long <- function(mode_hospit, sexe, age, cage, racine, ghm2, diabete,
     
     tibble::tibble(mode_hospit = mode_hospit_, sexe = sexe_, age = age_, cage = cage_, racine = racine_,
                    ghm2 = ghm2_, diabete = as.character(diabete), hta = hta_, diag2 = diag, nbda = nbda_,
-                   type_unite = type_unite_, prep_sc = prep_sc_, poids = poids_, variante = i,
+                   type_unite = type_unite_, prep_sc = prep_sc_, poids = poids_, variante = as.integer(variante_debut) + i - 1L,
                    graine = paste(da, collapse = " "), diabete_scenario = diabete_,
                    nb_das = length(das_samples),
                    diagnostic_associes = paste(das_samples, collapse = " ")) |>
@@ -330,6 +331,16 @@ sample_das_long <- function(mode_hospit, sexe, age, cage, racine, ghm2, diabete,
   if(isTRUE(dedoublonner) && !is.null(df_tmp)){
     df_tmp$nb_variantes_demandees <- as.integer(nb_tirage)
     df_tmp <- dedoublonner_variantes(df_tmp, "diagnostic_associes")
+  }
+  # Campagnes : identifiants stables et exclusion des jeux déjà enregistrés au registre pour ce profil
+  # (recyclage à variantes nouvelles : doublon inter-campagnes éliminé comme un doublon intra-ligne, sans re-tirage)
+  if(!is.null(df_tmp) && !is.na(id_profil)){
+    df_tmp$id_profil <- as.character(id_profil)
+    df_tmp$hash_das <- hash_das_de(df_tmp$diagnostic_associes)
+    exclus <- strsplit(as.character(hash_exclus), " ", fixed = TRUE)[[1]]; exclus <- exclus[nzchar(exclus)]
+    if(length(exclus) > 0) df_tmp <- df_tmp[!df_tmp$hash_das %in% exclus, , drop = FALSE]
+    df_tmp$id_scenario <- id_scenario_de(df_tmp$id_profil, df_tmp$variante)
+    if(nrow(df_tmp) == 0) return(NULL)
   }
   
   return(df_tmp)
@@ -701,7 +712,7 @@ formater_revue <- function(df, branche, lib){
     if(nom %in% names(df)) return(df[[nom]])
     if(length(defaut) == nrow(df)) defaut else rep(defaut, nrow(df))
   }
-  tibble::tibble(branche = branche, cmd = substr(df$ghm2, 1, 2), ghm2 = df$ghm2,
+  tibble::tibble(branche = branche, id_scenario = col("id_scenario", NA_character_), cmd = substr(df$ghm2, 1, 2), ghm2 = df$ghm2,
                  type_unite = col("type_unite", NA_character_), sexe = df$sexe,
                  age = as.character(col("age")), cage = col("cage", NA_character_), duree = col("duree"),
                  mode_entree = col("mode_entree", NA_character_), mode_sortie = col("mode_sortie", NA_character_),
@@ -1210,6 +1221,7 @@ seed_selection <- function(seed, population, lettre, populations) as.integer(see
 # seulement si k >= nb de types présents (sinon désactivés, mention au rapport).
 choisir_lignes_dp <- function(d, k, col_poids = "poids", col_unite = "type_unite"){
   k_eff <- min(k, nrow(d))
+  if(k_eff <= 0) return(list(lignes = d[0, , drop = FALSE], planchers = FALSE))
   types <- unique(as.character(d[[col_unite]]))
   planchers <- length(types) > 1 && k_eff >= length(types)
   if(planchers){
@@ -1364,4 +1376,155 @@ message_catalogue_absent <- function(etape, exports_dir, path_results){
                  "S'il existe sous un autre profil (exports_diagnostic/ <-> exports/)%s, copiez-le — chunk de migration de RUN_aval.Rmd ou RUN.md, règles de cache, ",
                  "condition Q13 (mêmes AN_REF, SEUIL_REF_DAS, SEUIL_REF_IMPRECIS, SEUIL_REF_PAIRES, CONVERSION_E669, BARE_E669_DEFAUT) — ; ",
                  "sinon lancez etape_catalogue() (extraction, coûteux)."), etape, sub("/$", "", exports_dir), ou)
+}
+
+## ---- G. Campagnes : identifiants stables, registre des tirages, plafonds de classe, sélection sous registre ----
+
+# --- G1. Identifiants stables --------------------------------------------------------------
+# RECETTE FIGÉE (version RECETTE_ID) : sha256 de la concaténation, séparateur "\r", des valeurs
+# as.character (NA -> "") des colonnes, DANS CET ORDRE : PIVOTS_LONGS = mode_hospit, sexe, age, cage,
+# racine, ghm2, diabete, hta, diag2, nbda, type_unite, prep_sc, puis diagnostic_associes ; hex tronqué
+# à 16 caractères. Déterministe, indépendant de l'ordre des lignes, recalculable sur tout fichier.
+# La changer invaliderait le registre (MODIFICATIONS_V8.md section 18).
+RECETTE_ID <- "id_v1"
+COLONNES_RECETTE_ID <- c("mode_hospit", "sexe", "age", "cage", "racine", "ghm2", "diabete", "hta", "diag2", "nbda", "type_unite", "prep_sc", "diagnostic_associes")
+sha256_vec <- function(x){
+  x <- as.character(x)
+  if(requireNamespace("openssl", quietly = TRUE)) return(as.character(openssl::sha256(x)))
+  if(requireNamespace("digest", quietly = TRUE)) return(unname(digest::getVDigest(algo = "sha256")(x, serialize = FALSE)))
+  stop("id_profil : ni openssl ni digest disponible (sha256). Installer l'un des deux (MODIFICATIONS_V8.md, Q37).", call. = FALSE)
+}
+norm_val <- function(v){ v <- as.character(v); v[is.na(v)] <- ""; v }
+id_profil_de <- function(df, colonnes = COLONNES_RECETTE_ID){
+  manq <- setdiff(colonnes, names(df)); if(length(manq)) stop("id_profil_de : colonnes manquantes : " %+% paste(manq, collapse = ", "), call. = FALSE)
+  if(nrow(df) == 0) return(character(0))
+  cle <- do.call(paste, c(lapply(colonnes, function(cc) norm_val(df[[cc]])), sep = "\r"))
+  substr(sha256_vec(cle), 1, 16)
+}
+id_scenario_de <- function(id_profil, variante) paste0(id_profil, "-", sprintf("%03d", as.integer(variante)))
+# Empreinte du jeu complet de DAS réellement tiré (graine + complétion + doctrine), ordre indifférent
+hash_das_de <- function(diagnostic_associes){
+  cle <- vapply(split_das(diagnostic_associes), function(v) paste(sort(unique(v), method = "radix"), collapse = " "), character(1))
+  substr(sha256_vec(cle), 1, 16)
+}
+seed_campagne <- function(seed, campagne) as.integer(seed + 1000L * (sum(utf8ToInt(as.character(campagne))) %% 100000L))
+
+# --- G2. Registre des tirages (append-only) ------------------------------------------------
+COLONNES_REGISTRE <- c("id_profil", "variante", "id_scenario", "hash_das", "campagne", "population", "diag2", "DPEC", "date")
+nom_registre <- function(campagne) sprintf("registre_%s.parquet", campagne)
+# Écrit registre_<campagne>.parquet ; JAMAIS de réécriture : stop si le fichier existe et diffère,
+# idempotent s'il est identique (comparaison hors colonne date).
+ecrire_registre_campagne <- function(df, campagne, dir_registre, ecrire = arrow::write_parquet, lire = arrow::read_parquet){
+  stopifnot(all(COLONNES_REGISTRE %in% names(df)))
+  df <- tibble::as_tibble(df[, COLONNES_REGISTRE]) |> dplyr::arrange(id_profil, variante)
+  if(!dir.exists(dir_registre)) dir.create(dir_registre, recursive = TRUE)
+  f <- file.path(dir_registre, nom_registre(campagne))
+  if(file.exists(f)){
+    ex <- tibble::as_tibble(lire(f)) |> dplyr::arrange(id_profil, variante)
+    cols <- setdiff(COLONNES_REGISTRE, "date")
+    if(!identical(as.data.frame(ex[, cols]), as.data.frame(df[, cols])))
+      stop("registre : " %+% basename(f) %+% " existe déjà avec un contenu DIFFÉRENT (registre append-only, jamais réécrit). Choisissez un autre identifiant de campagne.", call. = FALSE)
+    return(invisible(f))
+  }
+  ecrire(df, f); invisible(f)
+}
+# Lecteur unique du registre : lignes + agrégats (par id_profil : variante_max, nb, hash_das ;
+# par diag2 et par DPEC : consommations cumulées). Registre vide -> tables vides.
+lire_registre <- function(dir_registre, lire = arrow::read_parquet){
+  vide <- tibble::as_tibble(stats::setNames(replicate(length(COLONNES_REGISTRE), character(0), simplify = FALSE), COLONNES_REGISTRE))
+  vide$variante <- integer(0)
+  fichiers <- if(dir.exists(dir_registre)) sort(list.files(dir_registre, pattern = "^registre_.*\\.parquet$", full.names = TRUE)) else character(0)
+  lignes <- if(length(fichiers) == 0) vide else if(arrow_dataset_disponible()) tibble::as_tibble(dplyr::collect(arrow::open_dataset(fichiers))) else purrr::map(fichiers, function(f) tibble::as_tibble(lire(f))) |> purrr::list_rbind()
+  lignes$variante <- as.integer(lignes$variante)
+  par_profil <- if(nrow(lignes) == 0) tibble::tibble(id_profil = character(0), variante_max = integer(0), nb_scenarios = integer(0), hash_das = list()) else
+    lignes |> dplyr::summarise(variante_max = max(variante), nb_scenarios = dplyr::n(), hash_das = list(unique(hash_das)), .by = id_profil)
+  list(lignes = lignes, fichiers = fichiers, nb_campagnes = length(fichiers), nb_scenarios = nrow(lignes),
+       par_profil = par_profil,
+       par_diag2 = lignes |> dplyr::summarise(nb_scenarios = dplyr::n(), nb_profils = dplyr::n_distinct(id_profil), .by = diag2),
+       par_dpec = lignes |> dplyr::summarise(nb_scenarios = dplyr::n(), nb_profils = dplyr::n_distinct(id_profil), .by = DPEC),
+       par_campagne = lignes |> dplyr::summarise(nb_scenarios = dplyr::n(), .by = campagne))
+}
+
+# --- G3. Plafonds de CLASSE DPEC (amendement Q33) -------------------------------------------
+# Plafond = total de la classe DPEC, par population. Chaque DP de la classe reçoit d'abord 1 ligne ×
+# 1 variante (le représentant prime : si nb_dp > plafond, total = nb_dp, dépassement consigné) ; le
+# surplus (plafond - nb_dp) est réparti au poids (plus forts restes) entre les DP de la classe.
+# Entrée : lignes de la classe (diag2, poids) ; sortie : tibble(diag2, quota) + résumé.
+allocation_classe_plafonnee <- function(df_classe, plafond, col_dp = "diag2", col_poids = "poids"){
+  if(nrow(df_classe) == 0) return(list(quotas = tibble::tibble(diag2 = character(0), quota = integer(0)), nb_dp = 0L, plafond = as.integer(plafond), total = 0L, depassement = 0L))
+  p <- df_classe |> dplyr::summarise(poids = sum(.data[[col_poids]]), .by = dplyr::all_of(col_dp))
+  names(p)[1] <- "diag2"
+  nb_dp <- nrow(p); surplus <- max(0L, as.integer(plafond) - nb_dp)
+  quota <- rep(1L, nb_dp) + if(surplus > 0) as.integer(repartir_proportionnel(surplus, p$poids)) else 0L
+  list(quotas = tibble::tibble(diag2 = p$diag2, quota = quota), nb_dp = nb_dp, plafond = as.integer(plafond), total = sum(quota), depassement = max(0L, nb_dp - as.integer(plafond)))
+}
+
+# --- G4. Sélection d'un DP sous registre (fraîcheur d'abord, recyclage à variantes nouvelles) ----
+# d : lignes du DP (avec id_profil) ; registre_profil : tibble(id_profil, variante_max, hash_das (list))
+# ou NULL (registre inactif). Retourne les k lignes + colonnes origine_profil, variante_debut, hash_exclus.
+choisir_lignes_dp_registre <- function(d, k, registre_profil = NULL, col_poids = "poids", col_unite = "type_unite"){
+  if(is.null(registre_profil) || nrow(registre_profil) == 0 || !"id_profil" %in% names(d)){
+    ch <- choisir_lignes_dp(d, k, col_poids, col_unite)
+    l <- ch$lignes; l$origine_profil <- "vierge"; l$variante_debut <- 1L; l$hash_exclus <- ""
+    return(list(lignes = l, planchers = ch$planchers, nb_vierges = nrow(d), nb_recycles = 0L))
+  }
+  vierge <- !d$id_profil %in% registre_profil$id_profil
+  dv <- d[vierge, , drop = FALSE]; du <- d[!vierge, , drop = FALSE]
+  k_eff <- min(k, nrow(d))
+  ch <- choisir_lignes_dp(dv, min(k_eff, nrow(dv)), col_poids, col_unite)
+  l <- ch$lignes
+  if(nrow(l) > 0){ l$origine_profil <- "vierge"; l$variante_debut <- 1L; l$hash_exclus <- "" }
+  reste <- k_eff - nrow(l)
+  if(reste > 0 && nrow(du) > 0){
+    idx <- if(nrow(du) == 1) 1L else sample.int(nrow(du), min(reste, nrow(du)), prob = du[[col_poids]])
+    r <- du[idx, , drop = FALSE]
+    m <- match(r$id_profil, registre_profil$id_profil)
+    r$origine_profil <- "recycle"; r$variante_debut <- as.integer(registre_profil$variante_max[m]) + 1L
+    r$hash_exclus <- vapply(registre_profil$hash_das[m], function(h) paste(unique(h), collapse = " "), character(1))
+    l <- dplyr::bind_rows(l, r)
+  }
+  list(lignes = l, planchers = ch$planchers, nb_vierges = nrow(dv), nb_recycles = sum(l$origine_profil == "recycle"))
+}
+
+# Sélection d'UNE population sur UNE lettre, sous registre et plafonds de classe (remplace
+# selection_quota_dp_fixe_lettre en mode campagne). quotas_classe : tibble(diag2, DPEC, quota) issu
+# d'allocation_classe_plafonnee (toutes lettres) ; NULL = pas de classe plafonnée.
+selection_campagne_lettre <- function(df, X, k, quotas_classe = NULL, registre_profil = NULL, col_dp = "diag2", col_dpec = "DPEC", col_poids = "poids", col_unite = "type_unite"){
+  if(nrow(df) == 0) return(list(selection = df[0, ], stats = NULL))
+  classes <- if(is.null(quotas_classe)) character(0) else unique(quotas_classe$DPEC)
+  df$.grp <- ifelse(df[[col_dpec]] %in% classes, df[[col_dpec]], ".reste")
+  cles <- unique(df[, c(col_dp, ".grp"), drop = FALSE])
+  out <- vector("list", nrow(cles)); st <- vector("list", nrow(cles))
+  for(i in seq_len(nrow(cles))){
+    d <- df[df[[col_dp]] == cles[[col_dp]][i] & df$.grp == cles$.grp[i], , drop = FALSE]
+    if(cles$.grp[i] == ".reste"){ X_dp <- X; k_grp <- k } else {
+      q <- quotas_classe$quota[quotas_classe$diag2 == cles[[col_dp]][i] & quotas_classe$DPEC == cles$.grp[i]]
+      X_dp <- if(length(q)) as.integer(q[1]) else 1L; k_grp <- 1L   # classe plafonnée : 1 ligne par DP, variantes = quota
+    }
+    ch <- choisir_lignes_dp_registre(d, k_grp, registre_profil, col_poids, col_unite)
+    nv <- variantes_par_ligne(nrow(ch$lignes), X_dp)
+    l <- ch$lignes; l$n_var <- nv; l <- l[l$n_var > 0, , drop = FALSE]
+    out[[i]] <- l
+    st[[i]] <- data.frame(dp = cles[[col_dp]][i], groupe = cles$.grp[i], lignes_disponibles = nrow(d), X_dp = X_dp, k_eff = nrow(ch$lignes),
+                          variantes = sum(nv), planchers_actifs = ch$planchers, plafonne = cles$.grp[i] != ".reste",
+                          manque_a_gagner = max(0L, X_dp - nrow(d)), nb_vierges = ch$nb_vierges, nb_recycles = ch$nb_recycles,
+                          vierges_restantes = max(0L, ch$nb_vierges - sum(ch$lignes$origine_profil == "vierge")), stringsAsFactors = FALSE)
+  }
+  sel <- dplyr::bind_rows(out); sel$.grp <- NULL
+  list(selection = sel, stats = dplyr::bind_rows(st))
+}
+
+# --- G5. Rétro-inscription : registre d'une campagne tirée avant ce chantier -----------------
+# Reconstruit les lignes de registre depuis les chunks tirés (pivots + graine -> id_profil ; DAS
+# réellement tirés -> hash_das ; variante telle que tirée) et la sélection (population, DPEC).
+registre_depuis_chunks <- function(df_chunks, campagne, population = NA_character_, dpec_par_profil = NULL, typo = NULL){
+  if(nrow(df_chunks) == 0) return(tibble::as_tibble(stats::setNames(replicate(length(COLONNES_REGISTRE), character(0), simplify = FALSE), COLONNES_REGISTRE)))
+  d <- df_chunks
+  d$id_profil <- id_profil_de(dplyr::mutate(d, diagnostic_associes = graine))
+  d$hash_das <- hash_das_de(d$diagnostic_associes)
+  d$id_scenario <- id_scenario_de(d$id_profil, d$variante)
+  d$campagne <- as.character(campagne); d$population <- if("population" %in% names(d)) as.character(d$population) else as.character(population)
+  d$DPEC <- if("DPEC" %in% names(d)) as.character(d$DPEC) else if(!is.null(dpec_par_profil)) unname(dpec_par_profil[d$id_profil]) else if(!is.null(typo)) typologie_sejour(d, typo, col_age = "age", duree_defaut = 3)$DPEC else NA_character_
+  d$date <- as.character(Sys.Date())
+  tibble::as_tibble(d[, COLONNES_REGISTRE])
 }

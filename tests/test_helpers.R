@@ -709,4 +709,77 @@ ok("message à trois branches : chemin effectif, copie inter-profils (dossier tr
    grepl(file.path(pr, "exports"), m, fixed = TRUE) && grepl("exports_diagnostic", m) && grepl("copiez-le", m) && grepl("Q13", m) && grepl("etape_catalogue\\(\\) \\(extraction, coûteux\\)", m))
 ok("message sans autre catalogue : pas de dossier cité", !grepl("trouvé dans", message_catalogue_absent("x", file.path(pr, "exports"), file.path(tempdir(), "vide_mig"))))
 
+
+# ============================================================ campagnes ==
+cat("\n# identifiants stables (recette id_v1 figée)\n")
+ligne_id <- tibble::tibble(mode_hospit = "HC", sexe = "1", age = "ge_18", cage = "[60-70[", racine = "04M05", ghm2 = "04M053", diabete = "N", hta = "N",
+                           diag2 = "J449", nbda = 2L, type_unite = "HC", prep_sc = 0, diagnostic_associes = "I10 N189")
+ok("recette figée : valeur attendue EN DUR (détecte tout changement involontaire)", id_profil_de(ligne_id) == "095c6d0dfbcf46f4" && RECETTE_ID == "id_v1" && identical(COLONNES_RECETTE_ID, c(PIVOTS_LONGS, "diagnostic_associes")))
+ok("16 caractères hex", nchar(id_profil_de(ligne_id)) == 16 && grepl("^[0-9a-f]{16}$", id_profil_de(ligne_id)))
+df_ids <- dplyr::bind_rows(ligne_id, dplyr::mutate(ligne_id, diag2 = "I500"), dplyr::mutate(ligne_id, diagnostic_associes = "I10 N189 E785"), dplyr::mutate(ligne_id, nbda = NA))
+ok("déterminisme : ordres de lignes différents -> mêmes id", identical(sort(id_profil_de(df_ids)), sort(id_profil_de(df_ids[c(3, 1, 4, 2), ]))))
+ok("sensibilité : pivot ou graine changés -> id différents", length(unique(id_profil_de(df_ids))) == 4)
+ok("NA normalisé en \"\" ; types numériques (0 / 0L, 2 / 2L) équivalents", id_profil_de(dplyr::mutate(ligne_id, nbda = NA)) == id_profil_de(dplyr::mutate(ligne_id, nbda = NA_character_)) &&
+     id_profil_de(dplyr::mutate(ligne_id, prep_sc = 0L, nbda = 2)) == id_profil_de(ligne_id))
+ok("colonne manquante -> stop", grepl("colonnes manquantes", tryCatch(id_profil_de(ligne_id[, -1]), error = function(e) conditionMessage(e))))
+ok("id_scenario et hash_das (ordre des DAS indifférent)", id_scenario_de("abc", 7) == "abc-007" && hash_das_de("I10 N189") == hash_das_de("N189 I10") && hash_das_de("I10 N189") != hash_das_de("I10") && nchar(hash_das_de("I10")) == 16)
+ok("seed_campagne : stable et distinct par campagne", seed_campagne(1, "C1") == seed_campagne(1, "C1") && seed_campagne(1, "C1") != seed_campagne(1, "C2"))
+
+cat("\n# plafonds de classe DPEC (amendement Q33)\n")
+cl5 <- tibble::tibble(diag2 = rep(c("O800", "O801", "O802", "O803", "O804"), each = 2), poids = c(50, 50, 30, 10, 10, 10, 5, 5, 3, 2))
+a3 <- allocation_classe_plafonnee(cl5, 3L)
+ok("classe 5 DP, plafond 3 -> 5 lignes (1 par DP, le représentant prime), dépassement 2", a3$nb_dp == 5 && a3$total == 5 && a3$depassement == 2 && all(a3$quotas$quota == 1))
+a12 <- allocation_classe_plafonnee(cl5, 12L)
+ok("plafond 12 -> 5 + 7 au poids (plus forts restes), total exact, O800 le mieux servi", a12$total == 12 && a12$depassement == 0 && a12$quotas$quota[a12$quotas$diag2 == "O800"] == max(a12$quotas$quota) && all(a12$quotas$quota >= 1))
+ok("classe vide -> 0", allocation_classe_plafonnee(cl5[0, ], 3L)$total == 0)
+cat_cl <- tibble::tibble(diag2 = c("O800", "O800", "O800", "O801", "J449", "J449"), ghm2 = c("14Z13A", "14Z13A", "14Z13B", "14Z13A", "04M053", "04M052"),
+                         DPEC = c("Accouchement normal mère", "Accouchement normal mère", "Accouchement pathologique mère", "Accouchement normal mère", "Médecine adultes > 3 nuits", "Médecine adultes > 3 nuits"),
+                         type_unite = "HC", poids = c(10, 5, 8, 3, 6, 4), cage = "[30-40[", age = "ge_18", mode_hospit = "HC", diagnostic_associes = c("Z370", "Z371", "Z370 O342", "Z370", "I10", "E785"))
+cat_cl$id_profil <- paste0("p", seq_len(nrow(cat_cl)))
+qc <- dplyr::mutate(allocation_classe_plafonnee(cat_cl[cat_cl$DPEC == "Accouchement normal mère", ], 5L)$quotas, DPEC = "Accouchement normal mère")
+set.seed(3); rc <- selection_campagne_lettre(cat_cl, X = 10L, k = 1L, quotas_classe = qc)
+ok("DP multi-DPEC : lignes de la classe plafonnée suivent le quota de classe (1 ligne, variantes = quota), autres lignes du DP à X",
+   { st <- rc$stats; st$X_dp[st$dp == "O800" & st$groupe == "Accouchement normal mère"] == qc$quota[qc$diag2 == "O800"] && st$X_dp[st$dp == "O800" & st$groupe == ".reste"] == 10 &&
+     st$k_eff[st$dp == "O800" & st$groupe == "Accouchement normal mère"] == 1 && sum(rc$selection$n_var[rc$selection$DPEC == "Accouchement normal mère"]) == 5 })
+ok("colonnes campagne présentes, origine vierge sans registre", all(c("origine_profil", "variante_debut", "hash_exclus", "n_var") %in% names(rc$selection)) && all(rc$selection$origine_profil == "vierge") && all(rc$selection$variante_debut == 1L))
+
+cat("\n# registre des tirages (append-only) et sélection sous registre\n")
+dreg <- file.path(tempdir(), "registre_t"); unlink(dreg, recursive = TRUE)
+reg1 <- tibble::tibble(id_profil = c("p1", "p1", "p2"), variante = c(1L, 2L, 1L), id_scenario = c("p1-001", "p1-002", "p2-001"), hash_das = c("h1", "h2", "h3"),
+                       campagne = "C1", population = "adulte", diag2 = c("O800", "O800", "O800"), DPEC = "Accouchement normal mère", date = "2026-09-16")
+f1 <- ecrire_registre_campagne(reg1, "C1", dreg)
+ok("registre écrit ; réécriture identique -> idempotent", file.exists(f1) && identical(ecrire_registre_campagne(reg1[c(3, 1, 2), ], "C1", dreg), f1))
+ok("réécriture divergente -> stop (append-only)", grepl("append-only", tryCatch(ecrire_registre_campagne(dplyr::mutate(reg1, hash_das = "x"), "C1", dreg), error = function(e) conditionMessage(e))))
+ecrire_registre_campagne(dplyr::mutate(reg1[1, ], variante = 3L, id_scenario = "p1-003", hash_das = "h4", campagne = "C2"), "C2", dreg)
+lr <- lire_registre(dreg)
+ok("lire_registre : agrégats (variante_max, nb, hash_das, consommations par diag2 / DPEC / campagne)",
+   lr$nb_campagnes == 2 && lr$nb_scenarios == 4 && lr$par_profil$variante_max[lr$par_profil$id_profil == "p1"] == 3 && setequal(lr$par_profil$hash_das[[which(lr$par_profil$id_profil == "p1")]], c("h1", "h2", "h4")) &&
+     lr$par_diag2$nb_scenarios == 4 && lr$par_dpec$nb_profils == 2 && identical(sort(lr$par_campagne$campagne), c("C1", "C2")))
+ok("registre vide -> tables vides", { v <- lire_registre(file.path(tempdir(), "registre_vide")); v$nb_campagnes == 0 && nrow(v$par_profil) == 0 })
+set.seed(4)
+ch <- choisir_lignes_dp_registre(cat_cl[cat_cl$diag2 == "O800", ], k = 1L, lr$par_profil)
+ok("fraîcheur d'abord : ligne vierge choisie tant qu'il en reste (p3 seule vierge)", ch$lignes$origine_profil == "vierge" && ch$lignes$id_profil == "p3" && ch$nb_vierges == 1 && ch$nb_recycles == 0)
+d_epuise <- cat_cl[cat_cl$id_profil %in% c("p1", "p2"), ]
+ch2 <- choisir_lignes_dp_registre(d_epuise, k = 3L, lr$par_profil)
+ok("DP épuisé : recyclage, variantes numérotées après variante_max, hash_das déjà enregistrés exclus",
+   all(ch2$lignes$origine_profil == "recycle") && ch2$lignes$variante_debut[ch2$lignes$id_profil == "p1"] == 4L && ch2$lignes$variante_debut[ch2$lignes$id_profil == "p2"] == 2L &&
+     setequal(strsplit(ch2$lignes$hash_exclus[ch2$lignes$id_profil == "p1"], " ")[[1]], c("h1", "h2", "h4")) && ch2$nb_recycles == 2)
+set.seed(5); s1 <- selection_campagne_lettre(cat_cl, 10L, 1L, NULL, NULL)
+set.seed(5); s0 <- selection_quota_dp_fixe_lettre(cat_cl, 10L, 1L, list())
+ok("REGISTRE_ACTIF = FALSE (registre NULL, sans classe) == comportement antérieur sans plafond", identical(as.data.frame(s1$selection[, names(s0$selection)]), as.data.frame(s0$selection)))
+set.seed(6); s2a <- selection_campagne_lettre(cat_cl, 10L, 1L, qc, lr$par_profil); set.seed(6); s2b <- selection_campagne_lettre(cat_cl, 10L, 1L, qc, lr$par_profil)
+ok("déterminisme sous seed avec registre", identical(s2a$selection, s2b$selection) && any(s2a$selection$origine_profil == "recycle"))
+
+cat("\n# tirage avec identifiants : variante_debut, exclusion des hash déjà enregistrés\n")
+set.seed(7); t1 <- sample_das_long("HC", "1", "ge_18", "[60-70[", "04M05", "04M053", "N", "N", "J449", 4, "I500", ref_das_aigu = idx, refs = refs_fx, nb_tirage = 3, dedoublonner = TRUE, id_profil = "abcd", variante_debut = 5L)
+ok("colonnes id_profil / id_scenario / hash_das, variantes 5..7", all(c("id_profil", "id_scenario", "hash_das") %in% names(t1)) && all(t1$variante >= 5 & t1$variante <= 7) && all(t1$id_scenario == paste0("abcd-", sprintf("%03d", t1$variante))) && all(t1$hash_das == hash_das_de(t1$diagnostic_associes)))
+set.seed(7); t2 <- sample_das_long("HC", "1", "ge_18", "[60-70[", "04M05", "04M053", "N", "N", "J449", 4, "I500", ref_das_aigu = idx, refs = refs_fx, nb_tirage = 3, dedoublonner = TRUE, id_profil = "abcd", variante_debut = 5L, hash_exclus = paste(t1$hash_das[1], "zzz"))
+ok("hash déjà enregistré (collision volontaire) -> variante éliminée sans re-tirage", nrow(t2) == nrow(t1) - 1 && !t1$hash_das[1] %in% t2$hash_das && all(t2$hash_das %in% t1$hash_das))
+set.seed(7); t0 <- sample_das_long("HC", "1", "ge_18", "[60-70[", "04M05", "04M053", "N", "N", "J449", 4, "I500", ref_das_aigu = idx, refs = refs_fx, nb_tirage = 3, dedoublonner = TRUE)
+ok("sans id_profil : aucune colonne d'identifiant (schéma antérieur conservé)", !any(c("id_profil", "id_scenario", "hash_das") %in% names(t0)) && identical(t0$diagnostic_associes, t1$diagnostic_associes))
+ok("registre_depuis_chunks : id_profil recalculé sur pivots + graine, hash sur DAS tirés, DPEC par profil",
+   { ch <- t1; for(cc in PIVOTS_LONGS) if(!cc %in% names(ch)) ch[[cc]] <- "x"
+     r <- registre_depuis_chunks(ch, "C9", "adulte", dpec_par_profil = stats::setNames("DPEC test", id_profil_de(dplyr::mutate(ch, diagnostic_associes = graine))[1]))
+     nrow(r) == nrow(t1) && all(r$campagne == "C9") && all(r$DPEC == "DPEC test") && all(r$hash_das == t1$hash_das) && identical(names(r), COLONNES_REGISTRE) })
+
 cat("\nTOUS LES TESTS SONT VERTS :", n_ok, "assertions\n")

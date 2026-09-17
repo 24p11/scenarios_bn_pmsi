@@ -661,7 +661,12 @@ DIR_SELECTION  <- function(pop = NULL) if(is.null(pop)) file.path(EXPORTS_DIR, "
 DIR_CHUNKS_POP <- function(pop) file.path(CHUNKS_DIR, pop)
 DIR_HABILLE    <- function(pop) file.path(EXPORTS_DIR, "habille", pop)
 DIR_FINAL      <- function(pop = NULL) if(is.null(pop)) file.path(EXPORTS_DIR, "scenarios_longs_tirage_v8_" %+% DATE_TAG) else file.path(EXPORTS_DIR, "scenarios_longs_tirage_v8_" %+% DATE_TAG, pop)
-seed_population <- function(pop) as.integer(SEED + 1e5 + 1e4 * match(pop, names(POPULATIONS)))   # seed de tirage dérivé par population
+# Seeds : sans registre, base = SEED (comportement antérieur) ; en campagne (REGISTRE_ACTIF), base =
+# seed_campagne(SEED, CAMPAGNE) — deux campagnes de même config et même registre initial sont
+# reproductibles indépendamment.
+seed_base_campagne <- function() if(isTRUE(REGISTRE_ACTIF)) seed_campagne(SEED, CAMPAGNE) else SEED
+seed_population <- function(pop) as.integer(seed_base_campagne() + 1e5 + 1e4 * match(pop, names(POPULATIONS)))   # seed de tirage dérivé par population
+DIR_REGISTRE   <- function() file.path(EXPORTS_DIR, "registre_tirages")
 # diagnostic_memoire.csv : journal mémoire de la session, écrit (idempotent, mêmes lignes) en fin
 # d'etape_refs, d'etape_partiels_longs et d'etape_catalogue ; character(0) si aucune mesure.
 ecrire_diagnostic_memoire <- function(){
@@ -932,6 +937,9 @@ etape_repartitionner_catalogue <- function(){
     if(!identical(as.character(side$version_typologie), as.character(typo$version)))
       stop("etape_repartitionner_catalogue : le catalogue partitionné a été typé avec la typologie " %+% side$version_typologie %+% " (courante : " %+% typo$version %+%
            "). Supprimez " %+% dir_ds %+% " (le monofichier .ancien est conservé : renommez-le en catalogue_longs_seuil.parquet) et relancez pour re-repartitionner.", call. = FALSE)
+    if(!identical(as.character(side$version_recette_id), RECETTE_ID))
+      stop("etape_repartitionner_catalogue : le catalogue partitionné ne porte pas id_profil en recette " %+% RECETTE_ID %+% " (sidecar : " %+% paste(side$version_recette_id, collapse = "") %+%
+           "). Supprimez " %+% dir_ds %+% ", renommez le .ancien en catalogue_longs_seuil.parquet et relancez (chantier campagnes : id_profil requis). Si un registre existe déjà, le recalculer par rétro-inscription.", call. = FALSE)
     cat("catalogue partitionné déjà présent (", length(side$nb_lignes_par_part), " parts, typologie ", side$version_typologie, ") : sauté\n", sep = "")
     return(banniere_fin("etape_repartitionner_catalogue", t0, character(0)))
   }
@@ -941,12 +949,15 @@ etape_repartitionner_catalogue <- function(){
   if(!dir.exists(dir_ds)) dir.create(dir_ds, recursive = TRUE)
   # lettres présentes (colonne légère) puis lecture par lettre
   lettres <- if(arrow_dataset_disponible()) sort(unique(lettre_de((arrow::open_dataset(mono) |> dplyr::select(diag2) |> dplyr::collect())$diag2))) else sort(unique(lettre_de(arrow::read_parquet(mono)$diag2)))
-  nb_par_part <- list(); poids_par_part <- list(); eff_dpec <- NULL; fichiers <- character(0)
+  nb_par_part <- list(); poids_par_part <- list(); eff_dpec <- NULL; fichiers <- character(0); ids_vus <- character(0)
   for(L in lettres){
     d <- if(arrow_dataset_disponible()) tibble::as_tibble(arrow::open_dataset(mono) |> dplyr::collect()) else tibble::as_tibble(arrow::read_parquet(mono))
     d <- d[lettre_de(d$diag2) == L, , drop = FALSE]
     d$lettre <- L
     d <- typologie_sejour(d, typo, col_age = "age", col_duree = "duree", duree_defaut = 3)
+    d$id_profil <- id_profil_de(d)                                     # recette RECETTE_ID (helpers G1)
+    if(anyDuplicated(d$id_profil)) stop("etape_repartitionner_catalogue : id_profil dupliqué dans la lettre " %+% L %+% " (collision de hash tronqué ou clé pivots × graine non unique).", call. = FALSE)
+    ids_vus <- c(ids_vus, d$id_profil)
     f <- file.path(dir_ds, nom_part_lettre(L)); arrow::write_parquet(d, f); fichiers <- c(fichiers, f)
     nb_par_part[[L]] <- nrow(d); poids_par_part[[L]] <- sum(d$poids)
     eff_dpec <- dplyr::bind_rows(eff_dpec, dplyr::count(d, DPEC, name = "n")) |> dplyr::summarise(n = sum(n), .by = DPEC)
@@ -954,11 +965,13 @@ etape_repartitionner_catalogue <- function(){
     cat(sprintf("  lettre %s : %d lignes\n", L, nrow(d))); rm(d); gc()
   }
   total <- sum(unlist(nb_par_part))
+  if(anyDuplicated(ids_vus)) stop("etape_repartitionner_catalogue : id_profil dupliqué entre lettres (collision de hash tronqué) : " %+% paste(unique(ids_vus[duplicated(ids_vus)])[1:5], collapse = ", "), call. = FALSE)
+  rm(ids_vus); gc()
   if(!is.null(meta) && !is.null(meta$nb_lignes) && total != meta$nb_lignes)
     stop(sprintf("etape_repartitionner_catalogue : %d lignes écrites != %s lignes au méta du catalogue.", total, meta$nb_lignes), call. = FALSE)
   side <- list(produit = "catalogue_longs_seuil (partitionné par lettre)", date = as.character(Sys.Date()), provenance = basename(mono),
                nb_lignes_total = total, nb_lignes_par_part = nb_par_part, sum_poids_par_part = poids_par_part,
-               effectifs_dpec = stats::setNames(as.list(eff_dpec$n), eff_dpec$DPEC), version_typologie = typo$version,
+               effectifs_dpec = stats::setNames(as.list(eff_dpec$n), eff_dpec$DPEC), version_typologie = typo$version, version_recette_id = RECETTE_ID,
                duree_constante_longs = 3L, note = "longs : duree = 3 constante (périmètre 3-100), age = pivot age")
   yaml::write_yaml(side, f_side)
   file.rename(mono, mono %+% ".ancien")
@@ -1076,11 +1089,17 @@ etape_selection_longs <- function(budget = NB_CRH_CIBLE, mode = MODE_SELECTION, 
     budgets <- repartir_budget_populations(as.integer(budget), nb_dp)
     X <- as.integer(ifelse(nb_dp > 0, ceiling(budgets / pmax(nb_dp, 1)), 0L))
     names(X) <- names(POPULATIONS)
+    side_cat <- if(file.exists(file.path(dir_ds, "_sidecar.yaml"))) yaml::read_yaml(file.path(dir_ds, "_sidecar.yaml")) else NULL
+    if(isTRUE(REGISTRE_ACTIF) && (is.null(side_cat) || !identical(as.character(side_cat$version_recette_id), RECETTE_ID)))
+      stop("etape_selection_longs : campagne sous registre impossible, le catalogue partitionné ne porte pas id_profil (recette " %+% RECETTE_ID %+% "). Relancez etape_repartitionner_catalogue() (garde-fou).", call. = FALSE)
+    registre <- if(isTRUE(REGISTRE_ACTIF)) lire_registre(DIR_REGISTRE()) else NULL
+    if(!is.null(registre)) cat(sprintf("registre : %d campagne(s), %d scénarios, %d profils consommés\n", registre$nb_campagnes, registre$nb_scenarios, nrow(registre$par_profil)))
     meta_global <- list(MODE_SELECTION = mode, NB_CRH_CIBLE = as.integer(budget), NB_LIGNES_PAR_DP = as.integer(k),
+                        CAMPAGNE = CAMPAGNE, REGISTRE_ACTIF = isTRUE(REGISTRE_ACTIF), RECETTE_ID = RECETTE_ID,
                         NB_CHUNKS_MAX = as.integer(NB_CHUNKS_MAX), CHUNK_SIZE_MIN = as.integer(CHUNK_SIZE_MIN), CHUNK_SIZE_FIXE = as.integer(CHUNK_SIZE_FIXE),
                         SEED = as.integer(SEED), version_typologie = typo$version, populations = names(POPULATIONS),
                         PLAFONDS_DPEC = PLAFONDS_DPEC, nrow_catalogue = sum(unlist(if(file.exists(file.path(dir_ds, "_sidecar.yaml"))) yaml::read_yaml(file.path(dir_ds, "_sidecar.yaml"))$nb_lignes_par_part else list(NA))))
-    CLES <- c("MODE_SELECTION", "NB_CRH_CIBLE", "NB_LIGNES_PAR_DP", "NB_CHUNKS_MAX", "CHUNK_SIZE_MIN", "CHUNK_SIZE_FIXE", "SEED", "version_typologie")
+    CLES <- c("MODE_SELECTION", "NB_CRH_CIBLE", "NB_LIGNES_PAR_DP", "CAMPAGNE", "REGISTRE_ACTIF", "RECETTE_ID", "NB_CHUNKS_MAX", "CHUNK_SIZE_MIN", "CHUNK_SIZE_FIXE", "SEED", "version_typologie")
     meta_existant <- if(file.exists(FICHIER_META_TIRAGE)) yaml::read_yaml(FICHIER_META_TIRAGE) else NULL
     msg <- verifier_meta_tirage(meta_existant, meta_global, CLES)
     if(!is.null(msg)) stop(msg, call. = FALSE)
@@ -1092,7 +1111,19 @@ etape_selection_longs <- function(budget = NB_CRH_CIBLE, mode = MODE_SELECTION, 
         cat("== Sélection ", pop, " : présente (", f_meta_pop, "), relue\n", sep = "")
         metas_pop[[pop]] <- yaml::read_yaml(f_meta_pop); next
       }
-      cat(sprintf("== Sélection %s : %d DP, budget %d, X = %d par DP, k = %d ==\n", pop, nb_dp[[pop]], budgets[[pop]], X[[pop]], k))
+      cat(sprintf("== Sélection %s : %d DP, budget %d, X = %d par DP, k = %d ; campagne %s (registre %s) ==\n", pop, nb_dp[[pop]], budgets[[pop]], X[[pop]], k, CAMPAGNE, if(isTRUE(REGISTRE_ACTIF)) "actif" else "inactif"))
+      # Plafonds de CLASSE DPEC (amendement Q33) : pré-passe sur les lignes de la population appartenant aux classes plafonnées
+      quotas_classe <- NULL; resume_classes <- NULL
+      if(length(PLAFONDS_DPEC) > 0){
+        lc <- purrr::map(lettres, function(L){ d <- lire_catalogue(dir_ds, mono, L, c("diag2", "cage", "DPEC", "poids")); d[population_de(d$cage, POPULATIONS) == pop & d$DPEC %in% names(PLAFONDS_DPEC), , drop = FALSE] }) |> purrr::list_rbind()
+        for(cl in names(PLAFONDS_DPEC)){
+          a <- allocation_classe_plafonnee(lc[lc$DPEC == cl, , drop = FALSE], PLAFONDS_DPEC[[cl]])
+          if(a$nb_dp > 0) quotas_classe <- dplyr::bind_rows(quotas_classe, dplyr::mutate(a$quotas, DPEC = cl))
+          resume_classes <- dplyr::bind_rows(resume_classes, data.frame(population = pop, classe = cl, nb_dp = a$nb_dp, plafond = a$plafond, total_retenu = a$total, depassement = a$depassement))
+          cat(sprintf("   classe plafonnée « %s » : %d DP, plafond %d -> total retenu %d%s\n", cl, a$nb_dp, a$plafond, a$total, if(a$depassement > 0) sprintf(" (DÉPASSEMENT : 1 représentant par DP prime, +%d)", a$depassement) else ""))
+        }
+        rm(lc)
+      }
       if(X[[pop]] * nb_dp[[pop]] > budgets[[pop]]) cat(sprintf("   minimum %d par DP (X = ceiling(budget / nb_DP)) : volume final = X × nb_DP = %d > budget %d (plafonds en moins)\n", X[[pop]], X[[pop]] * nb_dp[[pop]], budgets[[pop]]))
       if(k < 2) cat("   planchers par type d'unité INACTIFS au quota courant (k = ", k, " < nb de types) : la couverture des unités relèvera du registre inter-campagnes\n", sep = "")
       stats_pop <- NULL; eff <- NULL; vol <- 0L
@@ -1102,20 +1133,26 @@ etape_selection_longs <- function(budget = NB_CRH_CIBLE, mode = MODE_SELECTION, 
         if(nrow(d) == 0) next
         if(!"DPEC" %in% names(d)) d <- typologie_sejour(d, typo, col_age = "age", col_duree = "duree", duree_defaut = 3)
         if(!"lettre" %in% names(d)) d$lettre <- L
-        set.seed(seed_selection(SEED, pop, L, POPULATIONS))   # seed stable par (population, lettre)
-        r <- selection_quota_dp_fixe_lettre(d, X[[pop]], k, PLAFONDS_DPEC)
+        set.seed(seed_selection(seed_base_campagne(), pop, L, POPULATIONS))   # seed stable par (campagne, population, lettre)
+        r <- selection_campagne_lettre(d, X[[pop]], k, quotas_classe, if(is.null(registre)) NULL else registre$par_profil)
         if(nrow(r$selection) > 0){
           r$selection$id_selection <- paste0(L, "_", seq_len(nrow(r$selection)))
+          r$selection$campagne <- CAMPAGNE
           f <- file.path(dir_pop, nom_part_lettre(L)); arrow::write_parquet(r$selection, f); fichiers <- c(fichiers, f)
           vol <- vol + sum(r$selection$n_var)
-          eff <- dplyr::bind_rows(eff, r$selection |> dplyr::summarise(lignes = dplyr::n(), variantes = sum(n_var), .by = c(diag2, DPEC, type_unite)))
+          eff <- dplyr::bind_rows(eff, r$selection |> dplyr::summarise(lignes = dplyr::n(), variantes = sum(n_var), .by = c(diag2, DPEC, type_unite, origine_profil)))
         }
         stats_pop <- dplyr::bind_rows(stats_pop, r$stats)
         rm(d, r); gc()
       }
       f_eff <- file.path(dir_pop, "selection_longs_effectifs.csv"); utils::write.csv(eff, f_eff, row.names = FALSE); fichiers <- c(fichiers, f_eff)
       f_st <- file.path(dir_pop, "selection_longs_stats_dp.csv"); utils::write.csv(stats_pop, f_st, row.names = FALSE); fichiers <- c(fichiers, f_st)
+      classes_pop <- if(is.null(resume_classes)) list() else lapply(split(resume_classes, seq_len(nrow(resume_classes))), function(r) as.list(r[, c("classe", "nb_dp", "plafond", "total_retenu", "depassement")]))
       meta_pop <- c(meta_global, list(population = pop, cages = POPULATIONS[[pop]], budget_population = budgets[[pop]], nb_dp = nb_dp[[pop]], X = X[[pop]], k = as.integer(k),
+                                      classes_plafonnees = classes_pop,
+                                      dp_vierges = if(is.null(stats_pop)) 0L else sum(stats_pop$nb_recycles == 0 & stats_pop$groupe == ".reste"),
+                                      dp_recycles = if(is.null(stats_pop)) 0L else sum(stats_pop$nb_recycles > 0),
+                                      dp_partiellement_consommes = if(is.null(stats_pop)) 0L else sum(stats_pop$nb_recycles == 0 & stats_pop$nb_vierges < stats_pop$lignes_disponibles),
                                       volume_attendu = as.integer(vol), plafonds_appliques = if(is.null(stats_pop)) 0L else sum(stats_pop$plafonne),
                                       lignes_plafonnees_par_dpec = if(is.null(stats_pop)) list() else as.list(stats::setNames(tapply(stats_pop$variantes[stats_pop$plafonne], stats_pop$groupe[stats_pop$plafonne], sum), unique(stats_pop$groupe[stats_pop$plafonne]))),
                                       planchers_unites_desactives = if(is.null(stats_pop)) 0L else sum(!stats_pop$planchers_actifs & stats_pop$lignes_disponibles > 1),
@@ -1130,7 +1167,7 @@ etape_selection_longs <- function(budget = NB_CRH_CIBLE, mode = MODE_SELECTION, 
     meta_global$par_population <- lapply(metas_pop, function(m) m[c("budget_population", "nb_dp", "X", "volume_attendu", "manque_a_gagner", "plafonds_appliques")])
     meta_global$PROFIL <- PROFIL; meta_global$date <- as.character(Sys.Date())
     yaml::write_yaml(meta_global, FICHIER_META_TIRAGE); fichiers <- c(fichiers, FICHIER_META_TIRAGE)
-    rapport$selection_fixe <- list(metas = metas_pop, stats = stats_tot)
+    rapport$selection_fixe <- list(metas = metas_pop, stats = stats_tot, registre_avant = if(is.null(registre)) NULL else registre$par_dpec)
     poser_tirage("meta_tirage", meta_global); poser_tirage("rapport", rapport); poser_tirage("mode_tirage", mode)
     cat(sprintf("== Volume attendu total = %d (cible %d) ==\n", meta_global$volume_attendu, budget))
     return(banniere_fin("etape_selection_longs", t0, fichiers))
@@ -1233,7 +1270,8 @@ etape_tirage_das_longs <- function(chunk_range = NULL, populations = names(POPUL
       sel <- lire_catalogue(DIR_SELECTION(pop))
       if(is.null(sel) || nrow(sel) == 0){ cat("population ", pop, " : sélection vide, sautée\n", sep = ""); next }
       cat(sprintf("== Séjours longs %s : %d lignes × variantes (%d attendues) ; seed_base = %d ==\n", pop, nrow(sel), sum(sel$n_var), seed_population(pop)))
-      df_pmap <- sel |> dplyr::select(dplyr::all_of(c(PIVOTS_LONGS, "diagnostic_associes", "poids")), nb_tirage = n_var)
+      df_pmap <- sel |> dplyr::select(dplyr::all_of(c(PIVOTS_LONGS, "diagnostic_associes", "poids")), nb_tirage = n_var,
+                                     dplyr::any_of(c("id_profil", "variante_debut", "hash_exclus")))
       pmap_chunks(df_pmap, sample_das_long, chunk_size = NULL, dossier = DIR_CHUNKS_POP(pop), prefixe = "longs",
                   seed_base = seed_population(pop), garder_chunks = TRUE, chunk_range = chunk_range, assembler = FALSE,
                   ref_das_aigu = index_das, refs = ctx$REFS, dedoublonner = TRUE)
@@ -1454,6 +1492,8 @@ finalisation_fixe <- function(t0, ctx, fusionner, populations){
   } else cat("corpus laissé en parts (", total, " lignes ; fusionner = ", fusionner, ")\n", sep = "")
   rapport$longs_fixe <- resultats; rapport$longs_tirage_n <- total
   poser_tirage("rapport", rapport); poser_tirage("revue", revue)
+  f_reg <- character(0)
+  if(isTRUE(REGISTRE_ACTIF) && isTRUE(meta_tirage$REGISTRE_ACTIF)) f_reg <- etape_registre_campagne(meta_tirage$CAMPAGNE, populations)
 
   ## Livrables
   df_revue <- dplyr::bind_rows(revue[c("courts", names(resultats))])
@@ -1478,6 +1518,21 @@ finalisation_fixe <- function(t0, ctx, fusionner, populations){
     lignes <- c(lignes, "", "== 1b. Lignes plafonnées par DPEC (variantes) ==", fmt_df(sf$stats |> dplyr::filter(plafonne) |> dplyr::summarise(variantes = sum(variantes), dp = dplyr::n(), .by = c(population, groupe))),
                 "== 1c. Les 30 DP au plus fort manque à gagner (X_dp - lignes disponibles) ==", fmt_df(sf$stats |> dplyr::arrange(dplyr::desc(manque_a_gagner)) |> utils::head(30) |> dplyr::select(population, dp, groupe, lignes_disponibles, X_dp, manque_a_gagner)))
   }
+  if(!is.null(sf) && !is.null(sf$metas)){
+    lignes <- c(lignes, "", "== 1e. Classes DPEC plafonnées (plafond = total de classe, 1 représentant par DP prime) ==")
+    for(pop in names(sf$metas)) for(cl in sf$metas[[pop]]$classes_plafonnees)
+      lignes <- c(lignes, sprintf("   %-10s %-30s nb_dp = %s ; plafond = %s ; total retenu = %s ; dépassement = %s", pop, cl$classe, cl$nb_dp, cl$plafond, cl$total_retenu, cl$depassement))
+    lignes <- c(lignes, "", "== 1f. Campagne " %+% meta_tirage$CAMPAGNE %+% " (registre " %+% (if(isTRUE(meta_tirage$REGISTRE_ACTIF)) "actif" else "inactif") %+% ") ==")
+    for(pop in names(sf$metas)){ m <- sf$metas[[pop]]
+      lignes <- c(lignes, sprintf("   %-10s DP vierges = %s ; partiellement consommés = %s ; recyclés (variantes nouvelles) = %s", pop, m$dp_vierges, m$dp_partiellement_consommes, m$dp_recycles)) }
+    if(isTRUE(meta_tirage$REGISTRE_ACTIF) && length(f_reg)){
+      reg <- lire_registre(DIR_REGISTRE()); side_c <- yaml::read_yaml(file.path(DIR_CATALOGUE(), "_sidecar.yaml"))
+      conso <- reg$par_dpec |> dplyr::mutate(lignes_catalogue = unname(unlist(side_c$effectifs_dpec)[DPEC]), taux = round(nb_scenarios / lignes_catalogue, 4)) |> dplyr::arrange(DPEC)
+      lignes <- c(lignes, "-- consommation cumulée du catalogue par DPEC (scénarios tirés toutes campagnes / lignes disponibles) :", fmt_df(conso),
+                  "-- 30 DP les plus proches de l'épuisement total (lignes vierges restantes / lignes disponibles) :",
+                  fmt_df(sf$stats |> dplyr::filter(groupe == ".reste") |> dplyr::mutate(part_vierge = round(vierges_restantes / lignes_disponibles, 3)) |> dplyr::arrange(part_vierge, dplyr::desc(lignes_disponibles)) |> utils::head(30) |> dplyr::select(population, dp, lignes_disponibles, vierges_restantes, part_vierge, nb_recycles)))
+    }
+  }
   lignes <- c(lignes, "", "== 1d. Doublons éliminés par DP (30 premiers) ==")
   for(pop in names(resultats)) if(!is.null(resultats[[pop]]$doublons)) lignes <- c(lignes, "-- " %+% pop, fmt_df(resultats[[pop]]$doublons |> dplyr::mutate(elimines = demandees - gardees) |> dplyr::arrange(dplyr::desc(elimines)) |> utils::head(30)))
   lignes <- c(lignes, "", "== 2. Distribution du nombre de DAS par classe d'âge ==", "-- sejours_courts", fmt_df(rapport$courts$distribution))
@@ -1496,11 +1551,58 @@ finalisation_fixe <- function(t0, ctx, fusionner, populations){
   lignes <- c(lignes, "-- effectifs E660x par classe :", "   courts :", fmt_df(rapport$courts$e660))
   for(pop in names(resultats)) lignes <- c(lignes, "   longs " %+% pop %+% " :", fmt_df(resultats[[pop]]$stats$e660))
   lignes <- c(lignes, "TOTAL anomalies = " %+% anomalies, "",
-              "Livrables : " %+% DIR_FINAL() %+% "/<population>/part_*.parquet" %+% if(isTRUE(fusionner)) " + " %+% basename(f_mono) else "" %+% " ; echantillon_revue.csv (" %+% nrow(df_revue) %+% ") ; top30_das_par_cmd.csv ; selection_longs/<population>/")
+              "Livrables : " %+% DIR_FINAL() %+% "/<population>/part_*.parquet" %+% (if(isTRUE(fusionner)) " + " %+% basename(f_mono) else "") %+% " ; echantillon_revue.csv (" %+% nrow(df_revue) %+% ") ; top30_das_par_cmd.csv ; selection_longs/<population>/" %+% (if(length(f_reg)) " ; " %+% basename(f_reg) else ""))
   f_rapport <- file.path(EXPORTS_DIR, "rapport_v8_" %+% DATE_TAG %+% ".txt")
   writeLines(lignes, f_rapport); cat(lignes, sep = "\n")
   cat("Tirage terminé. Rapport : ", f_rapport, "\n", sep = "")
-  banniere_fin("etape_finalisation", t0, c(fichiers, f_revue, f_top, f_rapport))
+  banniere_fin("etape_finalisation", t0, c(fichiers, f_revue, f_top, f_rapport, f_reg))
+}
+
+# Étape R — registre de campagne : écrit registre_<campagne>.parquet (append-only) depuis les chunks
+# tirés (id_scenario réellement PRODUITS, après dédoublonnage) et la sélection (population, DPEC).
+etape_registre_campagne <- function(campagne = CAMPAGNE, populations = names(POPULATIONS)){
+  t0 <- banniere_debut("etape_registre_campagne", "campagne = " %+% campagne %+% " ; " %+% DIR_REGISTRE())
+  lignes <- NULL
+  for(pop in populations){
+    dir_ch <- DIR_CHUNKS_POP(pop); sel <- lire_catalogue(DIR_SELECTION(pop))
+    if(is.null(sel) || !dir.exists(dir_ch)) next
+    dpec_par_profil <- stats::setNames(sel$DPEC, sel$id_profil)
+    lire_chunks_par_lots(dir_ch, "longs", LOT_CHUNKS_FINALISATION, function(d, i){
+      if(!"id_profil" %in% names(d)) stop("etape_registre_campagne : les chunks de " %+% pop %+% " ne portent pas id_profil (tirés sans identifiants) : utilisez etape_retro_inscrire().", call. = FALSE)
+      d$campagne <- campagne; d$population <- pop; d$DPEC <- unname(dpec_par_profil[d$id_profil]); d$date <- as.character(Sys.Date())
+      lignes <<- dplyr::bind_rows(lignes, tibble::as_tibble(d[, COLONNES_REGISTRE]))
+    })
+  }
+  if(is.null(lignes) || nrow(lignes) == 0) stop("etape_registre_campagne : aucun scénario tiré à inscrire (lancez etape_tirage_das_longs()).", call. = FALSE)
+  if(anyDuplicated(lignes$id_scenario)) stop("etape_registre_campagne : id_scenario dupliqué dans la campagne.", call. = FALSE)
+  f <- ecrire_registre_campagne(lignes, campagne, DIR_REGISTRE())
+  cat(sprintf("registre %s : %d scénarios, %d profils, %d DP -> %s\n", campagne, nrow(lignes), dplyr::n_distinct(lignes$id_profil), dplyr::n_distinct(lignes$diag2), f))
+  banniere_fin("etape_registre_campagne", t0, f)
+}
+
+# Rétro-inscription d'une campagne tirée AVANT ce chantier (chunks sans id_profil) : relit la
+# sélection (population, DPEC) et les chunks, recalcule id_profil (recette RECETTE_ID sur pivots +
+# graine) et hash_das (jeux réellement tirés), garde la numérotation des variantes telle que tirée,
+# écrit registre_<campagne>.parquet (idempotente : mêmes entrées -> même fichier).
+etape_retro_inscrire <- function(dossier_selection, dossier_chunks, campagne, populations = names(POPULATIONS)){
+  t0 <- banniere_debut("etape_retro_inscrire", "campagne = " %+% campagne %+% " ; sélection = " %+% dossier_selection %+% " ; chunks = " %+% dossier_chunks)
+  typo <- charger_typo(); lignes <- NULL; nb_chunks_lignes <- 0L
+  for(pop in populations){
+    dir_ch <- file.path(dossier_chunks, pop); dir_sel <- file.path(dossier_selection, pop)
+    if(!dir.exists(dir_ch)) next
+    sel <- lire_catalogue(dir_sel)
+    dpec_par_profil <- if(!is.null(sel) && all(c("DPEC", "diagnostic_associes") %in% names(sel))){ sel$id_profil <- id_profil_de(sel); stats::setNames(sel$DPEC, sel$id_profil) } else NULL
+    lire_chunks_par_lots(dir_ch, "longs", LOT_CHUNKS_FINALISATION, function(d, i){
+      nb_chunks_lignes <<- nb_chunks_lignes + nrow(d)
+      lignes <<- dplyr::bind_rows(lignes, registre_depuis_chunks(d, campagne, pop, dpec_par_profil, typo))
+    })
+  }
+  if(is.null(lignes) || nrow(lignes) == 0) stop("etape_retro_inscrire : aucun chunk trouvé sous " %+% dossier_chunks %+% "/<population>/.", call. = FALSE)
+  if(anyDuplicated(lignes$id_scenario)) stop("etape_retro_inscrire : id_scenario dupliqué (mêmes profil et variante tirés deux fois ?).", call. = FALSE)
+  f <- ecrire_registre_campagne(lignes, campagne, DIR_REGISTRE())
+  cat(sprintf("vérifications : scénarios inscrits = %d ; lignes des chunks = %d (%s) ; DP couverts = %d ; profils = %d ; DPEC renseignés = %d / %d\n",
+              nrow(lignes), nb_chunks_lignes, if(nrow(lignes) == nb_chunks_lignes) "égaux" else "DIFFÉRENTS", dplyr::n_distinct(lignes$diag2), dplyr::n_distinct(lignes$id_profil), sum(!is.na(lignes$DPEC)), nrow(lignes)))
+  banniere_fin("etape_retro_inscrire", t0, f)
 }
 
 ## ---- 4. Tableau de bord ----
@@ -1575,6 +1677,9 @@ etat_pipeline <- function(){
   # 8. finalisation
   f_sl <- if(dir.exists(EXPORTS_DIR)) list.files(EXPORTS_DIR, pattern = "^scenarios_longs_tirage_v8_") else character(0)
   f_rp <- if(dir.exists(EXPORTS_DIR)) list.files(EXPORTS_DIR, pattern = "^rapport_v8_.*\\.txt$") else character(0)
+  reg <- tryCatch(lire_registre(DIR_REGISTRE()), error = function(e) NULL)
+  ajouter("registre_tirages", if(!is.null(reg) && reg$nb_campagnes > 0) "FAIT" else "À FAIRE",
+          if(is.null(reg) || reg$nb_campagnes == 0) "aucune campagne inscrite (" %+% DIR_REGISTRE() %+% ")" else sprintf("%d campagne(s) : %s ; %d scénarios cumulés ; %d profils", reg$nb_campagnes, paste(sub("^registre_(.*)\\.parquet$", "\\1", basename(reg$fichiers)), collapse = ","), reg$nb_scenarios, nrow(reg$par_profil)))
   ajouter("etape_finalisation", if(length(f_sl) && length(f_rp)) "FAIT" else "À FAIRE",
           sprintf("exports finaux : %s ; rapport : %s ; echantillon_revue.csv : %s", if(length(f_sl)) paste(f_sl, collapse = ", ") else "absent",
                   if(length(f_rp)) paste(f_rp, collapse = ", ") else "absent", if(file.exists(file.path(EXPORTS_DIR, "echantillon_revue.csv"))) "présent" else "absent"))

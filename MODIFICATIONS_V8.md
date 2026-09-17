@@ -204,9 +204,9 @@ Tous dans les **helpers purs** (§0.3 : « là où tu peux écrire du code neuf 
 
 - `referentiels.R` : B11 ; `comp_sat_diab <- codes_comp_sat_diab` ; `neo_codes_diabete` (§5.10). Rien d'autre.
 - `referentiels/exclusions_paires.yaml` : créé (§6.4), 4 paires évidentes, structure `- [A, B]`.
-- `tests/test_helpers.R` : §8.1 + briefs industrialisation §8, conversion §7, mémoire, orchestration, chunking dynamique et aval production et finitions exploitation, 278 assertions (`stopifnot`, sans testthat). Source `config_v8.R` puis `helpers_v8.R`. Repli arrow par paquet mock (section 11).
+- `tests/test_helpers.R` : §8.1 + briefs industrialisation §8, conversion §7, mémoire, orchestration, chunking dynamique et aval production, finitions exploitation et campagnes, 303 assertions (`stopifnot`, sans testthat). Source `config_v8.R` puis `helpers_v8.R`. Repli arrow par paquet mock (section 11).
 - `tests/test_chaines_sqlite.R` : les **scripts réels** (extraction puis tirage) sur SQLite **fichier**
-  avec un faux paquet `pRatihque` (mock interdit pendant le tirage), 119 assertions : chaînes dbplyr
+  avec un faux paquet `pRatihque` (mock interdit pendant le tirage), 140 assertions : chaînes dbplyr
   (§5.9a, B1-10, refs, §7.5/§7.6), sessions multiples et résolution des besoins, cache des partiels,
   reprise, FORCER_REFS, garde-fou `partiels_meta`, tirage sans base, reprise des chunks, identité
   parquet, livrables, mode `catalogue_complet`. Ne valide PAS le dialecte ni les colonnes réelles.
@@ -266,8 +266,8 @@ Tous dans les **helpers purs** (§0.3 : « là où tu peux écrire du code neuf 
 ```
 Rscript -e 'parse("extraction_associations_codes_v8.R")'        # syntaxe OK
 Rscript -e 'for(f in c("config_v8.R","helpers_v8.R","extraction_associations_codes_v8.R","tirage_scenarios_v8.R")) parse(f)'
-Rscript tests/test_helpers.R                                     # 278 assertions vertes (275 sans arrow : chemin (a) non testé)
-R_LIBS_TEST=<lib avec dbplyr/DBI/RSQLite[/arrow]> Rscript tests/test_chaines_sqlite.R   # 119 assertions vertes (avec ou sans arrow)
+Rscript tests/test_helpers.R                                     # 303 assertions vertes (300 sans arrow : chemin (a) non testé)
+R_LIBS_TEST=<lib avec dbplyr/DBI/RSQLite[/arrow]> Rscript tests/test_chaines_sqlite.R   # 140 assertions vertes (avec ou sans arrow)
 grep -n 'filter_chap\|sexe_ ==sexe_\|v2025\|slice(1:2)\|<<-\|distinct(.*\.keep_all' config_v8.R helpers_v8.R extraction_associations_codes_v8.R tirage_scenarios_v8.R
 grep -c 'pRatihque::' tirage_scenarios_v8.R                       # 0 attendu
 #  -> uniquement des commentaires, plus l'unique distinct(.keep_all) HTA commenté « déterministe » (B1 #5)
@@ -874,9 +874,10 @@ scripts conservée (mode quota_dp).
 - **Q32 — listes STREAM (RÉSOLUE)** : le code STREAM a été fourni après la première livraison ; listes et
   libellés recopiés tels quels (version `2026-09-16-b`). Un catalogue repartitionné avec la version `-a`
   doit être re-repartitionné (le garde-fou de version l'impose).
-- **Q33 — plafond par (DP × DPEC plafonné)** : interprété comme un groupe séparé du DP avec X_dp =
-  min(X, plafond), le reste du DP (DPEC non plafonnés) gardant X ; un DP mixte peut donc porter jusqu'à
-  X + min(X, plafond).
+- **Q33 — plafond par (DP × DPEC plafonné) (REMPLACÉE, section 18)** : l'interprétation initiale (groupe
+  séparé du DP, X_dp = min(X, plafond)) s'est révélée inopérante en réel sur les classes standardisées :
+  25 000 accouchements normaux et 15 000 bébés normaux sélectionnés au lieu de quelques centaines (chaque DP
+  de la classe recevait min(X, plafond)). Remplacée par le plafond du TOTAL de la classe par population.
 - **Q34 — index des courts** : `indexer_ref_chronique` est disponible et prouvé mais `etape_tirage_courts`
   garde le filtre (identité bit à bit avec les anciens scripts conservée par le test) ; à brancher si le
   temps des courts devient un goulot.
@@ -902,3 +903,84 @@ Aucune chaîne base, aucune logique de calcul modifiée.
 | 5. Tests : message à trois branches (contenu, chemin effectif, dossier trouvé) ; helpers de migration purs (`localiser_catalogue` avec dossier courant exclu et dataset partitionné, `condition_q13` satisfaite / non satisfaite, `fichiers_migration_catalogue`) ; `diagnostic_memoire.csv` après `etape_refs` et `etape_partiels_longs` + `etat_pipeline` (projet SQLite dédié) | fait | test_helpers.R (10 assertions), test_chaines_sqlite.R (1 assertion composite) |
 
 Tests : 278 (helpers, 275 sans arrow) + 119 (SQLite) assertions vertes.
+
+---
+
+## 18. Chantier « campagnes » (comptabilité inter-campagnes)
+
+Aucune chaîne base concernée. Helpers section G, étapes, config, tests, RUN_aval.Rmd / RUN.md.
+
+### 18.1 Identifiants stables — RECETTE FIGÉE `id_v1`
+`id_profil` = sha256 (openssl, sinon digest ; Q37) de la concaténation, séparateur `"\r"`, des valeurs
+`as.character` (NA → `""`) de, DANS CET ORDRE : `mode_hospit, sexe, age, cage, racine, ghm2, diabete, hta,
+diag2, nbda, type_unite, prep_sc` (= `PIVOTS_LONGS`) puis `diagnostic_associes` ; hex tronqué à 16
+caractères. Déterministe, indépendant de l'ordre des lignes, recalculable sur tout fichier (`id_profil_de`).
+Test à valeur EN DUR (détecte tout changement involontaire). `id_scenario = id_profil-%03d(variante)` ;
+`hash_das` = sha256 tronqué des codes du jeu complet tiré, triés (ordre indifférent). Posés :
+`id_profil` par `etape_repartitionner_catalogue` (colonne des parts, `version_recette_id` au sidecar,
+garde-fou comme la typologie, unicité vérifiée par lettre puis entre lettres — stop explicite en cas de
+collision), `id_scenario` / `hash_das` au tirage (`sample_das_long(id_profil, variante_debut, hash_exclus)`,
+colonnes absentes si `id_profil` n'est pas fourni : schéma antérieur et identité avec les anciens scripts
+conservés), jusqu'aux sorties finales et à `echantillon_revue.csv`.
+### 18.2 Plafonds DPEC redéfinis (Q33 remplacée)
+`PLAFONDS_DPEC` = plafond du TOTAL de la classe DPEC, par population (défauts inchangés : 100 / 100).
+`allocation_classe_plafonnee` : chaque DP de la classe reçoit d'abord 1 ligne × 1 variante (le
+représentant prime : si nb_dp > plafond, total = nb_dp, dépassement consigné), le surplus est réparti au
+poids (plus forts restes). Un DP multi-DPEC : ses lignes des GHM de la classe suivent la règle de classe
+(groupe `(DP × classe)`, 1 ligne, variantes = quota), ses autres lignes suivent X. Rapport : par classe —
+nb_dp, plafond, total retenu, dépassement (section 1e). Pré-passe légère par population sur les colonnes
+`(diag2, cage, DPEC, poids)` de toutes les lettres.
+### 18.3 Registre des tirages
+`EXPORTS_DIR/registre_tirages/registre_<campagne>.parquet`, APPEND-ONLY (`ecrire_registre_campagne` :
+stop si le fichier existe avec un contenu différent hors date, idempotent sinon), colonnes
+`id_profil, variante, id_scenario, hash_das, campagne, population, diag2, DPEC, date`. `lire_registre()` :
+lecteur unique (dataset arrow ; mock : rbind) + agrégats par profil (variante_max, nb, hash_das), par diag2,
+par DPEC, par campagne. `etape_registre_campagne(campagne)` : écrit depuis les chunks (id_scenario réellement
+produits, après dédoublonnage) et la sélection (population, DPEC) ; appelée automatiquement en fin
+d'`etape_finalisation` quand `REGISTRE_ACTIF`. `etat_pipeline()` : ligne registre.
+### 18.4 Sélection sous registre (config `CAMPAGNE`, `REGISTRE_ACTIF`)
+a. Plancher par campagne : automatique (X ≥ 1 et règle de classe) — documenté, pas de mécanisme séparé.
+b. Fraîcheur d'abord : `choisir_lignes_dp_registre` tire les k lignes au poids parmi les lignes dont
+   `id_profil` est absent du registre (anti-jointure).
+c. Recyclage à variantes nouvelles (arbitrage acté) : si < k lignes vierges, complément par des lignes déjà
+   utilisées au poids ; `variante_debut = variante_max + 1` ; `hash_exclus` = hash_das déjà enregistrés pour ce
+   profil, éliminés au tirage comme un doublon intra-ligne, sans re-tirage. Colonne `origine_profil`
+   (`vierge` / `recycle`) dans la sélection, le corpus (via id) et le rapport.
+d. Rapport : DP vierges / partiellement consommés / recyclés par population (section 1f) ; consommation
+   cumulée du catalogue par DPEC (scénarios tirés toutes campagnes / lignes disponibles du sidecar) ; 30 DP
+   les plus proches de l'épuisement total (vierges restantes / lignes disponibles).
+e. Seeds : base = `seed_campagne(SEED, CAMPAGNE)` = SEED + 1000 × (Σ codes UTF-8 de CAMPAGNE mod 100000)
+   quand `REGISTRE_ACTIF`, sinon SEED (comportement antérieur) ; dérivations (population, lettre) inchangées.
+`meta_tirage.yaml` : `CAMPAGNE`, `REGISTRE_ACTIF`, `RECETTE_ID` ajoutés au garde-fou. `REGISTRE_ACTIF = FALSE`
+== comportement antérieur hors plafonds de classe (équivalence testée).
+### 18.5 Rétro-inscription
+`etape_retro_inscrire(dossier_selection, dossier_chunks, campagne)` : relit sélection et chunks d'une
+campagne tirée avant ce chantier, recalcule `id_profil` (pivots + graine) et `hash_das` (DAS tirés),
+conserve la numérotation des variantes, écrit le registre (idempotente). Vérifications imprimées :
+scénarios inscrits == lignes des chunks, DP couverts, DPEC renseignés. Chunk dédié dans RUN_aval.Rmd
+(chemins absolus en clair). Note : la sélection actuellement sur disque (palier 100 k) sera vraisemblablement
+re-tirée sous registre ; la rétro-inscription est le filet si elle est conservée.
+### 18.6 Tests
+test_helpers.R : recette figée (valeur en dur), déterminisme, sensibilité, NA, types ; plafonds de classe
+(5 DP / plafond 3 → 5 et dépassement 2 ; plafond 12 → 5 + 7 au poids ; DP multi-DPEC) ; registre
+(append-only, idempotence, agrégats) ; sélection sous registre (vierges d'abord, DP épuisé → recyclage numéroté
+après variante_max, hash exclus, origine ; REGISTRE_ACTIF = FALSE == antérieur ; déterminisme) ; tirage avec
+identifiants (variante_debut, collision volontaire éliminée sans re-tirage, schéma antérieur sans id) ;
+`registre_depuis_chunks`. test_chaines_sqlite.R (projet de production, fixture 14Z13A pour la classe
+« Accouchement normal mère », plafond 3) : id_profil posé et unique au repartitionnement ; C1 SANS registre
+(classe plafonnée : 1 par DP, dépassement) ; rétro-inscription de C1 (== scénarios tirés, idempotente,
+append-only, etat_pipeline) ; C2 SOUS registre : anti-jointure effective, recyclage numéroté après C1,
+plancher (chaque DP sélectionné), registre_C2 automatique, aucun id_scenario dupliqué dans C1 ∪ C2, aucun
+hash_das réutilisé par profil, classe plafonnée aux volumes attendus, rapport de campagne.
+### 18.7 Questions
+- **Q37 — hachage** : `openssl::sha256` si disponible, sinon `digest` (sha256, vectorisé) ; les deux
+  donnent la même empreinte (vérifié). Aucun des deux n'est une nouvelle dépendance lourde ; à défaut, stop.
+- **Q38 — unicité globale des id_profil au repartitionnement** : vérifiée en mémoire sur l'ensemble des
+  identifiants (≈ 21,6 M chaînes de 16 caractères, ~1,5 Go transitoires, libérés aussitôt) ; mesurée par
+  `noter_memoire`. Une collision du hash tronqué à 64 bits est théoriquement possible mais improbable.
+- **Q39 — plancher en campagne recyclée** : si TOUTES les variantes d'un profil recyclé sont éliminées par
+  les hash déjà enregistrés (strate pauvre), le DP peut manquer à la campagne (souplesse actée, sans
+  re-tirage) ; le test l'admet et le compte. Une garantie stricte imposerait un re-tirage ou un profil
+  de secours.
+- **Q40 — `dp_partiellement_consommes`** : DP dont certaines lignes sont au registre mais qui a encore des
+  lignes vierges (compté à la sélection, rapport 1f).

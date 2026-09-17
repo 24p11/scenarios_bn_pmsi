@@ -153,7 +153,13 @@ POPULATIONS <- list(              # partition EXACTE des modalités de cage (vé
   pediatrie = c("[0-1[", "[1-5[", "[5-10[", "[10-15[", "[15-18["),
   adulte    = c("[18-30[", "[30-40[", "[40-50[", "[50-60[", "[60-70[", "[70-80[", "[80-[")
 )
-PLAFONDS_DPEC <- list("Accouchement normal mère" = 100L, "Bébé normal" = 100L)   # plafond par (DP × DPEC plafonné) ; extensible
+# Plafond du TOTAL d'une classe DPEC, par population (amendement Q33 : le plafond par (DP × DPEC) était
+# inopérant sur les classes standardisées — 25 000 accouchements normaux / 15 000 bébés normaux constatés).
+# Chaque DP de la classe reçoit d'abord 1 représentant (prime sur le plafond), le surplus est réparti au poids.
+PLAFONDS_DPEC <- list("Accouchement normal mère" = 100L, "Bébé normal" = 100L)   # extensible
+# Campagnes itératives (registre des tirages, append-only)
+CAMPAGNE       <- "C1"    # identifiant court de la campagne, OBLIGATOIRE, tracé partout (sélection, corpus, registre)
+REGISTRE_ACTIF <- TRUE    # FALSE = comportement sans registre (tests / diagnostic)
 LOT_CHUNKS_FINALISATION <- 10L   # finalisation en flux : nb de chunks relus par lot
 SEUIL_EXPORT_MONOFICHIER <- 2000000L   # au-delà, l'export final reste en parts (pas de monofichier)
 # Chunking DYNAMIQUE (les deux profils) : la taille des chunks est dimensionnée par les données,
@@ -175,6 +181,7 @@ if(nzchar(SURCHARGE_CONFIG)) source(SURCHARGE_CONFIG, local = FALSE)
 
 ## ---- Dérivés (après surcharges) ----
 if(!MODE_SELECTION %in% c("catalogue_complet", "quota_dp", "quota_dp_fixe")) stop("MODE_SELECTION inconnu : " %+% MODE_SELECTION)
+if(!is.character(CAMPAGNE) || !nzchar(CAMPAGNE) || grepl("[^A-Za-z0-9_-]", CAMPAGNE)) stop("CAMPAGNE : identifiant court obligatoire ([A-Za-z0-9_-]) : " %+% CAMPAGNE)
 if(!exists("BUDGET_TOTAL_LONGS")) BUDGET_TOTAL_LONGS <- NB_CRH_CIBLE   # alias de compatibilité (anciens scripts / surcharges)
 CHUNKS_DIR  <- paste0(EXPORTS_DIR, "chunks/")
 ANSEQTA_REF <- anseqta_de(AN_REF)
@@ -185,7 +192,7 @@ NOMS_CONFIG_META <- c("PROFIL", "VERSION_SCRIPT", "AN_REF", "ANS_HISTORIQUE", "T
                       "SEUIL_PIVOT", "SEUIL_REF_DAS", "SEUIL_REF_IMPRECIS", "SEUIL_REF_PAIRES",
                       "DUREE_COURTS", "DUREE_LONGS", "DUREE_MIN_REF", "NBDA_MAX", "K_GRAINE_LONGS",
                       "NB_TIRAGES_COURTS", "NB_VARIANTES_ADMIN_COURTS", "NB_VARIANTES_ADMIN_LONGS",
-                      "MODE_SELECTION", "NB_CRH_CIBLE", "NB_LIGNES_PAR_DP", "QUOTA_MIN_PAR_UNITE", "NB_CHUNKS_MAX", "CHUNK_SIZE_MIN", "CHUNK_SIZE_FIXE",
+                      "MODE_SELECTION", "NB_CRH_CIBLE", "NB_LIGNES_PAR_DP", "CAMPAGNE", "REGISTRE_ACTIF", "QUOTA_MIN_PAR_UNITE", "NB_CHUNKS_MAX", "CHUNK_SIZE_MIN", "CHUNK_SIZE_FIXE",
                       "GARDER_CHUNKS", "FORCER_REFS", "EXPORTS_DIR", "PARTIELS_DIR", "PIVOTS_LONGS",
                       "CONVERSION_E669", "BARE_E669_DEFAUT", "COLLECT_PAR_MORCEAUX", "SEUIL_ALERTE_GO")
 valeurs_effectives_config <- function(env = globalenv()){
