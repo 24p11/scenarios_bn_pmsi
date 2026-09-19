@@ -1043,8 +1043,13 @@ stats_branche <- function(df, pivots, codes_imprecis, cols_e669){
 # Étape T1 — séjours courts : tirage par chunks (AN_REF UNIQUEMENT : les pivots courts sont
 # extraits sur l'année de référence), habillage admin depuis v_admin_courts.parquet, contrôles,
 # export scenarios_courts. Idempotent : chunks présents sautés ; export réécrit à l'identique.
-etape_tirage_courts <- function(){
-  t0 <- banniere_debut("etape_tirage_courts", "AN_REF = " %+% AN_REF %+% " uniquement (pivots courts de l'année de référence) ; chunking dynamique (NB_CHUNKS_MAX = " %+% NB_CHUNKS_MAX %+% ", CHUNK_SIZE_MIN = " %+% CHUNK_SIZE_MIN %+% ", CHUNK_SIZE_FIXE = " %+% CHUNK_SIZE_FIXE %+% ")")
+# chunk_range = c(i, j) : tirage d'une plage de chunks seulement (parallélisme par sessions sur plages
+# disjointes du même dossier, sidecar partagé — même mode d'emploi que les longs) ; l'assemblage,
+# l'habillage et l'export se font à l'appel final SANS plage (chunks présents sautés). Débit par chunk
+# et extrapolation tous les 10 chunks : pmap_chunks.
+etape_tirage_courts <- function(chunk_range = NULL){
+  t0 <- banniere_debut("etape_tirage_courts", "AN_REF = " %+% AN_REF %+% " uniquement (pivots courts de l'année de référence) ; chunking dynamique (NB_CHUNKS_MAX = " %+% NB_CHUNKS_MAX %+% ", CHUNK_SIZE_MIN = " %+% CHUNK_SIZE_MIN %+% ", CHUNK_SIZE_FIXE = " %+% CHUNK_SIZE_FIXE %+% ")" %+%
+                        if(!is.null(chunk_range)) " ; plage " %+% chunk_range[1] %+% ".." %+% chunk_range[2] %+% " (session parallèle)" else "")
   ctx <- charger_contexte_tirage(nom_ref(c("pivots_courts", "ref_das_chronique", "ref_nb_chroniques", "ref_comp_diabete", "v_admin_courts")), "etape_tirage_courts")
   lire <- function(nom) arrow::read_parquet(file.path(EXPORTS_DIR, nom_ref(nom)))
   df_pivots_courts <- lire("pivots_courts"); df_nb_chroniques <- lire("ref_nb_chroniques")
@@ -1052,10 +1057,14 @@ etape_tirage_courts <- function(){
   cat("== Séjours courts : tirage par chunks (", nrow(df_pivots_courts), " pivots) ==\n", sep = "")
   df_tirage <- pmap_chunks(df_pivots_courts[, c(PIVOTS_COURTS, "nb")], sample_das_court,
                            chunk_size = NULL, dossier = CHUNKS_DIR, prefixe = "courts", seed_base = SEED,
-                           garder_chunks = GARDER_CHUNKS,
+                           garder_chunks = GARDER_CHUNKS, chunk_range = chunk_range,
                            ref_chro = ref_chro, ref_nb_chro = df_nb_chroniques, refs = ctx$REFS,
                            nb_tirages = NB_TIRAGES_COURTS, seuil_ref = SEUIL_REF_DAS,
                            cibles_defaut = CIBLES_NB_CHRONIQUES, age_max = AGE_MAX_OUVERT)
+  if(!is.null(chunk_range)){
+    cat("plage ", chunk_range[1], "..", chunk_range[2], " tirée ; assemblage, habillage et export à la fin : relancer etape_tirage_courts() sans plage (chunks présents sautés)\n", sep = "")
+    return(banniere_fin("etape_tirage_courts", t0, list.files(CHUNKS_DIR, pattern = "^courts_chunk_.*\\.parquet$", full.names = TRUE)))
+  }
   # Identifiants stables des courts (recette id_courts_v1, helpers G1) : id_profil "c" + 15 hex, id_scenario, hash_das
   df_tirage$id_profil <- id_profil_courts_de(df_tirage); df_tirage$id_scenario <- id_scenario_de(df_tirage$id_profil, df_tirage$variante); df_tirage$hash_das <- hash_das_de(df_tirage$diagnostic_associes)
   rapport <- etat_tirage("rapport", list()); revue <- etat_tirage("revue", list())
@@ -1093,8 +1102,17 @@ etape_selection_longs <- function(budget = NB_CRH_CIBLE, mode = MODE_SELECTION, 
   # Garde-fou précoce (§5) : sous registre, une campagne déjà inscrite ne se resélectionne pas — AVANT tout calcul
   if(mode == "quota_dp_fixe" && isTRUE(REGISTRE_ACTIF)){
     st <- statut_campagne_registre(CAMPAGNE, lire_registre(DIR_REGISTRE()))
-    if(st$inscrite) stop("etape_selection_longs : campagne " %+% CAMPAGNE %+% " " %+% st$texte %+% " (CAMPAGNE <- \"Cn\" en config ou surcharge, Restart R, puis vidage chunks + sélection + méta + habillé : chunk JE_CONFIRME_NOUVELLE_CAMPAGNE de RUN_aval.Rmd §3). Le registre ne se vide jamais.", call. = FALSE)
-    cat("campagne ", CAMPAGNE, " : ", st$texte, "\n", sep = "")
+    if(st$inscrite){
+      # Q49 ACTÉE : campagne inscrite = close. Sélection PRÉSENTE de la MÊME campagne -> relecture (reprise sûre, no-op) ;
+      # sinon (aucune sélection, ou sélection d'une autre campagne) -> stop. Aucun re-tirage possible dans les deux cas.
+      f_mt <- file.path(EXPORTS_DIR, "meta_tirage.yaml"); mt0 <- if(file.exists(f_mt)) yaml::read_yaml(f_mt) else NULL
+      sel_meme <- !is.null(mt0) && identical(as.character(mt0$CAMPAGNE), as.character(CAMPAGNE)) &&
+        all(vapply(names(POPULATIONS), function(pp) file.exists(file.path(DIR_SELECTION(pp), "meta_tirage.yaml")), logical(1)))
+      if(!sel_meme) stop("etape_selection_longs : campagne " %+% CAMPAGNE %+% " " %+% sub(" — changez d'identifiant$", "", st$texte) %+% " : campagne CLOSE (" %+%
+                         (if(is.null(mt0)) "aucune sélection sur disque" else "la sélection présente porte la campagne " %+% mt0$CAMPAGNE) %+%
+                         "). Aucun re-tirage possible ; ouvrez une nouvelle campagne — section 3 du notebook RUN_aval.Rmd (CAMPAGNE <- \"Cn\", Restart R, vidage gardé). Le registre ne se vide jamais.", call. = FALSE)
+      cat("campagne ", CAMPAGNE, " déjà inscrite au registre (", st$nb, " scénarios le ", st$date, ") ; sélection relue, aucune nouvelle sélection (reprise sûre)\n", sep = "")
+    } else cat("campagne ", CAMPAGNE, " : ", st$texte, "\n", sep = "")
   }
   ctx <- charger_contexte_tirage(c("catalogue", "catalogue_longs_seuil_meta.yaml"), "etape_selection_longs")
   FICHIER_META_TIRAGE <- file.path(EXPORTS_DIR, "meta_tirage.yaml")
@@ -1564,6 +1582,7 @@ finalisation_fixe <- function(t0, ctx, fusionner, populations){
       conso <- reg$par_dpec |> dplyr::mutate(lignes_catalogue = unname(unlist(side_c$effectifs_dpec)[DPEC]), taux = round(nb_scenarios / lignes_catalogue, 4)) |> dplyr::arrange(DPEC)
       lignes <- c(lignes, "-- consommation cumulée du catalogue par DPEC (scénarios tirés toutes campagnes / lignes disponibles) :", fmt_df(conso),
                   "-- 30 DP les plus proches de l'épuisement total (lignes vierges restantes / lignes disponibles) :",
+                  if(is.null(sf$stats)) "   (stats de sélection non disponibles dans cette session : sélection relue, non recalculée ; voir selection_longs/<population>/selection_longs_stats_dp.csv)" else
                   fmt_df(sf$stats |> dplyr::filter(groupe == ".reste") |> dplyr::mutate(part_vierge = round(vierges_restantes / lignes_disponibles, 3)) |> dplyr::arrange(part_vierge, dplyr::desc(lignes_disponibles)) |> utils::head(30) |> dplyr::select(population, dp, lignes_disponibles, vierges_restantes, part_vierge, nb_recycles)))
     }
   }
@@ -1595,6 +1614,9 @@ finalisation_fixe <- function(t0, ctx, fusionner, populations){
 # Étape R — registre de campagne : écrit registre_<campagne>.parquet (append-only) depuis les chunks
 # tirés (id_scenario réellement PRODUITS, après dédoublonnage) et la sélection (population, DPEC).
 etape_registre_campagne <- function(campagne = CAMPAGNE, populations = names(POPULATIONS)){
+  # Q53 ACTÉE : une mesure de palier n'écrit JAMAIS dans la mémoire permanente (défense en profondeur ; palier.R impose
+  # aussi REGISTRE_ACTIF <- FALSE). La protection vit dans le mécanisme, pas dans la discipline.
+  if(palier_actif()) stop("etape_registre_campagne : surcharge de PALIER active (" %+% surcharge_active() %+% ") : une mesure n'écrit jamais au registre. Videz le palier (RUN_aval.Rmd §5), Restart R, puis relancez la finalisation de la campagne réelle.", call. = FALSE)
   t0 <- banniere_debut("etape_registre_campagne", "campagne = " %+% campagne %+% " ; " %+% DIR_REGISTRE())
   lignes <- NULL
   for(pop in populations){

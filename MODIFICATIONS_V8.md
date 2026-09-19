@@ -1253,7 +1253,7 @@ défaut : fixtures figées, jamais exécutées hors test).
 - **Q48** — `DIR_FINAL` par campagne : les corpus produits AVANT ce lot (dossiers datés
   `scenarios_longs_tirage_v8_<date>/`) ne sont ni renommés ni reconnus par `etat_pipeline` (listés comme
   corpus de campagne « <date> ») ; les renommer à la main en `_<Cn>` et y poser un `_meta.yaml` ? Non fait.
-- **Q49** — Stop précoce de la sélection : il bloque aussi la simple reprise d'une campagne déjà
+- **Q49** (ACTÉE, section 21) — Stop précoce de la sélection : il bloque aussi la simple reprise d'une campagne déjà
   finalisée (relancer `tirage_scenarios_v8.R` après finalisation stoppe à la sélection). Comportement
   voulu (une campagne inscrite est close) ; sinon assouplir en « relecture autorisée si la sélection
   présente porte la même campagne ».
@@ -1264,6 +1264,102 @@ défaut : fixtures figées, jamais exécutées hors test).
   Documenté ; alternative : localiser via `--file=` comme les scripts de la démo. Non fait.
 - **Q52** — `RUN.Rmd` sections 3.3-3.7 : doublon raccourci de `RUN_aval.Rmd` (profil diagnostic) ; les
   retirer de `RUN.Rmd` au profit d'un renvoi ? Conservées, marquées `demo=FALSE`.
-- **Q53** — Palier : `palier.R` conserve `REGISTRE_ACTIF` de la config (TRUE en production) ; une
+- **Q53** (ACTÉE, section 21) — Palier : `palier.R` conserve `REGISTRE_ACTIF` de la config (TRUE en production) ; une
   mesure inscrirait la campagne au registre si elle allait jusqu'à la finalisation. L'en-tête du chunk
   le dit (poser `REGISTRE_ACTIF <- FALSE` dans `palier.R`) ; faut-il l'imposer dans `palier_surcharge` ?
+
+## 21. Lot « correctifs post-contrôle + robustesse lecture + parité courts »
+
+Aucun changement de logique de calcul ; aucune chaîne base touchée.
+
+### 21.1 Défaut arrow (constat d'environnement)
+
+- `RUN_aval.Rmd`, chunk `corpus` : appel direct à `arrow::open_dataset` → « 'open_dataset' is not an
+  exported object from 'namespace:arrow' » sous le repli mock (arrow partiel, sans datasets), constaté en
+  exécutant `demo/executer_notebook.R` sans arrow réel (`RUN.Rmd` passait, `RUN_aval.Rmd` non). La CI
+  installait toujours arrow : le chemin de repli n'était jamais exercé sur les notebooks.
+- Remède : helpers H4 `lire_corpus_final(campagne = CAMPAGNE, populations = NULL, colonnes = NULL,
+  dir_corpus = …)` — lecteur unique du corpus final, même mécanique de repli que `lire_catalogue`
+  (dataset arrow si `arrow_dataset_disponible()`, rbind des parts sinon ; NULL si absent). Les deux
+  notebooks balayés : plus aucun appel direct `arrow::open_dataset` / `write_dataset` (garde dans
+  `tests/test_helpers.R` : grep sur les deux Rmd).
+- CI : matrice `arrow: [avec-arrow, sans-arrow]` sur le job unique — les deux jobs enchaînent les deux
+  suites, la démo et les deux notebooks ; le job sans arrow vérifie qu'arrow est bien absent.
+
+### 21.2 Q49 actée — reprise d'une campagne close
+
+`etape_selection_longs` (quota_dp_fixe sous `REGISTRE_ACTIF`), campagne déjà au registre : si une
+sélection est présente sur disque ET que `meta_tirage.yaml` porte la même campagne (méta par
+population présentes) → relecture normale, message « déjà inscrite au registre (N scénarios le
+<date>) ; sélection relue, aucune nouvelle sélection (reprise sûre) » ; sinon (aucune sélection, ou
+sélection d'une autre campagne) → stop « campagne CLOSE (…) ; ouvrez une nouvelle campagne — section 3
+du notebook ». Aucun re-tirage possible dans les deux cas (la sélection relue ne re-tire jamais).
+Tests SQLite : (a) relance complète de `tirage_scenarios_v8.R` après finalisation + registre → vert,
+no-op (sélection relue, chunks sautés, corpus repris, registre inchangé) ; (b) campagne inscrite sans
+sélection → stop ; (c) sélection d'une autre campagne → stop.
+
+### 21.3 Q53 actée — le palier n'écrit jamais au registre
+
+Chunk `palier_surcharge` : `palier.R` généré contient d'office `REGISTRE_ACTIF <- FALSE` (plus une
+suggestion). Défense en profondeur : `etape_registre_campagne()` stoppe si `palier_actif()`. En-têtes
+des chunks de palier mis à jour. Tests : grep du chunk (helpers) ; `etape_registre_campagne` sous
+`PALIER_ACTIF` → stop (SQLite).
+
+### 21.4 Chunks de lecture robustes
+
+Helpers H4 : `lire_si_present(chemin, produit_par, mode = "auto", nom)` — absent → « <fichier> absent
+— produit par <étape>, pas encore exécutée dans ce profil (voir etat_pipeline()) », NULL invisible ;
+présent → lecture selon l'extension (txt lignes ; csv avec détection `;` → read.csv2 ; parquet ; yaml),
+`mode = "chemin"` rend le chemin résolu ; `dernier_fichier(dossier, motif)` pour les motifs datés (le
+plus récent, NA sinon). Chunks passés au helper : `RUN.Rmd` — `apports` (diagnostic_apports,
+recouvrement, diagnostic_memoire), `catalogue` (rapport d'extraction, le plus récent), `couverture_dp`
+(partiels manquants signalés, distribution_e660), `revue` (echantillon_revue csv2, top30) ;
+`RUN_aval.Rmd` — `verif_repartitionnement` (sidecar), `verif_selection` (meta_tirage, stats par
+population), `rapport` (rapport le plus récent), `revue`, `corpus` (`_meta.yaml` + `lire_corpus_final`).
+Non modifiés car déjà sûrs : `migration_catalogue` (méta lue après localisation), `tirage_parallele`
+(sidecars testés), `session`/`registre_etat` (`lire_registre` vide-safe), `lire_catalogue` (stop
+actionnable). Tests : helper sur absent / NA / chaque mode ; le chunk `rapport` réel de `RUN_aval.Rmd`
+évalué avant finalisation (dossier vide) → message, aucune erreur (SQLite).
+
+### 21.5 Branche courts : parité de performance
+
+- `etape_tirage_courts(chunk_range = NULL)` : plage passée à `pmap_chunks` (`assembler` = FALSE en
+  plage) ; message « plage i..j tirée ; assemblage, habillage et export à la fin : relancer sans plage » ;
+  la bannière affiche la plage. Mode d'emploi identique aux longs (RUN.md, RUN.Rmd chunk `courts`).
+- `pmap_chunks` : débit par chunk déjà imprimé pour tout préfixe ; ajout de l'extrapolation tous les 10
+  chunks traités dans la session (« restant dans la plage : n ≈ x min au débit moyen ») — bénéficie aux
+  deux branches.
+- Tests SQLite : plages 1..1 + 2..n = tous les chunks, aucun export en plage ; run complet après
+  suppression d'un chunk d'une plage == run initial bit à bit ; débit imprimé. Helpers : 25 chunks →
+  2 bannières d'extrapolation (restant 15 puis 5).
+- Profilage rapide non réalisé (pas d'environnement réel ici) : la piste évidente est consignée en Q54.
+
+### 21.5b Défaut latent révélé par le test Q49 (a)
+
+`finalisation_fixe`, rapport, bloc « 30 DP les plus proches de l'épuisement » : `sf$stats` est NULL
+quand `etape_selection_longs()` a RELU la sélection dans la même session que la finalisation sous
+registre (stats de sélection non recalculées à la relecture) → `dplyr::filter` sur NULL, erreur R
+brute. Jamais atteint auparavant (les tests relisaient sous registre inactif, ou via
+`relire_selection_longs` qui laisse `selection_fixe` vide et saute tout le bloc). Correctif : note
+explicite dans le rapport à la place de la table (les stats restent disponibles dans
+`selection_longs/<population>/selection_longs_stats_dp.csv`).
+
+### 21.6 Vérifications
+
+| Passe | Résultat |
+|---|---|
+| `tests/test_helpers.R` avec / sans arrow | 320 / 317 |
+| `tests/test_chaines_sqlite.R` avec / sans arrow | 154 / 154 |
+| démo + notebooks AVEC arrow ; notebooks + démo SANS arrow (repli mock RDS) | verts (le défaut 21.1 est reproduit puis corrigé sur ce chemin) |
+
+### 21.7 Questions
+
+- **Q54** — Point chaud probable de `sample_das_court` (hors tirages) : `candidats_chroniques` puis
+  `filtre_das_ghm_c` sont recalculés à chaque pivot alors que la strate (diag2, sexe, cage) se répète
+  entre pivots (mode_hospit, ghm2, duree différents) ; un cache par strate (comme `indexer_ref_chronique`
+  pour les longs) amortirait le coût fixe. Non fait : cœur doctrine, décision attendue.
+- **Q55** — `lire_corpus_final` charge le corpus en RAM (500 000 lignes attendues : acceptable ;
+  `colonnes = c("population", "DPEC")` dans le chunk `corpus`). Faut-il une variante en flux par parts
+  pour des corpus plus grands ?
+- **Q56** — CI : la matrice double le temps machine (~9 min par job) ; conserver les deux jobs sur chaque
+  push, ou le job sans arrow sur `push main` seulement ?

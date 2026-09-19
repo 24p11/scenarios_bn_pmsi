@@ -64,6 +64,10 @@ Rscript demo/executer_notebook.R --raz RUN.Rmd     # exécute les chunks dans l'
 Rscript demo/executer_notebook.R RUN_aval.Rmd
 ```
 
+La CI déroule suites, démo et notebooks dans deux jobs, **avec** et **sans** arrow (repli mock RDS) :
+toute lecture des notebooks passe par des lecteurs à repli (`lire_catalogue`, `lire_registre`,
+`lire_corpus_final`, `lire_si_present`), jamais par un dataset arrow direct.
+
 `executer_notebook.R` n'utilise pas `rmarkdown::render` : les notebooks posent
 `knitr::opts_chunk$set(eval = FALSE)` (un Knit ne doit jamais lancer le pipeline) ; le lanceur lit les
 chunks, saute `opts` et les `demo=FALSE`, exécute `mode_demo` puis tout le reste, et s'arrête à la

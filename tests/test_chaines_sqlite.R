@@ -354,6 +354,16 @@ unlink(ch_longs[min(2, length(ch_longs))]); unlink(sort(list.files(CHUNKS_DIR, p
 log_t2 <- sortie(lancer("tirage_scenarios_v8.R"))
 ok("reprise : sélection relue, chunks présents sautés", any(grepl("relue depuis", log_t2)) && any(grepl("déjà présent, sauté", log_t2)))
 ok("reprise après suppression d'un chunk : parquets identiques bit à bit", identical(arrow::read_parquet(f_courts), sc_courts) && identical(arrow::read_parquet(f_longs), sc_longs))
+# courts : parité avec les longs — plages disjointes (parallélisme simulé) == run complet, reprise après suppression d'un chunk d'une plage
+ch_c <- sort(list.files(CHUNKS_DIR, pattern = "^courts_chunk_.*\\.parquet$", full.names = TRUE)); nc <- length(ch_c)
+unlink(ch_c); unlink(f_courts)
+log_c1 <- sortie(etape_tirage_courts(chunk_range = c(1, 1))); log_c2 <- sortie(etape_tirage_courts(chunk_range = c(2, nc)))
+ok("courts : chunk_range — plages disjointes 1..1 + 2..n = tous les chunks, aucun export tant qu'une plage est demandée",
+   nc > 1 && length(list.files(CHUNKS_DIR, pattern = "^courts_chunk_.*\\.parquet$")) == nc && !file.exists(f_courts) && any(grepl("plage traitée : 1\\.\\.1", log_c1)) &&
+     any(grepl("plage 1\\.\\.1 \\(session parallèle\\)", log_c1)) && any(grepl("relancer etape_tirage_courts\\(\\) sans plage", log_c2)))
+unlink(ch_c[2]); log_c3 <- sortie(etape_tirage_courts())
+ok("courts : run complet après plages (un chunk d'une plage supprimé, retiré) == run initial bit à bit ; débit par chunk imprimé",
+   identical(as.data.frame(arrow::read_parquet(f_courts)), as.data.frame(sc_courts)) && sum(grepl("déjà présent, sauté", log_c3)) == nc - 1 && any(grepl("débit [0-9]+ scénarios/s", log_c3)))
 # =============================================================== ORCHESTRATION ==
 # (a) identité bit à bit avec les ANCIENS scripts d'entrée (instantanés tests/ancien_20260914),
 #     mêmes fixtures, même seed, même surcharge : extraction puis tirage dans un projet dédié.
@@ -599,11 +609,29 @@ dir_c1 <- file.path(EXPORTS_DIR, "scenarios_longs_tirage_v8_C1"); dir_c2 <- file
 ok("C1 puis C2 le même jour : deux dossiers de corpus, C1 intact (mêmes id_scenario qu'à sa finalisation)",
    dir.exists(dir_c1) && dir.exists(dir_c2) && basename(DIR_FINAL()) == "scenarios_longs_tirage_v8_C2" && yaml::read_yaml(file.path(dir_c1, "_meta.yaml"))$campagne == "C1" &&
      setequal(lu(list.files(dir_c1, pattern = "^part_", recursive = TRUE, full.names = TRUE))$id_scenario, finaux$id_scenario) && !identical(sort(unique(finaux2$id_scenario)), sort(unique(finaux$id_scenario))))
-ok("sélection sous registre : campagne C2 déjà inscrite -> stop précoce, AVANT tout calcul (aucun fichier touché)",
-   { avant <- file.info(list.files(DIR_SELECTION(), recursive = TRUE, full.names = TRUE))$mtime
-     err <- tryCatch({ invisible(sortie(etape_selection_longs())); NULL }, error = function(e) conditionMessage(e))
-     !is.null(err) && grepl("campagne C2 déjà inscrite au registre", err) && grepl("changez d'identifiant", err) && grepl("JE_CONFIRME_NOUVELLE_CAMPAGNE", err) &&
-       identical(avant, file.info(list.files(DIR_SELECTION(), recursive = TRUE, full.names = TRUE))$mtime) })
+# Q49 ACTÉE : campagne inscrite = close ; sélection présente de la même campagne -> relecture (reprise sûre) ; sinon stop
+ok("Q49 (a) : reprise complète du lanceur après finalisation + registre -> no-op sûr (sélection relue, chunks sautés, corpus repris, registre inchangé)",
+   { reg_avant <- lire_registre(DIR_REGISTRE())$nb_scenarios; Sys.unsetenv("SCENARIOS_PMSI_ETAPES_SEULEMENT")
+     log_rep <- sortie(lancer("tirage_scenarios_v8.R")); Sys.setenv(SCENARIOS_PMSI_ETAPES_SEULEMENT = "1")
+     any(grepl("déjà inscrite au registre .* sélection relue, aucune nouvelle sélection", log_rep)) && any(grepl("déjà présent, sauté", log_rep)) && any(grepl("même campagne", log_rep)) &&
+       lire_registre(DIR_REGISTRE())$nb_scenarios == reg_avant && setequal(lu(list.files(DIR_FINAL(), pattern = "^part_", recursive = TRUE, full.names = TRUE))$id_scenario, finaux2$id_scenario) })
+ok("Q49 (b) : campagne inscrite SANS sélection sur disque -> stop « campagne close », renvoi section 3 du notebook, aucun fichier touché",
+   { f_mt <- file.path(EXPORTS_DIR, "meta_tirage.yaml"); f_bak <- f_mt %+% ".bak"; file.rename(f_mt, f_bak)
+     avant <- file.info(list.files(DIR_SELECTION(), recursive = TRUE, full.names = TRUE))$mtime
+     err <- tryCatch({ invisible(sortie(etape_selection_longs())); NULL }, error = function(e) conditionMessage(e)); file.rename(f_bak, f_mt)
+     !is.null(err) && grepl("campagne CLOSE \\(aucune sélection sur disque\\)", err) && grepl("section 3 du notebook", err) && identical(avant, file.info(list.files(DIR_SELECTION(), recursive = TRUE, full.names = TRUE))$mtime) })
+ok("Q49 (c) : sélection présente d'une AUTRE campagne -> stop « campagne close », aucun re-tirage",
+   { f_mt <- file.path(EXPORTS_DIR, "meta_tirage.yaml"); orig <- readLines(f_mt); mt_x <- yaml::read_yaml(f_mt); mt_x$CAMPAGNE <- "C1"; yaml::write_yaml(mt_x, f_mt)
+     err <- tryCatch({ invisible(sortie(etape_selection_longs())); NULL }, error = function(e) conditionMessage(e)); writeLines(orig, f_mt)
+     !is.null(err) && grepl("la sélection présente porte la campagne C1", err) && grepl("Aucun re-tirage possible", err) })
+ok("Q53 : etape_registre_campagne refuse de s'exécuter sous PALIER_ACTIF (une mesure n'écrit jamais au registre)",
+   { assign("PALIER_ACTIF", TRUE, envir = globalenv()); err <- tryCatch({ invisible(sortie(etape_registre_campagne("C2"))); NULL }, error = function(e) conditionMessage(e)); rm("PALIER_ACTIF", envir = globalenv())
+     !is.null(err) && grepl("PALIER active", err) && grepl("jamais au registre", err) })
+ok("chunk `rapport` de RUN_aval.Rmd exécuté AVANT la finalisation (dossier d'exports vide) -> message actionnable, aucune erreur R",
+   { l <- readLines(file.path(racine, "RUN_aval.Rmd"), warn = FALSE); i <- grep("^```\\{r rapport\\}", l); j <- i + which(grepl("^```\\s*$", l[(i + 1):length(l)]))[1]
+     ex_sauve <- EXPORTS_DIR; d_vide <- file.path(tempdir(), "exports_vide"); dir.create(d_vide, showWarnings = FALSE); assign("EXPORTS_DIR", d_vide, envir = globalenv())
+     out <- tryCatch(sortie(eval(parse(text = l[(i + 1):(j - 1)]), envir = globalenv())), error = function(e) "ERREUR : " %+% conditionMessage(e)); assign("EXPORTS_DIR", ex_sauve, envir = globalenv())
+     !any(grepl("^ERREUR", out)) && any(grepl("rapport_v8_<date>.txt absent — produit par etape_finalisation\\(\\)", out)) })
 ok("garde-fou du corpus : dossier de la campagne courante portant le _meta.yaml d'une AUTRE campagne -> stop, rien écrasé",
    { yaml::write_yaml(list(campagne = "C1", date = "20000101"), FICHIER_META_FINAL()); n_avant <- length(list.files(DIR_FINAL(), recursive = TRUE))
      err <- tryCatch({ invisible(sortie(etape_finalisation())); NULL }, error = function(e) conditionMessage(e))

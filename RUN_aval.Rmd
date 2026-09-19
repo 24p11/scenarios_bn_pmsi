@@ -165,11 +165,13 @@ etat_pipeline()
 Contrôle du sidecar et de la typologie :
 
 ```{r verif_repartitionnement}
-side <- yaml::read_yaml(file.path(DIR_CATALOGUE(), "_sidecar.yaml"))
-cat("lignes :", side$nb_lignes_total, "; parts :", length(side$nb_lignes_par_part), "; typologie :", side$version_typologie, "; recette id :", side$version_recette_id, "\n")
-data.frame(DPEC = names(side$effectifs_dpec), n = unlist(side$effectifs_dpec))[order(-unlist(side$effectifs_dpec)), ]
-# lecture légère par le lecteur unique (jamais arrow::read_parquet directement sur le catalogue) :
-head(lire_catalogue(DIR_CATALOGUE(), lettres = "J", colonnes = c("diag2", "ghm2", "DPEC", "TPEC", "poids")))
+side <- lire_si_present(file.path(DIR_CATALOGUE(), "_sidecar.yaml"), "etape_repartitionner_catalogue()")
+if (!is.null(side)) {
+  cat("lignes :", side$nb_lignes_total, "; parts :", length(side$nb_lignes_par_part), "; typologie :", side$version_typologie, "; recette id :", side$version_recette_id, "\n")
+  print(data.frame(DPEC = names(side$effectifs_dpec), n = unlist(side$effectifs_dpec))[order(-unlist(side$effectifs_dpec)), ])
+  # lecture légère par le lecteur unique à repli (jamais arrow::read_parquet directement sur le catalogue) :
+  print(head(lire_catalogue(DIR_CATALOGUE(), lettres = "J", colonnes = c("diag2", "ghm2", "DPEC", "TPEC", "poids"))))
+}
 ```
 
 ---
@@ -184,7 +186,7 @@ inter-campagnes : identifiants stables (`id_profil` = hash du contenu de la lign
 
 **Ordre impératif** : (a) poser `CAMPAGNE <- "Cn"` (config ou surcharge) et `REGISTRE_ACTIF <- TRUE`,
 **Restart R**, rejouer §0 — la session affiche « jamais inscrite au registre » ; sinon changez
-d'identifiant : la sélection s'arrête d'elle-même sur une campagne déjà inscrite ; (b) vider les
+d'identifiant : sur une campagne déjà inscrite, la sélection ne fait que relire l'existant ou s'arrête ; (b) vider les
 sorties de la campagne précédente (chunk ci-dessous, gardé) ; (c) sélectionner.
 
 ```{r nouvelle_campagne}
@@ -210,19 +212,24 @@ ceiling(X_dp / k) variantes par ligne (dernière tronquée) ; plafonds `PLAFONDS
 classe par population ; planchers par type d'unité seulement si k ≥ nb de types (à k = 1 : désactivés,
 mention au rapport). Sous registre : fraîcheur d'abord (lignes vierges), recyclage à variantes nouvelles,
 plancher 1 scénario par DP. Lettre par lettre : pic RAM = une lettre. Sélection figée sous seed
-(campagne, population, lettre), relue si présente, jamais re-tirée. Stop précoce si `CAMPAGNE` est déjà
-au registre (avant tout calcul).
+(campagne, population, lettre), relue si présente, jamais re-tirée. Campagne déjà inscrite au registre
+(close) : si la sélection présente porte la même campagne, relecture (la reprise bout-en-bout reste un
+no-op sûr) ; sinon stop explicite avant tout calcul — aucun re-tirage possible d'une campagne inscrite.
 
 ```{r selection}
 etape_selection_longs()      # budget = NB_CRH_CIBLE, mode = MODE_SELECTION, k = NB_LIGNES_PAR_DP
 ```
 
 ```{r verif_selection}
-mt <- yaml::read_yaml(file.path(EXPORTS_DIR, "meta_tirage.yaml"))
-cat("campagne", mt$CAMPAGNE, "; volume attendu total :", mt$volume_attendu, "(cible", mt$NB_CRH_CIBLE, ")\n"); str(mt$par_population)
-stats_dp <- do.call(rbind, lapply(names(POPULATIONS), function(p) cbind(population = p, read.csv(file.path(DIR_SELECTION(p), "selection_longs_stats_dp.csv")))))
-head(stats_dp[order(-stats_dp$manque_a_gagner), c("population", "dp", "groupe", "lignes_disponibles", "X_dp", "manque_a_gagner")], 30)   # DP les plus pauvres
-aggregate(variantes ~ population + groupe, stats_dp[stats_dp$plafonne, ], sum)                                                          # lignes plafonnées par DPEC
+mt <- lire_si_present(file.path(EXPORTS_DIR, "meta_tirage.yaml"), "etape_selection_longs()")
+if (!is.null(mt)) {
+  cat("campagne", mt$CAMPAGNE, "; volume attendu total :", mt$volume_attendu, "(cible", mt$NB_CRH_CIBLE, ")\n"); str(mt$par_population)
+  stats_dp <- do.call(rbind, lapply(names(POPULATIONS), function(p){ d <- lire_si_present(file.path(DIR_SELECTION(p), "selection_longs_stats_dp.csv"), "etape_selection_longs()"); if (is.null(d)) NULL else cbind(population = p, d) }))
+  if (!is.null(stats_dp)) {
+    print(head(stats_dp[order(-stats_dp$manque_a_gagner), c("population", "dp", "groupe", "lignes_disponibles", "X_dp", "manque_a_gagner")], 30))   # DP les plus pauvres
+    print(aggregate(variantes ~ population + groupe, stats_dp[stats_dp$plafonne, ], sum))                                                          # lignes plafonnées par DPEC
+  }
+}
 ```
 
 ---
@@ -263,17 +270,19 @@ par chunk. Le chunk de tirage du palier **refuse de tirer** si la surcharge pali
 
 ```{r palier_surcharge, demo=FALSE}
 # Ce que ce chunk touche : écrit palier.R à la racine (non versionné) et pose SCENARIOS_PMSI_SURCHARGE pour la session.
-# Ce qu'il ne touche JAMAIS : la config versionnée, le registre, le catalogue, les corpus.
+# Ce qu'il ne touche JAMAIS : la config versionnée, le registre (palier.R IMPOSE REGISTRE_ACTIF <- FALSE, et
+#   etape_registre_campagne() refuse de s'exécuter sous PALIER_ACTIF : une mesure n'écrit jamais dans la mémoire
+#   permanente), le catalogue, les corpus.
 # Quand : avant une campagne de production, pour mesurer. Quand PAS : en démo (demo=FALSE) ; en campagne réelle.
-writeLines(c("NB_CRH_CIBLE <- 100000L", "PALIER_ACTIF <- TRUE"), "palier.R")
+writeLines(c("NB_CRH_CIBLE <- 100000L", "PALIER_ACTIF <- TRUE", "REGISTRE_ACTIF <- FALSE   # imposé : un palier n'écrit jamais au registre"), "palier.R")
 Sys.setenv(SCENARIOS_PMSI_SURCHARGE = normalizePath("palier.R"))
 # -> Restart R, rejouer le chunk `session` (qui conserve cette variable) : la bannière doit afficher la surcharge, puis :
 ```
 
 ```{r palier_tirage, demo=FALSE}
 # Ce que ce chunk touche : selection_longs/, meta_tirage.yaml, chunks/ — sous le BUDGET DE PALIER (à vider ensuite).
-# Ce qu'il ne touche JAMAIS : le registre (REGISTRE_ACTIF est lu tel quel : poser REGISTRE_ACTIF <- FALSE dans palier.R
-#   pour une mesure hors registre), les corpus des campagnes passées, le catalogue.
+# Ce qu'il ne touche JAMAIS : le registre (palier.R impose REGISTRE_ACTIF <- FALSE et etape_registre_campagne() refuse
+#   tout appel sous palier), les corpus des campagnes passées, le catalogue.
 # Garde : ne tire QUE si la surcharge palier est active (palier.R + SCENARIOS_PMSI_SURCHARGE) ; sinon marche à suivre, rien exécuté.
 if (!palier_actif()) {
   cat("Palier NON actif : rien exécuté. Marche à suivre : (1) chunk `palier_surcharge` ; (2) Restart R ; (3) chunk `session` (la bannière doit afficher palier.R) ; (4) ce chunk.\n",
@@ -341,7 +350,8 @@ section « Campagne Cn » (DP vierges / partiellement consommés / recyclés), c
 catalogue par DPEC, 30 DP les plus proches de l'épuisement total ; `registre_<Cn>.parquet` écrit.
 
 ```{r rapport}
-cat(readLines(file.path(EXPORTS_DIR, "rapport_v8_" %+% DATE_TAG %+% ".txt")), sep = "\n")
+# Lecture robuste : le rapport le plus récent (résolution inter-sessions), message si aucune finalisation encore
+cat(lire_si_present(dernier_fichier(EXPORTS_DIR, "^rapport_v8_[0-9]{8}\\.txt$"), "etape_finalisation()", nom = "rapport_v8_<date>.txt"), sep = "\n")
 reg <- lire_registre(DIR_REGISTRE())
 cat("campagnes :", reg$nb_campagnes, "; scénarios cumulés :", reg$nb_scenarios, "; profils consommés :", nrow(reg$par_profil), "\n")
 reg$par_campagne
@@ -352,17 +362,21 @@ reg$par_campagne
 # 7. Revue
 
 ```{r revue}
-revue <- read.csv2(file.path(EXPORTS_DIR, "echantillon_revue.csv")); View(revue)
-top30 <- read.csv(file.path(EXPORTS_DIR, "top30_das_par_cmd.csv")); View(top30)
+revue <- lire_si_present(file.path(EXPORTS_DIR, "echantillon_revue.csv"), "etape_finalisation()"); if (!is.null(revue)) View(revue)   # csv2 détecté
+top30 <- lire_si_present(file.path(EXPORTS_DIR, "top30_das_par_cmd.csv"), "etape_finalisation()"); if (!is.null(top30)) View(top30)
 ```
 
 Lecture du corpus final de la campagne courante en flux (jamais tout en RAM au-delà du besoin) :
 
 ```{r corpus}
-parts <- list.files(DIR_FINAL(), pattern = "^part_", recursive = TRUE, full.names = TRUE)
-cat(DIR_FINAL(), ":", length(parts), "parts ;", yaml::as.yaml(yaml::read_yaml(FICHIER_META_FINAL())))
-ds <- arrow::open_dataset(parts)                              # ou arrow::read_parquet(chemin_export_lecture("scenarios_longs_tirage")) si fusionné
-ds |> dplyr::count(population, DPEC) |> dplyr::collect()
+# Lecteur UNIQUE du corpus final (lire_corpus_final) : dataset arrow si arrow réel, rbind des parts sinon —
+# jamais d'appel direct à un dataset arrow dans un notebook (repli mock = arrow partiel).
+meta_f <- lire_si_present(FICHIER_META_FINAL(), "etape_finalisation()")
+corpus <- lire_corpus_final(colonnes = c("population", "DPEC"))   # colonnes = NULL pour tout ; populations = "adulte" pour une seule
+if (is.null(corpus)) cat("corpus", CAMPAGNE, "absent (", DIR_FINAL(), ") — produit par etape_finalisation(), pas encore exécutée (voir etat_pipeline()).\n") else {
+  cat(DIR_FINAL(), ":", nrow(corpus), "lignes ;", yaml::as.yaml(meta_f))
+  print(corpus |> dplyr::count(population, DPEC))
+}
 ```
 
 ---

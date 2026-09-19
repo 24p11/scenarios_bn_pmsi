@@ -28,7 +28,7 @@ actionnable (« lancez etape_X d'abord », « fichier Y manquant ») si elle est
 | `etape_partiels_longs(iterations = NULL)` | extraction (base) | `PARTIELS_DIR/catalogue_partiel_<etbs>_<an>.parquet` manquants ; `diagnostic_apports.csv` ; `recouvrement.csv` | ajout d'années / de catégories au plan ; `iterations = data.frame(etbs, an)` pour une itération isolée (supprimer son partiel pour le recalculer) | partiel sauté s'il existe ; partiels en codes bruts, partagés entre profils |
 | `etape_catalogue(ans = ANS_HISTORIQUE, etbs = TYPES_ETBS_LONGS)` | extraction (**sans base**) | `catalogue_longs_seuil.parquet` + `_meta.yaml` (trace du périmètre passé), `rapport_extraction_v8_<date>.txt`, `diagnostic_memoire.csv` | **décision de périmètre** : relancer avec les `ans`/`etbs` retenus. **Le catalogue de production (21,6 M lignes) existe : ne JAMAIS le reconstruire sur ce périmètre** | agrégation deux étages hors RAM depuis les partiels du périmètre ; conversion E669 puis seuil |
 | `etape_repartitionner_catalogue()` | aval (**sans base**) | `catalogue_longs_seuil/part_<L>.parquet` (par lettre de DP, + `lettre`, `DPEC`, `TPEC`) + `_sidecar.yaml` ; monofichier renommé `.ancien` | une fois par catalogue, et après changement de version de `typologie_sejours.yaml` (le garde-fou l'impose) | idempotente ; lecture par morceaux de lettres |
-| `etape_tirage_courts()` | tirage | `chunks/courts_chunk_*.parquet` (+ sidecar `courts_chunks_meta.yaml`), `scenarios_courts_v8_<date>.parquet` | une fois par jeu de refs (AN_REF uniquement) | chunks présents sautés (reprise bit à bit, mêmes paramètres de découpage exigés) |
+| `etape_tirage_courts(chunk_range = NULL)` | tirage | `chunks/courts_chunk_*.parquet` (+ sidecar `courts_chunks_meta.yaml`), `scenarios_courts_v8_<date>.parquet` | une fois par jeu de refs (AN_REF uniquement) | chunks présents sautés (reprise bit à bit, mêmes paramètres de découpage exigés) |
 | `etape_selection_longs(budget = NB_CRH_CIBLE, mode = MODE_SELECTION, k = NB_LIGNES_PAR_DP)` | tirage | **quota_dp_fixe** (production) : `selection_longs/<population>/part_<L>.parquet`, `selection_longs_effectifs.csv`, `selection_longs_stats_dp.csv`, `meta_tirage.yaml` par population + global ; quota_dp (diagnostic) : `selection_longs.parquet` | changement de budget / mode / k : vider d'abord chunks + sélection + méta (garde-fou `meta_tirage.yaml`) | sélection relue si présente, jamais re-tirée ; `catalogue_complet` retiré (stop si budget < catalogue) |
 | `etape_tirage_das_longs(chunk_range = NULL, populations = …)` | tirage | `chunks/<population>/longs_chunk_*.parquet` (+ sidecar) ; rien en RAM (fixe) | reprise : relancer telle quelle ; **parallélisme** : une session par plage `chunk_range = c(i, j)` disjointe, même dossier | chunks présents sautés ; écriture atomique (.tmp) ; `ref_das_aigu` indexé une fois ; débit imprimé par chunk |
 | `etape_habillage_longs(populations = …)` | tirage | `habille/<population>/lot_*.parquet` (jointure `v_admin_longs.parquet` relu par lots de `LOT_CHUNKS_FINALISATION` chunks, DPEC/TPEC recalculés) | après un jeu de chunks complet (stop sinon) | réécrit les lots |
@@ -149,7 +149,12 @@ inférieur (doublons éliminés, chiffrés au rapport).
 4. **Campagne parallèle** : une session par plage et par population, même dossier
    (`etape_tirage_das_longs(chunk_range = c(i, j), populations = "adulte")`), sidecar partagé,
    écriture atomique. Puis `etape_habillage_longs()` et `etape_finalisation()` (flux par lots).
-   Restart R entre chaque étape.
+   Restart R entre chaque étape. **Branche courts, même mode d'emploi** (parité) :
+   `etape_tirage_courts(chunk_range = c(i, j))` par session sur des plages **disjointes** du même
+   dossier `chunks/` (jamais deux sessions sur la même plage ; sidecar `courts_chunks_meta.yaml`
+   partagé), puis un appel final `etape_tirage_courts()` sans plage qui saute les chunks présents,
+   assemble, habille et exporte. Débit (scénarios/s) imprimé par chunk sur les deux branches ;
+   extrapolation du restant en bannière tous les 10 chunks traités.
 
 5. **Cycle de campagne** (registre des tirages, `RUN_aval.Rmd` §3 « ouvrir une campagne ») : (0) `etape_retro_inscrire(dossier_selection,
    dossier_chunks, campagne)` pour une campagne tirée avant le chantier campagnes ; (1) `CAMPAGNE <- "Cn"`,
@@ -193,6 +198,17 @@ mêmes étapes ; les partiels sont réutilisés, seules les refs sont recalculé
   par rétro-inscription de toutes les campagnes. À relancer une fois après le chantier campagnes (id_profil).
 - Registre des tirages (`registre_tirages/`) : append-only, ne se vide JAMAIS (stop si réécriture divergente) ;
   nouvelle campagne = poser `CAMPAGNE`, Restart R, vider chunks + sélection + `meta_tirage.yaml` + `habille/`.
+  Campagne déjà inscrite = **close** (Q49 actée) : si la sélection présente sur disque porte la même campagne,
+  `etape_selection_longs()` la relit sans rien tirer (relancer `tirage_scenarios_v8.R` après finalisation reste
+  un no-op sûr) ; sinon stop explicite (« campagne close, ouvrez une nouvelle campagne — section 3 »). Aucun
+  re-tirage possible d'une campagne inscrite.
+- Palier de mesure (Q53 actée) : `palier.R` impose `REGISTRE_ACTIF <- FALSE` et `etape_registre_campagne()`
+  refuse de s'exécuter sous `PALIER_ACTIF` — une mesure n'écrit jamais dans la mémoire permanente.
+- Lecteurs à repli (notebooks et scripts) : `lire_catalogue`, `lire_registre`, `lire_corpus_final` (corpus
+  final d'une campagne) utilisent un dataset arrow si arrow est réel, sinon la relecture des parts ; aucun appel
+  direct à un dataset arrow dans les notebooks (le repli mock ne l'exporte pas). Lectures de produits d'étape
+  dans les notebooks : `lire_si_present(chemin, produit_par)` / `dernier_fichier(dossier, motif)` — fichier absent
+  = message « produit par <étape>, pas encore exécutée », jamais d'erreur R brute.
 - Corpus final : `scenarios_longs_tirage_v8_<CAMPAGNE>/` + `_meta.yaml` (campagne, date, populations, total) ; deux
   campagnes le même jour = deux dossiers ; un dossier portant le `_meta.yaml` d'une autre campagne ⇒ stop.
 - Fichiers datés (`scenarios_courts_v8_<date>.parquet`, `rapport_v8_<date>.txt`, monofichier) : écrits au jour de la
@@ -222,4 +238,5 @@ Rscript demo/creer_base_demo.R && Rscript demo/lancer_demo.R   # mode démo : pi
 Rscript demo/executer_notebook.R --raz RUN.Rmd ; Rscript demo/executer_notebook.R RUN_aval.Rmd   # les notebooks déroulés en mode démo
 ```
 Prérequis du second : dbplyr, DBI, RSQLite, yaml (arrow réel ou mock RDS de repli) ;
-`R_LIBS_TEST=<lib>` pour une bibliothèque additionnelle.
+`R_LIBS_TEST=<lib>` pour une bibliothèque additionnelle. La CI exécute suites, démo et notebooks dans DEUX jobs,
+avec et sans arrow, pour que le chemin de repli soit exercé à chaque push.

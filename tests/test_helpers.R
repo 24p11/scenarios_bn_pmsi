@@ -796,4 +796,36 @@ ok("statut_campagne_registre : inscrite (nb, dernière date) / jamais inscrite /
    { s1 <- statut_campagne_registre("C1", reg_fx); s3 <- statut_campagne_registre("C3", reg_fx); s0 <- statut_campagne_registre("C1", NULL)
      s1$inscrite && s1$nb == 2 && grepl("2 scénarios le 2026-09-02", s1$texte) && grepl("changez d'identifiant", s1$texte) && !s3$inscrite && s3$texte == "jamais inscrite au registre" && !s0$inscrite })
 
+
+# ============================ lot « correctifs post-contrôle » : lecteurs à repli, lecture robuste, extrapolation, gardes notebooks ==
+cat("\n# lecteurs à repli (lire_corpus_final), lecture robuste (lire_si_present, dernier_fichier)\n")
+dcf <- file.path(tempdir(), "corpus_C9"); unlink(dcf, recursive = TRUE); for(pp in c("adulte", "pediatrie")) dir.create(file.path(dcf, pp), recursive = TRUE)
+arrow::write_parquet(tibble::tibble(population = "adulte", DPEC = c("a", "b"), x = 1:2), file.path(dcf, "adulte", "part_0001.parquet"))
+arrow::write_parquet(tibble::tibble(population = "adulte", DPEC = "a", x = 3L), file.path(dcf, "adulte", "part_0002.parquet"))
+arrow::write_parquet(tibble::tibble(population = "pediatrie", DPEC = "c", x = 4L), file.path(dcf, "pediatrie", "part_0001.parquet"))
+yaml::write_yaml(list(campagne = "C9"), file.path(dcf, "_meta.yaml"))
+cf <- lire_corpus_final("C9", dir_corpus = dcf)
+ok("lire_corpus_final : toutes les parts de toutes les populations, colonnes, population filtrée, NULL si absent ; chemin " %+% if(ARROW_MOCK) "rbind (mock)" else "dataset arrow",
+   nrow(cf) == 4 && setequal(cf$x, 1:4) && identical(names(lire_corpus_final("C9", colonnes = c("population", "DPEC"), dir_corpus = dcf)), c("population", "DPEC")) &&
+     nrow(lire_corpus_final("C9", populations = "pediatrie", dir_corpus = dcf)) == 1 && is.null(lire_corpus_final("C8", dir_corpus = file.path(tempdir(), "corpus_C8"))) &&
+     (if(ARROW_MOCK) !arrow_dataset_disponible() else arrow_dataset_disponible()))
+dl <- file.path(tempdir(), "lsp"); unlink(dl, recursive = TRUE); dir.create(dl)
+writeLines(c("a;b", "1;2"), file.path(dl, "x2.csv")); writeLines(c("a,b", "1,2"), file.path(dl, "x1.csv")); writeLines(c("l1", "l2"), file.path(dl, "rapport_v8_20260918.txt"))
+writeLines("l3", file.path(dl, "rapport_v8_20260919.txt")); yaml::write_yaml(list(k = 1), file.path(dl, "m.yaml"))
+msg <- utils::capture.output(r0 <- lire_si_present(file.path(dl, "absent.csv"), "etape_x()"))
+ok("lire_si_present : absent -> message actionnable (fichier, étape, etat_pipeline), NULL, aucune erreur", is.null(r0) && any(grepl("absent.csv absent — produit par etape_x\\(\\), pas encore exécutée", msg)) && any(grepl("etat_pipeline", msg)))
+msg2 <- utils::capture.output(r1 <- lire_si_present(NA_character_, "etape_finalisation()", nom = "rapport_v8_<date>.txt"))
+ok("lire_si_present : motif sans fichier (NA) -> message avec le nom donné", is.null(r1) && any(grepl("^rapport_v8_<date>.txt absent", msg2)))
+ok("lire_si_present : csv2 détecté, csv, lignes, yaml, chemin", identical(lire_si_present(file.path(dl, "x2.csv"))$b, 2L) && identical(lire_si_present(file.path(dl, "x1.csv"))$b, 2L) &&
+     identical(lire_si_present(file.path(dl, "rapport_v8_20260918.txt")), c("l1", "l2")) && lire_si_present(file.path(dl, "m.yaml"))$k == 1 && lire_si_present(file.path(dl, "m.yaml"), mode = "chemin") == file.path(dl, "m.yaml"))
+ok("dernier_fichier : le plus récent au motif, NA si aucun ou dossier absent", basename(dernier_fichier(dl, "^rapport_v8_[0-9]{8}\\.txt$")) == "rapport_v8_20260919.txt" && is.na(dernier_fichier(dl, "^zz")) && is.na(dernier_fichier(file.path(dl, "nope"), ".")))
+dx <- file.path(tempdir(), "chunks_extrap"); unlink(dx, recursive = TRUE)
+lg <- utils::capture.output(r <- pmap_chunks(tibble::tibble(v = 1:25), function(v) tibble::tibble(v = v), chunk_size = 1, dossier = dx, prefixe = "t", seed_base = 1))
+ok("pmap_chunks : débit par chunk et extrapolation tous les 10 chunks (25 chunks -> 2 bannières, restant 15 puis 5)",
+   sum(grepl("— débit", lg)) == 25 && sum(grepl("restant dans la plage", lg)) == 2 && any(grepl("restant dans la plage : 15 ", lg)) && any(grepl("restant dans la plage : 5 ", lg)) && nrow(r) == 25)
+rmd <- lapply(c("RUN.Rmd", "RUN_aval.Rmd"), function(f) readLines(file.path(racine, f), warn = FALSE))
+ok("notebooks : aucun appel direct à un dataset arrow (open_dataset / write_dataset) — lecteurs à repli seulement", !any(grepl("arrow::open_dataset|arrow::write_dataset|open_dataset\\(", unlist(rmd))))
+ok("notebooks : le chunk palier_surcharge impose REGISTRE_ACTIF <- FALSE dans palier.R",
+   { l <- rmd[[2]]; i <- grep("^```\\{r palier_surcharge", l); j <- i + which(grepl("^```\\s*$", l[(i + 1):length(l)]))[1]; any(grepl("writeLines\\(.*REGISTRE_ACTIF <- FALSE.*\"palier.R\"", l[i:j])) })
+
 cat("\nTOUS LES TESTS SONT VERTS :", n_ok, "assertions\n")

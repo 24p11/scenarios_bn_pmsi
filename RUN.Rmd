@@ -73,7 +73,7 @@ etape_refs()               # forcer = TRUE après changement d'AN_REF, de SEUIL_
 
 ```{r courts}
 Sys.setenv(SCENARIOS_PMSI_ETAPES_SEULEMENT = "1"); source("tirage_scenarios_v8.R")   # famille tirage (sans base)
-etape_tirage_courts()      # chunks courts + scenarios_courts_v8_<date>.parquet
+etape_tirage_courts()      # chunks courts + scenarios_courts_v8_<date>.parquet ; parallélisme : etape_tirage_courts(chunk_range = c(i, j)) par session, plages disjointes, puis un appel final sans plage
 etat_pipeline()
 ```
 
@@ -88,12 +88,13 @@ etape_partiels_longs()     # iterations = data.frame(etbs = "CHR/U", an = 25) po
 Lecture des apports, du recouvrement et de la mémoire :
 
 ```{r apports}
-apports <- read.csv(file.path(EXPORTS_DIR, "diagnostic_apports.csv")); apports
-plot(seq_len(nrow(apports)), cumsum(apports$nb_diag2_nouveaux), type = "b",
-     xlab = "itération (CHR/U 17..26 puis CH 17..26)", ylab = "diag2 nouveaux cumulés")
-recouvrement <- read.csv(file.path(EXPORTS_DIR, "recouvrement.csv")); recouvrement
-f_mem <- file.path(EXPORTS_DIR, "diagnostic_memoire.csv")   # écrit en fin d'etape_refs / etape_partiels_longs / etape_catalogue
-if (file.exists(f_mem)) { memoire <- read.csv(f_mem); memoire[order(-memoire$pic_go), ][1:10, ] } else cat("diagnostic_memoire.csv absent (aucune mesure dans cette session)\n")
+# Lectures robustes (lire_si_present) : fichier absent = message « produit par <étape> », jamais d'erreur R brute.
+apports <- lire_si_present(file.path(EXPORTS_DIR, "diagnostic_apports.csv"), "etape_partiels_longs()"); apports
+if (!is.null(apports)) plot(seq_len(nrow(apports)), cumsum(apports$nb_diag2_nouveaux), type = "b",
+                            xlab = "itération (CHR/U 17..26 puis CH 17..26)", ylab = "diag2 nouveaux cumulés")
+recouvrement <- lire_si_present(file.path(EXPORTS_DIR, "recouvrement.csv"), "etape_partiels_longs()"); recouvrement
+memoire <- lire_si_present(file.path(EXPORTS_DIR, "diagnostic_memoire.csv"), "etape_refs() / etape_partiels_longs() / etape_catalogue()")   # écrit en fin de ces étapes
+if (!is.null(memoire)) memoire[order(-memoire$pic_go), ][1:10, ]
 ```
 
 ## 3.2 DÉCISION de périmètre -> catalogue (sans base)
@@ -105,7 +106,7 @@ la trace. Le rapport d'extraction mesure l'impact de la conversion E669.
 ANS_CHOISIES  <- ANS_HISTORIQUE        # <- À ÉDITER (ex. 22:26) ; défaut = périmètre du profil (démo : millésimes de la base)
 ETBS_CHOISIS  <- TYPES_ETBS_LONGS      # <- À ÉDITER (ex. "CHR/U")
 etape_catalogue(ans = ANS_CHOISIES, etbs = ETBS_CHOISIS)
-cat(readLines(list.files(EXPORTS_DIR, "^rapport_extraction", full.names = TRUE)[1]), sep = "\n")
+cat(lire_si_present(dernier_fichier(EXPORTS_DIR, "^rapport_extraction_v8_[0-9]{8}\\.txt$"), "etape_catalogue()", nom = "rapport_extraction_v8_<date>.txt"), sep = "\n")   # le plus récent
 ```
 
 Contrôle de couverture avant / après seuil : DP distincts des partiels agrégés (conversion E669
@@ -114,12 +115,16 @@ Chemins absolus (`PARTIELS_DIR`, `EXPORTS_DIR`).
 
 ```{r couverture_dp}
 fichiers <- file.path(PARTIELS_DIR, nom_partiel(rep(ETBS_CHOISIS, each = length(ANS_CHOISIES)), rep(ANS_CHOISIES, times = length(ETBS_CHOISIS))))
-piv <- agreger_partiels(fichiers, c("diag2", "cage", "sexe"), "n")
-if (CONVERSION_E669) piv <- convertir_e669_comptes(piv, "diag2", c("cage", "sexe"), "n", arrow::read_parquet(file.path(EXPORTS_DIR, "distribution_e660.parquet")), BARE_E669_DEFAUT)
-avant <- piv |> dplyr::summarise(n = sum(n), .by = diag2)
-apres <- unique(lire_catalogue(DIR_CATALOGUE(), MONO_CATALOGUE(), colonnes = "diag2")$diag2)
-perdus <- avant[!avant$diag2 %in% apres, ] |> dplyr::arrange(dplyr::desc(n))
-cat("DP distincts avant seuil :", nrow(avant), "; après :", length(apres), "; perdus :", nrow(perdus), "\n"); head(perdus, 30)
+manquants <- basename(fichiers[!file.exists(fichiers)])
+dist_e660 <- lire_si_present(file.path(EXPORTS_DIR, "distribution_e660.parquet"), "etape_refs()")
+if (length(manquants)) cat("partiels absents :", paste(manquants, collapse = ", "), "— produits par etape_partiels_longs(), pas encore exécutée pour ce périmètre (voir etat_pipeline()).\n") else {
+  piv <- agreger_partiels(fichiers, c("diag2", "cage", "sexe"), "n")
+  if (CONVERSION_E669 && !is.null(dist_e660)) piv <- convertir_e669_comptes(piv, "diag2", c("cage", "sexe"), "n", dist_e660, BARE_E669_DEFAUT)
+  avant <- piv |> dplyr::summarise(n = sum(n), .by = diag2)
+  apres <- unique(lire_catalogue(DIR_CATALOGUE(), MONO_CATALOGUE(), colonnes = "diag2")$diag2)   # stop actionnable si le catalogue manque
+  perdus <- avant[!avant$diag2 %in% apres, ] |> dplyr::arrange(dplyr::desc(n))
+  cat("DP distincts avant seuil :", nrow(avant), "; après :", length(apres), "; perdus :", nrow(perdus), "\n"); print(head(perdus, 30))
+}
 ```
 
 ## 3.2b Production : repartitionner + typer le catalogue (une fois, sans base)
@@ -179,8 +184,8 @@ etat_pipeline()
 de DAS par classe d'âge conforme aux cibles ; revue humaine de `echantillon_revue.csv`.
 
 ```{r revue, demo=FALSE}
-revue <- read.csv2(file.path(EXPORTS_DIR, "echantillon_revue.csv")); View(revue)   # csv2 (write_excel_csv2)
-top30 <- read.csv(file.path(EXPORTS_DIR, "top30_das_par_cmd.csv")); View(top30)
+revue <- lire_si_present(file.path(EXPORTS_DIR, "echantillon_revue.csv"), "etape_finalisation()"); if (!is.null(revue)) View(revue)   # csv2 détecté (write_excel_csv2)
+top30 <- lire_si_present(file.path(EXPORTS_DIR, "top30_das_par_cmd.csv"), "etape_finalisation()"); if (!is.null(top30)) View(top30)
 ```
 
 ## 3.7 Changement de budget / mode (geste destructeur, gardé)

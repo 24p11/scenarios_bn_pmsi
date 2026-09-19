@@ -461,6 +461,7 @@ pmap_chunks <- function(df, f, chunk_size = NULL, dossier, prefixe, seed_base, .
     if(verbose) cat(sprintf("  [chunks %s] plage traitée : %d..%d\n", prefixe, chunk_range[1], min(chunk_range[2], n_chunks)))
   }
   fichiers <- file.path(dossier, sprintf("%s_chunk_%04d%s", prefixe, seq_len(n_chunks), ext))
+  n_faits <- 0L; t_cum <- 0; lignes_cum <- 0L   # extrapolation (bannière tous les 10 chunks traités dans cette session)
   for(i in a_traiter){
     fichier <- fichiers[i]
     if(file.exists(fichier)){
@@ -476,6 +477,12 @@ pmap_chunks <- function(df, f, chunk_size = NULL, dossier, prefixe, seed_base, .
     ecrire(res, tmp); if(!file.rename(tmp, fichier)) stop("pmap_chunks : échec du renommage atomique de " %+% tmp, call. = FALSE)
     d <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
     if(verbose) cat(sprintf("  chunk %s %04d/%04d : %d lignes (%d entrées) en %.1f s — débit %.0f scénarios/s\n", prefixe, i, n_chunks, nrow(res), length(idx), d, if(d > 0) nrow(res) / d else NA))
+    n_faits <- n_faits + 1L; t_cum <- t_cum + d; lignes_cum <- lignes_cum + nrow(res)
+    if(verbose && n_faits %% 10L == 0L){
+      restant <- sum(!file.exists(fichiers[a_traiter]))
+      cat(sprintf("  [chunks %s] %d chunk(s) traités dans cette session (%.1f min) ; restant dans la plage : %d ≈ %.1f min au débit moyen (%.0f scénarios/s)\n",
+                  prefixe, n_faits, t_cum / 60, restant, if(n_faits > 0) restant * (t_cum / n_faits) / 60 else NA, if(t_cum > 0) lignes_cum / t_cum else NA))
+    }
   }
   if(!assembler) return(invisible(NULL))
   manquants <- fichiers[!file.exists(fichiers)]
@@ -1581,5 +1588,47 @@ verifier_dossier_final <- function(meta_existant, campagne, dossier = ""){
 statut_campagne_registre <- function(campagne, registre){
   l <- if(is.null(registre) || is.null(registre$lignes)) NULL else registre$lignes[registre$lignes$campagne == campagne, , drop = FALSE]
   if(is.null(l) || nrow(l) == 0) return(list(inscrite = FALSE, nb = 0L, texte = "jamais inscrite au registre"))
-  list(inscrite = TRUE, nb = nrow(l), texte = sprintf("déjà inscrite au registre : %d scénarios le %s — changez d'identifiant", nrow(l), max(as.character(l$date))))
+  list(inscrite = TRUE, nb = nrow(l), date = max(as.character(l$date)), texte = sprintf("déjà inscrite au registre : %d scénarios le %s — changez d'identifiant", nrow(l), max(as.character(l$date))))
+}
+
+# --- H4. Lecteurs à repli pour les notebooks (lot « correctifs post-contrôle ») --------------
+# Lecteur UNIQUE du corpus final d'une campagne (scenarios_longs_tirage_v8_<campagne>/<population>/part_*.parquet) :
+# dataset arrow si arrow réel (arrow_dataset_disponible), sinon rbind des parts (mock arrow = RDS, arrow partiel).
+# NULL si le dossier ou les parts manquent. `dir_corpus` explicite pour les tests ; par défaut sous EXPORTS_DIR.
+lire_corpus_final <- function(campagne = CAMPAGNE, populations = NULL, colonnes = NULL,
+                              dir_corpus = file.path(EXPORTS_DIR, "scenarios_longs_tirage_v8_" %+% campagne)){
+  if(!dir.exists(dir_corpus)) return(NULL)
+  pops <- if(is.null(populations)) list.dirs(dir_corpus, full.names = FALSE, recursive = FALSE) else populations
+  parts <- unlist(lapply(pops, function(p) list.files(file.path(dir_corpus, p), pattern = "^part_.*\\.parquet$", full.names = TRUE)))
+  if(length(parts) == 0) return(NULL)
+  if(arrow_dataset_disponible()){
+    ds <- arrow::open_dataset(parts)
+    if(!is.null(colonnes)) ds <- dplyr::select(ds, dplyr::all_of(unique(colonnes)))
+    return(tibble::as_tibble(dplyr::collect(ds)))
+  }
+  purrr::map(parts, function(p){ d <- tibble::as_tibble(arrow::read_parquet(p)); if(!is.null(colonnes)) d[, unique(colonnes), drop = FALSE] else d }) |> purrr::list_rbind()
+}
+# Dernier fichier (tri lexical = chronologique sur AAAAMMJJ) d'un dossier au motif ; NA si aucun.
+dernier_fichier <- function(dossier, motif){
+  f <- if(!is.na(dossier) && dir.exists(dossier)) sort(list.files(dossier, pattern = motif)) else character(0)
+  if(length(f)) file.path(dossier, f[length(f)]) else NA_character_
+}
+# Lecture robuste d'un produit d'étape : fichier absent -> message actionnable (pas d'erreur R brute), NULL invisible ;
+# présent -> lecture selon l'extension (txt : lignes ; csv : read.csv, ou read.csv2 si ';' en tête ; parquet ; yaml),
+# `mode` pour forcer ("lignes", "csv", "csv2", "parquet", "yaml") ou "chemin" pour rendre le chemin résolu.
+lire_si_present <- function(chemin, produit_par = "l'étape amont", mode = "auto", nom = NULL){
+  if(length(chemin) != 1 || is.na(chemin) || !file.exists(chemin)){
+    cat(if(!is.null(nom)) nom else if(length(chemin) == 1 && !is.na(chemin)) basename(chemin) else "<fichier>",
+        " absent — produit par ", produit_par, ", pas encore exécutée dans ce profil (voir etat_pipeline()).\n", sep = "")
+    return(invisible(NULL))
+  }
+  if(mode == "chemin") return(chemin)
+  if(mode == "auto"){
+    ext <- tolower(tools::file_ext(chemin))
+    mode <- if(ext == "csv"){ if(grepl(";", readLines(chemin, n = 1, warn = FALSE)[1], fixed = TRUE)) "csv2" else "csv" }
+            else switch(ext, parquet = "parquet", yaml = "yaml", yml = "yaml", "lignes")
+  }
+  switch(mode, lignes = readLines(chemin, warn = FALSE), csv = utils::read.csv(chemin), csv2 = utils::read.csv2(chemin),
+         parquet = tibble::as_tibble(arrow::read_parquet(chemin)), yaml = yaml::read_yaml(chemin),
+         stop("lire_si_present : mode inconnu : " %+% mode, call. = FALSE))
 }

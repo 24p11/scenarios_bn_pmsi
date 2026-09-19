@@ -330,10 +330,21 @@ date (deux campagnes le même jour s'écrasaient) → nommé par campagne, avec 
 l'annonçant ; le chunk de palier pouvait tirer par inadvertance → `palier_actif()`
 et une bannière qui affiche campagne, budget effectif et surcharge active ; une
 campagne déjà inscrite pouvait être resélectionnée → `statut_campagne_registre`,
-affiché en session et bloquant avant tout calcul. Enfin les chemins personnels ont
+affiché en session ; une campagne inscrite est close : sa sélection présente est
+relue (relancer la même commande reste sûr), toute autre situation s'arrête avant
+calcul, et jamais de re-tirage. Enfin les chemins personnels ont
 quitté le code versionné : `config_locale.R` (ignoré par git) ou la variable
 d'environnement, sinon arrêt explicite. Les séjours courts reçoivent leurs
 identifiants (recette `id_courts_v1`, préfixe `c`), sans registre.
+
+Correctifs post-contrôle : un notebook appelait directement un dataset arrow,
+ce qui échoue sous le repli mock (arrow partiel) — d'où `lire_corpus_final`,
+lecteur unique du corpus final à repli comme `lire_catalogue` et `lire_registre`,
+et une CI qui exécute tout aussi **sans** arrow. Les chunks de lecture passent par
+`lire_si_present` (fichier absent = message « produit par telle étape », jamais
+une erreur R brute). Le palier ne peut plus écrire au registre (imposé dans
+`palier.R`, refusé par `etape_registre_campagne`). La branche courts a la parité
+des longs : plages `chunk_range` parallélisables, débit par chunk, extrapolation.
 
 ## 5. Les décisions de conception à connaître pour lire le code
 
