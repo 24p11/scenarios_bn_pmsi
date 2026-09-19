@@ -183,6 +183,7 @@ mêmes étapes ; les partiels sont réutilisés, seules les refs sont recalculé
 ```
 Rscript tests/test_helpers.R            # helpers purs
 Rscript tests/test_chaines_sqlite.R     # scripts réels sur SQLite fichier : sessions multiples, étapes, identité avec les anciens scripts
+Rscript demo/creer_base_demo.R && Rscript demo/lancer_demo.R   # mode démo : pipeline complet sur base fictive (demo/README.md ; données aléatoires)
 ```
 Prérequis du second : dbplyr, DBI, RSQLite, yaml (arrow réel ou mock RDS de repli) ;
 `R_LIBS_TEST=<lib>` pour une bibliothèque additionnelle.

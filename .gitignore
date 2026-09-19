@@ -1,0 +1,33 @@
+# Sorties du pipeline (config_v8.R : PATH_RESULTS, EXPORTS_DIR, PARTIELS_DIR, CHUNKS_DIR,
+# registre_tirages/, habille/, selection_longs/, catalogue_longs_seuil/) : jamais versionnées.
+results/
+exports*/
+partiels/
+chunks/
+registre_tirages/
+habille/
+selection_longs/
+catalogue_longs_seuil/
+# Données et formats binaires
+*.parquet
+*.rds
+*.sqlite
+*.sqlite-journal
+*.csv
+*.xlsx
+*.xls
+# Mode démo (base factice et sorties)
+demo/base_demo*
+demo/resultats/
+# Fichiers de palier / campagne locaux (surcharges personnelles)
+palier.R
+campagne.R
+# R
+.Rhistory
+.RData
+.Rproj.user/
+*.Rproj
+nohup.out
+*.log
+# Système
+.DS_Store

@@ -5,7 +5,7 @@ prep_grep<-function(x) paste(x,collapse = "|")
 
 `%+%` <- function(x,y){paste0(x,y)}
 
-write_xlsx<-function(df,name,sheet="Feuille1",path_out ="~/perso/data"){
+write_xlsx<-function(df,name,sheet="Feuille1",path_out){   # path_out : dossier de sortie, obligatoire (plus de défaut personnel)
   
   wb <- openxlsx::createWorkbook()
   openxlsx::addWorksheet(wb,sheet)

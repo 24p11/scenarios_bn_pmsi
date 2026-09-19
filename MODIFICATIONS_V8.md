@@ -6,7 +6,8 @@ config qui l'autorise. Les blocs ont été comparés par `diff` avec leur source
 en fin de document). Tout écart non listé ici est une violation du spec.
 
 Conventions : `v7.1.2` = `extraction_associations_codes_v7.1.2.R`, `v7.2` =
-`extraction_associations_codes_v7.2.R`. Depuis le chantier « industrialisation » (section 10),
+`extraction_associations_codes_v7.2.R` (retirés de l'arbre au chantier « packaging », section 19 ;
+relus par `git show e9f70c7:<fichier>`, dernier commit les contenant). Depuis le chantier « industrialisation » (section 10),
 le v8 est scindé en quatre fichiers : `extraction` = `extraction_associations_codes_v8.R`,
 `tirage` = `tirage_scenarios_v8.R`, `helpers` = `helpers_v8.R`, `config` = `config_v8.R`.
 Les numéros de lignes sont ceux des fichiers livrés (recalés à chaque évolution).
@@ -273,15 +274,16 @@ grep -c 'pRatihque::' tirage_scenarios_v8.R                       # 0 attendu
 #  -> uniquement des commentaires, plus l'unique distinct(.keep_all) HTA commenté « déterministe » (B1 #5)
 ```
 
-Diff des blocs (à rejouer par le relecteur) :
+Diff des blocs (à rejouer par le relecteur ; les scripts v7 ne sont plus dans l'arbre, ils sont
+relus depuis le dernier commit les contenant, e9f70c7) :
 ```
-sed -n '24,275p'  extraction_associations_codes_v7.2.R   > /tmp/b1_src.R
+git show e9f70c7:extraction_associations_codes_v7.2.R   | sed -n '24,275p'  > /tmp/b1_src.R
 awk '/^prep_data<-function/{f=1} f{print} /^## ---- 3\. Tables/{exit}' extraction_associations_codes_v8.R | sed '$d' > /tmp/b1_v8.R
 diff /tmp/b1_src.R /tmp/b1_v8.R          # attendu : exactement les 9 écarts de B1
-sed -n '278,327p' extraction_associations_codes_v7.2.R   > /tmp/b8_src.R
+git show e9f70c7:extraction_associations_codes_v7.2.R   | sed -n '278,327p' > /tmp/b8_src.R
 awk '/^prep_scenarios2<-function/{f=1} f{print} f&&/^}/{exit}' extraction_associations_codes_v8.R > /tmp/b8_v8.R
 diff /tmp/b8_src.R /tmp/b8_v8.R          # attendu : anseqta_de, §5.8, dplyr::all_of ×3, tiebreak das
-sed -n '88,112p'  extraction_associations_codes_v7.1.2.R > /tmp/b3_src.R
+git show e9f70c7:extraction_associations_codes_v7.1.2.R | sed -n '88,112p'  > /tmp/b3_src.R
 awk '/^prep_das_chronique<-function/{f=1} f{print} f&&/^}/{exit}' extraction_associations_codes_v8.R > /tmp/b3_v8.R
 diff /tmp/b3_src.R /tmp/b3_v8.R          # attendu : les écarts de B3
 ```
@@ -984,3 +986,141 @@ hash_das réutilisé par profil, classe plafonnée aux volumes attendus, rapport
   de secours.
 - **Q40 — `dp_partiellement_consommes`** : DP dont certaines lignes sont au registre mais qui a encore des
   lignes vierges (compté à la sélection, rapport 1f).
+
+## 19. Chantier « packaging GitHub + mode démo »
+
+Objet : dépôt public présentable et exécutable en démonstration hors plateforme. **Aucun fichier
+de code existant déplacé** (notebooks, tests et `SCENARIOS_PMSI_PATH` dépendent des chemins à la
+racine) ; aucune chaîne base touchée ; `tests/ancien_20260914/` intact.
+
+### 19.1 Suppressions et ajouts
+
+- **Retirés de l'arbre** (`git rm`) : `extraction_associations_codes_v7.1.2.R`,
+  `extraction_associations_codes_v7.2.R` (contenaient des chemins personnels l.1-6). Dernier commit
+  les contenant : **e9f70c7** ; les commandes de diff de la section 8 relisent désormais
+  `git show e9f70c7:<fichier>`. Les conventions d'en-tête le rappellent.
+- **Ajoutés** : `LICENSE` (MIT, © 2026 Rémi Flicoteaux / AP-HP) ; `CITATION.cff` (auteur Rémi
+  Flicoteaux, AP-HP ; Claude Code cité dans `message`/`abstract` comme outil d'assistance au
+  développement, PAS comme auteur ; ORCID en commentaire à compléter, `date-released` = date du
+  chantier à ajuster à la première release) ; `.gitignore` ; `README.md` et `VISITE_GUIDEE.md`
+  (fournis par l'utilisateur, complétés, cf. 19.3) ; `referentiels/codes_diabete.yaml` (cf. 19.2) ;
+  `demo/` (5 fichiers, cf. 19.4) ; `.github/workflows/tests.yml` (cf. 19.5).
+- `.gitignore` : sorties de `config_v8.R` (`results/`, `exports*/`, `partiels/`, `chunks/`,
+  `registre_tirages/`, `habille/`, `selection_longs/`, `catalogue_longs_seuil/`), formats de données
+  (`*.parquet`, `*.rds`, `*.sqlite`, `*.sqlite-journal`, et au-delà du brief `*.csv`, `*.xlsx`,
+  `*.xls` : aucun fichier de ces types n'est ni ne doit être versionné), `demo/base_demo*`,
+  `demo/resultats/`, `palier.R`, `campagne.R`, `.Rhistory`, `.RData`, `.Rproj.user/`, `*.Rproj`,
+  `nohup.out`, `*.log`, `.DS_Store` (présent non suivi à la racine : désormais ignoré, jamais commité).
+
+### 19.2 `codes_diabete.yaml` versionné
+
+- Contenu vérifié avant commit : clés `meta` (version 2026-08-19, sources, règle générale),
+  `socle`, `axes_complications`, `comorbidites`, `evenements_aigus`, `contraintes`, `a_valider_dim`
+  — uniquement des listes de codes CIM-10 avec libellés et des règles de doctrine (documents
+  publics) ; **aucune donnée**, aucun effectif.
+- `referentiels.R` (seule modification hors chemin : aucune) : `PATH_CODES_DIABETE <-
+  file.path(path_projet, "referentiels", "codes_diabete.yaml")` + `stop()` explicite si absent
+  (« vérifier SCENARIOS_PMSI_PATH / path_projet, qui doit pointer sur la racine du dépôt »). Au
+  passage, l'ancien `path_projet %+% "referentiels/..."` (sans `/`) ne fonctionnait qu'avec un
+  `path_projet` terminé par `/` ; `file.path` lève cette dépendance. Les autres lectures
+  (`cim_2024.xlsx`, `Affections chroniques.xls`, cancer, `icr.tsv`) restent externes, inchangées.
+- Les tests et la démo ne passent PAS par `referentiels.R` (stubs) : le `stop()` est exercé
+  manuellement uniquement (chaîne de message vérifiée par lecture).
+
+### 19.3 README, VISITE_GUIDEE
+
+- README : badge CI inséré ; licence et citation renseignées ; section « Mode démo » ajoutée
+  entre « Démarrage » et « Carte du dépôt » (trois commandes, avertissement en gras) ; carte du
+  dépôt : ligne des scripts v7 remplacée par `demo/` et `.github/workflows/tests.yml`, mention
+  `git show e9f70c7:<fichier>` ; prérequis : `codes_diabete.yaml` n'est plus « non distribué ».
+  Liens relatifs vérifiés (tous résolus).
+- VISITE_GUIDEE : références corrigées d'après le code courant — `indexer_ref` →
+  `indexer_ref_das` / `indexer_ref_chronique` ; `part-<lettre>` → `part_<lettre>` (helpers
+  `nom_part_lettre`) ; `final/<population>/` → `scenarios_longs_tirage_v8_<date>/<population>/`
+  (`DIR_FINAL`). Ligne `demo/` ajoutée au tableau §2 ; deux lignes « démo » ajoutées en §8.
+  Les autres `fichier :: fonction` (prep_data, prep_scenarios2, étapes, sections A→G) correspondent.
+- RUN.md : une ligne « mode démo » sous les commandes de tests (§ prérequis inchangés).
+
+### 19.4 Mode démo (`demo/`) — source unique, extraction depuis les tests
+
+Provenance (numéros de lignes de `tests/test_chaines_sqlite.R` au commit e9f70c7) :
+
+| Extrait | Origine | Destination |
+|---|---|---|
+| mock `arrow` (RDS) | sqlite l.25-42 ; `test_helpers.R` l.16-27 | `demo/mock_pratihque.R :: installer_mock_arrow()` |
+| faux paquet `pRatihque` | sqlite l.44-61 | `demo/mock_pratihque.R :: installer_mock_pratihque()` |
+| stubs `utils.R` / `referentiels.R`, `creer_projet` | sqlite l.65-91 | `demo/mock_pratihque.R :: STUB_UTILS, STUB_REFERENTIELS, creer_projet_stub(nom, racine, dossier)` |
+| tables factices, fixtures B1-10 et fusion E669 | sqlite l.109-172 | `demo/generateur_donnees_fictives.R :: generer_donnees_fictives(db_file, n_sejours = 4000, annees = c(17,20,26), graine = 20260907)` |
+
+- Code des extraits copié à l'identique (mêmes pools, même ordre des tirages aléatoires, mêmes
+  fixtures) ; paramétrage ajouté : `n_sejours`, `annees`, `graine` ; les fixtures sont posées sur
+  `max(annees)` avec `ident = an × 100000 + 99001…` (= 2699001… pour 26, valeurs des tests). Les
+  deux suites sourcent `demo/` (`creer_projet <- function(nom) creer_projet_stub(nom, racine)` ;
+  `fx <- generer_donnees_fictives(db_file)`) : **aucune assertion modifiée**, comptes inchangés
+  (303 / 300 helpers, 140 / 140 SQLite, avec / sans arrow).
+- `demo/creer_base_demo.R` : options `--n`, `--annees`, `--graine`, `--sortie` ; affiche le schéma.
+  Mesuré : 0,8 s, 2,3 Mo.
+- `demo/lancer_demo.R` : profil « démo » = **profil production surchargé** (`SCENARIOS_PMSI_PROFIL
+  = production`, fichier `demo/resultats/surcharge_demo.R` écrit par le lanceur) : `ANS_HISTORIQUE`
+  = millésimes lus dans la base, `AN_REF = max`, `SEUIL_PIVOT = 1`, `SEUIL_REF_* = 5`, `NB_CRH_CIBLE
+  = 2000`, `NB_LIGNES_PAR_DP = 1`, `quota_dp_fixe`, `CAMPAGNE = DEMO`, `REGISTRE_ACTIF = TRUE`,
+  `PATH_RESULTS / EXPORTS_DIR / PARTIELS_DIR` sous `demo/resultats/`. Séquence : extraction (script
+  d'entrée, 4 étapes) → `etape_repartitionner_catalogue()` → déconnexion + `pmsi_mock_interdit` →
+  tirage (script d'entrée, 5 étapes) → résumé. `demo/resultats/` vidé au départ. Le projet démo est
+  une copie (`demo/resultats/projet_demo/`) avec stubs : `utils.R` réel (`library(tidyverse)`,
+  `openxlsx`) et `referentiels.R` réel (Excel externes) ne sont pas utilisables hors plateforme.
+- Mesuré (macOS, arrow réel) : **31 s**, pic RSS **386 Mo** ; 320 scénarios longs (pédiatrie 63,
+  adulte 257), 879 courts ; TPEC : Médecine 54 %, Chirurgie et interventionnel 31 %, Obstétrique 15 %.
+  Le volume long est borné par le catalogue (8 DP × variantes), pas par `NB_CRH_CIBLE` (Q45).
+- Chemins des scripts : racine du dépôt localisée par `--file=` de `Rscript` (fonction
+  `racine_depot`, dupliquée dans les deux lanceurs pour qu'ils se suffisent).
+
+### 19.5 CI (`.github/workflows/tests.yml`)
+
+- Déclencheurs `push` et `pull_request` ; un job ubuntu-latest, `timeout-minutes: 90` ;
+  `r-lib/actions/setup-r@v2` (RSPM binaires) puis `install.packages` des dépendances (arrow inclus,
+  binaire RSPM : sans surcoût ; s'il manquait, tests et démo basculent seuls sur le mock RDS) ;
+  étapes séquentielles `tests/test_helpers.R`, `tests/test_chaines_sqlite.R`,
+  `demo/creer_base_demo.R`, `demo/lancer_demo.R`. Chaque suite termine par `stop()` en cas d'échec
+  → code de sortie non nul → job rouge.
+- Limites : la suite SQLite dure > 10 min en local (sessions multiples) ; la démo 31 s / 386 Mo.
+  Aucun dépassement attendu (runner 7 Go, 6 h). Le workflow **n'a pas encore été exécuté sur
+  GitHub** (il le sera au premier push) : à vérifier au premier passage ; si la suite SQLite
+  s'avérait trop longue, scinder en job séparé sur `push main` seulement, sans réduire les fixtures.
+
+### 19.6 Balayage (chemins personnels, données, identifiants)
+
+- Historique git : aucun fichier `.parquet/.rds/.sqlite/.csv/.xlsx/.xls` dans aucun commit
+  (`git log --all --name-only`). Rien à réécrire.
+- Corrigé (défaut inerte) : `utils.R :: write_xlsx` — `path_out` devient un paramètre obligatoire
+  sans défaut (`~/perso/data` retiré) ; fonction non appelée par le v8.
+- Signalé, NON touché (décision utilisateur, Q41-Q42) : chemin par défaut de `SCENARIOS_PMSI_PATH`
+  (`~/commun/projets_communs/DIM_siege/divers_projets/Scenario_crh_fictifs/`) dans `config_v8.R`
+  l.12, `extraction_associations_codes_v8.R` l.17, `tirage_scenarios_v8.R` l.14 (et les instantanés
+  `tests/ancien_20260914/`, intouchables) ; identifiant `pschema = "rflicoteaux-1578."` dans
+  `utils.R` l.2 (jamais utilisé par le v8).
+- Dépôt GitHub : description et topics (`pmsi`, `icd-10`, `cim-10`, `synthetic-data`, `r`,
+  `health-data`, `aphp`) posés via `gh repo edit` (§5 du brief).
+- Messages d'erreur relus pour cohérence avec RUN.md / VISITE_GUIDEE / demo/README : le `stop()`
+  de `codes_diabete.yaml` nomme le fichier et la variable à vérifier ; les lanceurs démo indiquent
+  la commande précédente à exécuter (base absente → `Rscript demo/creer_base_demo.R`) et la racine
+  attendue.
+
+### 19.7 Questions (aucune action non autorisée)
+
+- **Q41** — Chemin personnel par défaut de `SCENARIOS_PMSI_PATH` (3 fichiers, cf. 19.6) : le
+  remplacer par un `stop()` explicite quand la variable n'est pas définie (dépôt public), ou le
+  conserver (confort plateforme, hors périmètre « ne pas toucher au code existant ») ? Non modifié.
+- **Q42** — `pschema` dans `utils.R` : identifiant personnel inutilisé ; le retirer ? Non modifié
+  (`utils.R` hors périmètre au-delà du défaut inerte de `write_xlsx`).
+- **Q43** — `CITATION.cff` : ORCID (commenté) et `date-released` (date du chantier) à confirmer ;
+  `version: v8` à aligner sur un tag de release si souhaité.
+- **Q44** — CI sur chaque push : la suite SQLite (> 10 min) allonge chaque passage ; acceptable, ou
+  la reléguer à `push main` seulement (job séparé) ? Défaut retenu : tout sur chaque push.
+- **Q45** — Démo : `NB_CRH_CIBLE = 2000` n'est qu'un plafond ; 320 longs produits (catalogue de 8
+  DP fictifs × variantes). Garder 2000 (fidèle au brief) ou afficher le budget « théorique » vs
+  produit dans le résumé ? Résumé actuel : produit seulement.
+- **Q46** — `.gitignore` : `*.csv`, `*.xlsx`, `*.xls` ajoutés au-delà du brief (aucun fichier de ce
+  type n'est versionné ; `referentiels/icr.tsv` externe n'est pas concerné). Confirmer.
+- **Q47** — Description/topics GitHub posés ; le README ne mentionne pas les statuts « issue »
+  autrement que « Contact : ouvrir une issue ». Ajouter un CONTRIBUTING ? Non fait.

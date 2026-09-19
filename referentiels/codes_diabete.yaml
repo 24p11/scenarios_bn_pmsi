@@ -1,0 +1,186 @@
+# listes_codes_diabete.yaml
+# Listes de codes CIM-10 pour l'assemblage ±aléatoire de scénarios diabète.
+# Tous les codes sont des FEUILLES vérifiées du CSV maître recode-icd
+# (post-merge CepiDc, subdivisions ATIH incluses). Les paires dague/astérisque
+# proviennent de dagger_asterisk.csv (redundancy_level=independent).
+# Version 2026-08-19 — à valider par le DIM avant usage (voir a_valider_dim).
+
+meta:
+  version: "2026-08-19"
+  sources:
+    - "referentials/processed/inclusions_exclusions_synonymes.csv (feuilles, libellés)"
+    - "referentials/processed/dagger_asterisk.csv (paires obligatoires)"
+    - "Guide MCO 2026 provisoire, chap. V p. 89 (E11 insulinotraité) et chap. IV (chronique en DAS)"
+  regle_generale: >
+    Un scénario = 1 code socle + 0..n axes de complications (chaque axe tiré
+    AVEC sa paire astérisque) + 0..n comorbidités + éventuellement 1 événement
+    aigu en DP. Les contraintes de la section `contraintes` s'appliquent
+    toujours, quel que soit le tirage.
+
+# ─────────────────────────────────────────────────────────────────
+# 1. SOCLE — le code diabète (en tirer exactement UN par patient)
+# ─────────────────────────────────────────────────────────────────
+socle:
+  E10_type1:            # feuilles en 4e caractère (pas de subdivision ATIH)
+    sans_complication: [E10.9]
+    avec_complication:  # le 4e caractère est déterminé par l'axe tiré (section 2)
+      coma: E10.0
+      acidocetose: E10.1
+      renal: E10.2
+      oculaire: E10.3
+      neurologique: E10.4
+      vasculaire_peripherique: E10.5
+      autres_precisees: E10.6
+      multiples: E10.7
+  E11_type2:            # feuilles en 5e caractère ATIH : 0=insulinotraité, 8=non insulinotraité
+    # ⚠ Le 5e caractère est une propriété du PATIENT : homogène sur tout le séjour.
+    sans_complication: [E11.90, E11.98]
+    avec_complication:
+      coma: [E11.00, E11.08]
+      acidocetose: [E11.10, E11.18]
+      renal: [E11.20, E11.28]
+      oculaire: [E11.30, E11.38]
+      neurologique: [E11.40, E11.48]
+      vasculaire_peripherique: [E11.50, E11.58]
+      autres_precisees: [E11.60, E11.68]
+      multiples: [E11.70, E11.78]
+  autres_types:         # poids très faible recommandé
+    - {code: E13.9, note: "autres diabètes précisés — rare"}
+    - {code: E14.9, note: "diabète sans précision — éviter si possible, qualité de codage"}
+
+# ─────────────────────────────────────────────────────────────────
+# 2. AXES DE COMPLICATIONS — tirer un axe = tirer la PAIRE complète
+#    (code socle au 4e caractère de l'axe + UN astérisque de l'axe)
+#    + éventuellement des satellites cohérents
+# ─────────────────────────────────────────────────────────────────
+axes_complications:
+  renal:
+    quatrieme_caractere: "2"
+    asterisques_obligatoires:
+      - {code: N083, libelle: "Glomérulopathie au cours du diabète sucré"}
+    satellites:   # DAS cohérents avec l'axe (0..n)
+      - {code: N183, libelle: "Maladie rénale chronique, stade 3"}
+      - {code: N184, libelle: "Maladie rénale chronique, stade 4"}
+      - {code: N185, libelle: "Maladie rénale chronique, stade 5"}
+      - {code: I120, libelle: "Néphropathie hypertensive avec insuffisance rénale",
+         contrainte: "seulement si HTA (I10 remplacé par I12.0 — ne pas cumuler I10+I12)"}
+  oculaire:
+    quatrieme_caractere: "3"
+    asterisques_obligatoires:
+      - {code: H360, libelle: "Rétinopathie diabétique"}
+      - {code: H280, libelle: "Cataracte diabétique"}
+    satellites: []
+  neurologique:
+    quatrieme_caractere: "4"
+    asterisques_obligatoires:
+      - {code: G632, libelle: "Polynévrite diabétique", poids_suggere: dominant}
+      - {code: G590, libelle: "Mononévrite diabétique"}
+      - {code: G990, libelle: "Neuropathie du système nerveux autonome"}
+    satellites: []
+  vasculaire_peripherique:
+    quatrieme_caractere: "5"
+    asterisques_obligatoires:
+      - {code: I792, libelle: "Angiopathie périphérique au cours de maladies classées ailleurs"}
+    satellites:   # le cortège « pied diabétique »
+      - {code: I70200, libelle: "Athérosclérose artères distales sans gangrène"}
+      - {code: I70201, libelle: "Athérosclérose artères distales, avec gangrène"}
+      - {code: I70210, libelle: "Athérosclérose avec gangrène - sans gangrène (lit ATIH)"}
+      - {code: I70211, libelle: "Athérosclérose avec gangrène"}
+      - {code: L97,    libelle: "Ulcère du membre inférieur"}
+      - {code: R02,    libelle: "Gangrène, non classée ailleurs",
+         contrainte: "ne pas cumuler avec I70.2x1 'avec gangrène' — redondance"}
+      - {code: A46,    libelle: "Érysipèle"}
+      - {code: L031,  libelle: "Phlegmon d'autres parties d'un membre"}
+      - {code: M8617, libelle: "Autre ostéomyélite aigüe - cheville et pied (ostéite du pied diabétique)"}
+      - {code: M8667, libelle: "Autre ostéomyélite chronique - cheville et pied"}
+      - {code: Z894,  libelle: "Absence acquise de pied et cheville (amputation ancienne)"}
+      - {code: Z895,  libelle: "Absence acquise du membre inf. au genou ou au-dessous"}
+  autres_precisees:
+    quatrieme_caractere: "6"
+    asterisques_obligatoires:
+      - {code: M1427, libelle: "Arthropathie diabétique - cheville et pied", poids_suggere: dominant}
+      - {code: M1426, libelle: "Arthropathie diabétique - jambe"}
+      - {code: M1467, libelle: "Arthropathie nerveuse (Charcot) - cheville et pied"}
+    satellites: []
+  osteoporose_endocrinienne:   # paire de plage (E10-E14), poids très faible
+    quatrieme_caractere: null  # ne modifie pas le 4e caractère du socle
+    asterisques_obligatoires:
+      - {code: M8215, libelle: "Ostéoporose endocrinienne - région pelvienne et cuisse"}
+      - {code: M8219, libelle: "Ostéoporose endocrinienne - siège non précisé"}
+
+# ─────────────────────────────────────────────────────────────────
+# 3. COMORBIDITÉS MÉTABOLIQUES ET CARDIOVASCULAIRES — DAS libres (0..n)
+# ─────────────────────────────────────────────────────────────────
+comorbidites:
+  metaboliques:
+    - {code: I10,    libelle: "Hypertension essentielle", poids_suggere: tres_frequent}
+    - {code: E78.0,  libelle: "Hypercholestérolémie essentielle"}
+    - {code: E78.2,  libelle: "Hyperlipidémie mixte"}
+    - {code: E78.5,  libelle: "Hyperlipidémie, sans précision"}
+    - {code: E66.09, libelle: "Obésité IMC 30-40 (ou non précisé)"}
+    - {code: E66.04, libelle: "Obésité IMC [30,35["}
+    - {code: E66.05, libelle: "Obésité IMC [35,40["}
+    - {code: E66.06, libelle: "Obésité IMC [40,50["}
+    - {code: E66.03, libelle: "Surpoids"}
+    - {code: G47.3,  libelle: "Apnée du sommeil"}
+    - {code: K76.0,  libelle: "Stéatose hépatique (NASH)"}
+  cardiovasculaires:
+    - {code: I25.1,  libelle: "Cardiopathie artérioscléreuse"}
+    - {code: I25.9,  libelle: "Cardiopathie ischémique chronique SAI"}
+    - {code: I48.2,  libelle: "Fibrillation auriculaire permanente"}
+    - {code: I48.9,  libelle: "FA/flutter sans précision"}
+    - {code: I50.11, libelle: "IVG à FEVG (préservée/altérée selon lit ATIH — vérifier le 6e car.)"}
+    - {code: I69.3,  libelle: "Séquelles d'infarctus cérébral"}
+    - {code: Z86.70, libelle: "ATCD de maladie cérébrovasculaire (sans séquelle)"}
+    - {code: Z86.71, libelle: "ATCD de cardiopathie ischémique"}
+
+# ─────────────────────────────────────────────────────────────────
+# 4. ÉVÉNEMENTS AIGUS — candidats DP quand le diabète est le motif (0..1)
+# ─────────────────────────────────────────────────────────────────
+evenements_aigus:
+  decompensations:   # remplacent le 4e caractère du socle
+    - {axe: coma, note: "E1x.0 — coma (hyperosmolaire, hypoglycémique...)"}
+    - {axe: acidocetose, note: "E1x.1 — acidocétose, typique du T1"}
+  intercurrents:     # DP autre, diabète bascule en DAS (règle guide chap. IV)
+    - {code: J18.9,  libelle: "Pneumopathie SAI"}
+    - {code: N39.0,  libelle: "Infection urinaire SAI"}
+    - {code: N17.9,  libelle: "Insuffisance rénale aigüe SAI"}
+    - {code: A46,    libelle: "Érysipèle"}
+    - {code: E87.60, libelle: "Hypokaliémie < 2,5 mmol/L"}
+    - {code: E87.68, libelle: "Hypokaliémie autre/SAI"}
+  hypoglycemies:
+    - {code: E16.0, libelle: "Hypoglycémie médicamenteuse sans coma",
+       a_valider: "codage de l'hypoglycémie du diabétique traité : E16.0 vs E1x.6 — pratique à trancher par le DIM"}
+
+# ─────────────────────────────────────────────────────────────────
+# 5. CONTRAINTES D'ASSEMBLAGE — toujours vérifiées après tirage
+# ─────────────────────────────────────────────────────────────────
+contraintes:
+  - id: C1
+    regle: "Exactement un type de diabète par patient (E10 xor E11 xor E13 xor E14)."
+  - id: C2
+    regle: "E11 : 5e caractère homogène sur tout le séjour (0 partout ou 8 partout) — le statut insulinotraité est une propriété du patient."
+  - id: C3
+    regle: "Un code .9 'sans complication' est incompatible avec tout axe de complication."
+  - id: C4
+    regle: "Tout axe tiré produit la paire complète : socle au 4e caractère de l'axe + un astérisque de l'axe. Jamais d'astérisque orphelin, jamais de dague de complication sans astérisque."
+  - id: C5
+    regle: "Plusieurs axes → plusieurs paires (ex. E11.20+N08.3 ET E11.30+H36.0). L'emploi du .7 'complications multiples' à la place est déconseillé (perte d'information) — à confirmer avec le guide."
+    a_valider: true
+  - id: C6
+    regle: "E11.–0 (insulinotraité) ⟹ le CRH doit mentionner l'insuline au long cours à domicile (avant l'entrée ou sur l'ordonnance de sortie). Jamais pour un relais insulinique bref peropératoire. [Guide MCO p. 89]"
+    implication_redaction: true
+  - id: C7
+    regle: "Diabète stable + DP autre ⟹ le diabète est en DAS, avec surveillance glycémique et traitement poursuivi mentionnés. [Guide MCO chap. IV]"
+    implication_redaction: true
+  - id: C8
+    regle: "Cohérences de gradient : N08.3 s'accompagne volontiers d'un stade N18.x ; I12.0 remplace I10 ; R02 ne se cumule pas avec un I70.2x1 'avec gangrène'."
+
+# ─────────────────────────────────────────────────────────────────
+# 6. POINTS À VALIDER PAR LE DIM AVANT USAGE
+# ─────────────────────────────────────────────────────────────────
+a_valider_dim:
+  - "Codage de l'hypoglycémie du diabétique (E16.0 vs E1x.6) — cf. section 4."
+  - "Politique .7 vs multi-paires (C5)."
+  - "Poids de tirage : les poids_suggere sont des placeholders d'expert à remplacer (T2 >> T1 en volume hospitalier ; E13/E14 marginaux ; rétinopathie > cataracte sur l'axe oculaire...)."
+  - "Périmètre E13/E14 : les garder avec poids faible, ou les exclure de la v1."

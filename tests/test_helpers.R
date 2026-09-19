@@ -9,27 +9,14 @@ suppressPackageStartupMessages({library(dplyr); library(tibble); library(stringr
 for(loc in c("fr_FR.UTF-8", "en_US.UTF-8", "C.UTF-8")) if(!is.na(suppressWarnings(Sys.setlocale("LC_CTYPE", loc))) && Sys.getlocale("LC_CTYPE") == loc) break
 lib_test <- Sys.getenv("R_LIBS_TEST", unset = ""); if(nzchar(lib_test)) .libPaths(c(lib_test, .libPaths()))
 
-# Repli arrow (tests UNIQUEMENT) : si arrow est absent, un paquet mock `arrow` est installé dans
-# tempdir, dont write_parquet/read_parquet sont saveRDS/readRDS. Limite : les fichiers produits
-# sont des RDS nommés .parquet, valables seulement parce qu'ils sont relus par le même mock.
-# Les scripts de production continuent d'exiger le vrai arrow.
-installer_mock_arrow <- function(){
-  lib_mock <- file.path(tempdir(), "lib_mock_arrow"); dir.create(lib_mock, showWarnings = FALSE)
-  pkg <- file.path(tempdir(), "arrow"); dir.create(file.path(pkg, "R"), recursive = TRUE, showWarnings = FALSE)
-  writeLines(c("Package: arrow", "Version: 0.0.0.9000", "Title: Mock", "Description: Mock arrow (RDS) pour tests hors base.",
-               "License: MIT", "Encoding: UTF-8"), file.path(pkg, "DESCRIPTION"))
-  writeLines("export(write_parquet, read_parquet)", file.path(pkg, "NAMESPACE"))
-  writeLines(c("write_parquet <- function(x, sink, ...) saveRDS(x, sink)",
-               "read_parquet  <- function(file, ...)  readRDS(file)"), file.path(pkg, "R", "mock.R"))
-  utils::install.packages(pkg, repos = NULL, type = "source", lib = lib_mock, quiet = TRUE)
-  .libPaths(c(lib_mock, .libPaths()))
-  stopifnot(requireNamespace("arrow", quietly = TRUE))
-}
+# Repli arrow (tests UNIQUEMENT) : si arrow est absent, un paquet mock `arrow` (write_parquet/read_parquet =
+# saveRDS/readRDS) est installé dans tempdir — source unique : demo/mock_pratihque.R (chantier « packaging + démo »).
+racine <- c(".", "..")[file.exists(c("config_v8.R", "../config_v8.R"))][1]
+stopifnot(!is.na(racine))
+source(file.path(racine, "demo", "mock_pratihque.R"))
 ARROW_MOCK <- !requireNamespace("arrow", quietly = TRUE)
 if(ARROW_MOCK) installer_mock_arrow()
 
-racine <- c(".", "..")[file.exists(c("config_v8.R", "../config_v8.R"))][1]
-stopifnot(!is.na(racine))
 Sys.unsetenv("SCENARIOS_PMSI_SURCHARGE")
 source(file.path(racine, "config_v8.R"))
 source(file.path(racine, "helpers_v8.R"))

@@ -34,7 +34,11 @@ code_dnid_ = prep_grep(code_dnid)
 # extraction_associations_codes_v8.R (§5.8) ; défaut "25" pour compatibilité v7.
 if(!exists("ANSEQTA_REF")) ANSEQTA_REF <- "25"
 if(exists("conn")) cma<- pRatihque::atihble(conn, 'prd_vue_nompmsi.mco_diag_niveau') |> dplyr::filter(!!dplyr::sym("v20" %+% ANSEQTA_REF)>1) |> dplyr::collect() |> dplyr::pull(code)
-codes_diab <- lire_codes_diabete(path_projet %+%"referentiels/codes_diabete.yaml")
+# codes_diabete.yaml est versionné dans le dépôt (referentiels/) : listes de codes CIM-10 et doctrine, sans donnée.
+PATH_CODES_DIABETE <- file.path(path_projet, "referentiels", "codes_diabete.yaml")
+if(!file.exists(PATH_CODES_DIABETE)) stop("Référentiel absent : " %+% PATH_CODES_DIABETE %+%
+  " (fichier versionné dans le dépôt, dossier referentiels/ ; vérifier SCENARIOS_PMSI_PATH / path_projet, qui doit pointer sur la racine du dépôt).")
+codes_diab <- lire_codes_diabete(PATH_CODES_DIABETE)
 codes_diab |> dplyr::filter(grepl("satellites",chemin)) |> dplyr::select(code) |> dplyr::pull(code)->codes_comp_sat_diab
 codes_diab |> dplyr::filter(grepl("asterisques_obligatoires",chemin)) |> dplyr::pull(code)->codes_astrisques_diabete
 # Alias : v7.2 l.448 référence `comp_sat_diab` (jamais défini) pour les codes satellites ;

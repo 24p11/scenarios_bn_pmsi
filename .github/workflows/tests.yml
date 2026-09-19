@@ -1,0 +1,36 @@
+# Intégration continue : les deux suites de tests hors base, puis la démo bout en bout.
+# Le job échoue dès qu'une étape échoue (les suites et la démo terminent par stop() en cas d'échec :
+# Rscript rend alors un code non nul). Si la suite SQLite ou la démo dépasse les runners (temps ou
+# RAM ~7 Go), la scinder en job séparé sur push main seulement — sans réduire les fixtures.
+name: tests
+on:
+  push:
+  pull_request:
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      R_KEEP_PKG_SOURCE: no
+      LANG: C.UTF-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - name: Dépendances R (binaires RSPM ; arrow inclus)
+        run: |
+          install.packages(c("dplyr", "dbplyr", "purrr", "tidyr", "stringr", "tibble", "yaml",
+                             "DBI", "RSQLite", "readr", "arrow", "openssl"), Ncpus = 2)
+          for(p in c("dplyr", "dbplyr", "purrr", "tidyr", "stringr", "tibble", "yaml", "DBI", "RSQLite", "readr", "openssl"))
+            if(!requireNamespace(p, quietly = TRUE)) stop("Paquet manquant : ", p)
+          cat("arrow :", requireNamespace("arrow", quietly = TRUE), "\n")   # repli mock RDS dans tests/démo si absent
+        shell: Rscript {0}
+      - name: Tests des helpers purs
+        run: Rscript tests/test_helpers.R
+      - name: Tests des scripts réels sur SQLite (mock pRatihque)
+        run: Rscript tests/test_chaines_sqlite.R
+      - name: Démo — base fictive
+        run: Rscript demo/creer_base_demo.R
+      - name: Démo — pipeline complet
+        run: Rscript demo/lancer_demo.R

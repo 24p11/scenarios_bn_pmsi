@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+message: >-
+  Si vous utilisez ce logiciel, merci de le citer avec les métadonnées ci-dessous.
+  Le code a été développé avec l'assistance de Claude Code (Anthropic) comme outil
+  d'aide au développement ; la conception, les doctrines et la validation sont de l'auteur.
+title: "scenarios_bn_pmsi : génération de scénarios cliniques fictifs à partir de la base nationale PMSI"
+type: software
+authors:
+  - family-names: Flicoteaux
+    given-names: Rémi
+    affiliation: "AP-HP (Assistance Publique - Hôpitaux de Paris), Département d'information médicale"
+    # orcid: "https://orcid.org/XXXX-XXXX-XXXX-XXXX"   # à compléter si souhaité
+repository-code: "https://github.com/24p11/scenarios_bn_pmsi"
+license: MIT
+version: v8
+date-released: "2026-09-19"   # à ajuster à la date de la première release
+keywords:
+  - PMSI
+  - ICD-10
+  - CIM-10
+  - synthetic data
+  - health data
+  - R
+abstract: >-
+  Pipeline amont du projet PARTAGES (écosystème STREAM) : dérivation de scénarios cliniques
+  fictifs mais statistiquement fondés (profil patient, contexte de séjour, diagnostic principal,
+  diagnostics associés) à partir de comptes agrégés et seuillés de la base nationale PMSI.
+  Seuls des agrégats seuillés quittent la plateforme sécurisée ; aucune donnée individuelle
+  n'est stockée ni partagée. Développé avec l'assistance de Claude Code (Anthropic) comme outil
+  d'aide au développement.
