@@ -17,7 +17,7 @@ source(file.path(racine, "demo", "mock_pratihque.R"))
 ARROW_MOCK <- !requireNamespace("arrow", quietly = TRUE)
 if(ARROW_MOCK) installer_mock_arrow()
 
-Sys.unsetenv("SCENARIOS_PMSI_SURCHARGE")
+Sys.unsetenv("SCENARIOS_PMSI_SURCHARGE"); Sys.setenv(SCENARIOS_PMSI_PATH = normalizePath(racine))   # les tests posent leur chemin (plus de défaut versionné)
 source(file.path(racine, "config_v8.R"))
 source(file.path(racine, "helpers_v8.R"))
 
@@ -768,5 +768,32 @@ ok("registre_depuis_chunks : id_profil recalculé sur pivots + graine, hash sur 
    { ch <- t1; for(cc in PIVOTS_LONGS) if(!cc %in% names(ch)) ch[[cc]] <- "x"
      r <- registre_depuis_chunks(ch, "C9", "adulte", dpec_par_profil = stats::setNames("DPEC test", id_profil_de(dplyr::mutate(ch, diagnostic_associes = graine))[1]))
      nrow(r) == nrow(t1) && all(r$campagne == "C9") && all(r$DPEC == "DPEC test") && all(r$hash_das == t1$hash_das) && identical(names(r), COLONNES_REGISTRE) })
+
+
+# ================================== lot « notebook campagnes » : identifiants courts, section H ==
+cat("\n# identifiants des séjours courts (recette id_courts_v1 figée)\n")
+ligne_c <- tibble::tibble(mode_hospit = "HC", sexe = "1", cage = "[60-70[", ghm2 = "04M053", diag2 = "J449", duree = 2L)
+ok("recette courts figée : valeur attendue EN DUR, préfixe c + 15 hex", id_profil_courts_de(ligne_c) == "ce3839ff42c0f1ca" && RECETTE_ID_COURTS == "id_courts_v1" &&
+     identical(COLONNES_RECETTE_ID_COURTS, PIVOTS_COURTS) && grepl("^c[0-9a-f]{15}$", id_profil_courts_de(ligne_c)) && nchar(id_profil_courts_de(ligne_c)) == 16)
+df_c4 <- dplyr::bind_rows(ligne_c, dplyr::mutate(ligne_c, duree = 1L), dplyr::mutate(ligne_c, sexe = "2"), dplyr::mutate(ligne_c, diag2 = "I10"))
+ok("courts : unicité et déterminisme (ordre des lignes indifférent, duree 2 / 2L équivalents)", length(unique(id_profil_courts_de(df_c4))) == 4 &&
+     identical(sort(id_profil_courts_de(df_c4)), sort(id_profil_courts_de(df_c4[4:1, ]))) && id_profil_courts_de(dplyr::mutate(ligne_c, duree = 2)) == id_profil_courts_de(ligne_c))
+ok("courts : domaine distinct des longs (préfixe) et colonne manquante -> stop", !grepl("^c", id_profil_de(ligne_id)) && grepl("colonnes manquantes", tryCatch(id_profil_courts_de(ligne_c[, -1]), error = function(e) conditionMessage(e))) &&
+     id_scenario_de(id_profil_courts_de(ligne_c), 2) == "ce3839ff42c0f1ca-002")
+
+cat("\n# section H : fichiers datés, dossier final par campagne, statut au registre, message courts absent\n")
+fx_dates <- c("scenarios_courts_v8_20260901.parquet", "scenarios_courts_v8_20260918.parquet", "scenarios_longs_tirage_v8_20260918.parquet", "scenarios_courts_v8_x.parquet", "autre.csv")
+ok("resoudre_export_date : fichier du jour prioritaire", identical(resoudre_export_date(fx_dates, "scenarios_courts", "20260918"), list(fichier = "scenarios_courts_v8_20260918.parquet", du_jour = TRUE)))
+ok("resoudre_export_date : sinon le plus récent au motif strict, annoncé du_jour = FALSE", identical(resoudre_export_date(fx_dates, "scenarios_courts", "20260919"), list(fichier = "scenarios_courts_v8_20260918.parquet", du_jour = FALSE)))
+ok("resoudre_export_date : aucun -> NULL (motif strict, autre préfixe ignoré)", is.null(resoudre_export_date(fx_dates, "scenarios_x", "20260919")) && is.null(resoudre_export_date(character(0), "scenarios_courts", "20260919")))
+ok("message_courts_absent : trois branches (refaire, ne pas copier, refs)", { m <- message_courts_absent("/x/exports/"); grepl("etape_tirage_courts\\(\\)", m) && grepl("NE copiez PAS", m) && grepl("etape_refs\\(\\)", m) && grepl("/x/exports \\(", m) })
+ok("verifier_dossier_final : absent -> creer ; sans méta -> reprise ; même campagne -> reprise ; autre campagne -> stop",
+   verifier_dossier_final(NULL, "C1", "/d")$action == "creer" && verifier_dossier_final(list(), "C1", "/d")$action == "reprise" &&
+     verifier_dossier_final(list(campagne = "C1", date = "20260919"), "C1", "/d")$action == "reprise" &&
+     { v <- verifier_dossier_final(list(campagne = "C1", date = "20260919"), "C2", "/d"); v$action == "stop" && grepl("AUTRE campagne \\(C1, du 20260919\\)", v$message) && grepl("Rien n'est écrasé", v$message) })
+reg_fx <- list(lignes = tibble::tibble(campagne = c("C1", "C1", "C2"), date = c("2026-09-01", "2026-09-02", "2026-09-03")))
+ok("statut_campagne_registre : inscrite (nb, dernière date) / jamais inscrite / registre vide",
+   { s1 <- statut_campagne_registre("C1", reg_fx); s3 <- statut_campagne_registre("C3", reg_fx); s0 <- statut_campagne_registre("C1", NULL)
+     s1$inscrite && s1$nb == 2 && grepl("2 scénarios le 2026-09-02", s1$texte) && grepl("changez d'identifiant", s1$texte) && !s3$inscrite && s3$texte == "jamais inscrite au registre" && !s0$inscrite })
 
 cat("\nTOUS LES TESTS SONT VERTS :", n_ok, "assertions\n")

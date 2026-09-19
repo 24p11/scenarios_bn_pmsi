@@ -1124,3 +1124,146 @@ Provenance (numéros de lignes de `tests/test_chaines_sqlite.R` au commit e9f70c
   type n'est versionné ; `referentiels/icr.tsv` externe n'est pas concerné). Confirmer.
 - **Q47** — Description/topics GitHub posés ; le README ne mentionne pas les statuts « issue »
   autrement que « Contact : ouvrir une issue ». Ajouter un CONTRIBUTING ? Non fait.
+
+## 20. Lot « notebook campagnes + config locale + démo dans les notebooks »
+
+Défauts constatés en exploitation réelle et suites du packaging. Aucun changement de logique de calcul
+hors §7 (identifiants des séjours courts, additif) ; aucune chaîne base touchée ; instantanés
+`tests/ancien_20260914/` intacts (les anciens scripts d'entrée gardent leur chemin personnel par
+défaut : fixtures figées, jamais exécutées hors test).
+
+### 20.1 Défauts constatés
+
+1. **Vidage remonté à la main** : le chunk `JE_CONFIRME_NOUVELLE_CAMPAGNE` était en §5b, après le
+   tirage ; l'ordre réel (poser `CAMPAGNE`, Restart, vider, sélectionner) n'apparaissait nulle part.
+2. **Tirage involontaire par `palier_tirage`** : le chunk tirait quel que soit l'état de la surcharge.
+3. **Nommage par date** : `scenarios_longs_tirage_v8_<date>/` — deux campagnes le même jour
+   s'écrasaient.
+4. **Fichiers datés inter-sessions** : `chemin_export()` date au jour de la session ; la finalisation
+   relue un autre jour ne trouvait plus `scenarios_courts` de la veille.
+5. **Chemins personnels versionnés** (Q41-Q42) : défaut de `SCENARIOS_PMSI_PATH` dans trois fichiers,
+   `pschema` dans `utils.R`.
+
+### 20.2 Changements (code)
+
+- **§1 nommage par campagne** — `etapes_v8.R` : `DIR_FINAL()` = `scenarios_longs_tirage_v8_<CAMPAGNE>/`
+  (+ `FICHIER_META_FINAL()` = `_meta.yaml` : campagne, date, PROFIL, populations, lignes, total,
+  REGISTRE_ACTIF, recette d'id). `finalisation_fixe` : garde-fou `verifier_dossier_final` (helpers H2)
+  AVANT toute écriture — dossier absent → créé ; présent sans méta (antérieur) ou même campagne →
+  reprise (parts réécrites) ; méta d'une AUTRE campagne → stop, rien écrasé. `etat_pipeline` : ligne
+  finalisation = « corpus par campagne : C1, C2 (dont la campagne courante …) ; monofichier(s) : … »,
+  FAIT si le corpus de la campagne courante existe (mode fixe) ou un monofichier (modes historiques).
+  Les monofichiers (`scenarios_longs_tirage_v8_<date>.parquet`, modes historiques et fusion) restent
+  datés (écriture). Tests SQLite : C1 puis C2 le même jour → deux dossiers, C1 intact (mêmes
+  `id_scenario`), méta ; garde-fou exercé (méta C1 posé sous le dossier C2 → stop, aucun fichier touché).
+- **§1bis fichiers datés** — helpers H1 `resoudre_export_date(fichiers, nom, date_tag)` (fichier du jour,
+  sinon le plus récent au motif strict `^<nom>_v8_[0-9]{8}\.parquet$`, sinon NULL) ; `etapes_v8.R ::
+  chemin_export_lecture(nom)` (annonce « relu depuis <fichier> (session antérieure …) »). Inventaire des
+  points de lecture via `chemin_export` : `etape_finalisation` (mode historique) et `finalisation_fixe`
+  (courts) — les deux passent par `chemin_export_lecture` ; `RUN_aval.Rmd` chunk `corpus` (commentaire).
+  Toutes les autres occurrences sont des ÉCRITURES (courts, monofichier, rapports) et gardent le jour.
+  Absence totale → `message_courts_absent` (trois branches, cf. §3). Test SQLite : `DATE_TAG` surchargé
+  à un autre jour, session neuve, finalisation → « relu depuis scenarios_courts_v8_<jour> », corpus C2
+  repris (mêmes id), `rapport_v8_20000102.txt`, méta datée du jour de session. Tests helpers : les trois cas.
+- **§3 message « courts absent »** — `message_courts_absent(exports_dir)` : (1) refaire
+  `etape_tirage_courts()` ; (2) NE PAS copier depuis l'autre profil (les sorties de tirage ne se migrent
+  pas) ; (3) `etape_refs()` si les refs manquent. Remplace `exiger_fichiers` sur ce point.
+- **§4 palier explicite** — `etapes_v8.R :: palier_actif()` (= `SCENARIOS_PMSI_SURCHARGE` non vide ET
+  marqueur `PALIER_ACTIF` posé par `palier.R`) et `surcharge_active()` (« aucune » / chemin, suffixe
+  « PALIER de mesure »). Bannière d'`etape_tirage_das_longs` : première ligne `CAMPAGNE`, `NB_CRH_CIBLE`
+  effectif, surcharge active. Notebooks : `palier_surcharge` écrit les deux lignes ; `palier_tirage` ne
+  tire que si `palier_actif()`, sinon marche à suivre ; `tirage_complet` refuse de tirer sous palier.
+- **§5 campagne** — helpers H3 `statut_campagne_registre(campagne, registre)` (« jamais inscrite » /
+  « déjà N scénarios le <date> — changez d'identifiant ») ; chunk session de `RUN_aval.Rmd` l'affiche
+  avec `CAMPAGNE` et la surcharge active ; `etape_selection_longs` (quota_dp_fixe sous
+  `REGISTRE_ACTIF`) : stop précoce si la campagne est inscrite, placé AVANT `charger_contexte_tirage`
+  et tout calcul (message : changer d'identifiant, Restart, chunk de vidage ; le registre ne se vide
+  jamais). Test SQLite : après C2 finalisée, `etape_selection_longs()` stoppe sans toucher aucun fichier
+  (mtimes identiques).
+- **§6 config locale** — `config_v8.R` : plus de défaut personnel ; `PATH_PROJET` = env
+  `SCENARIOS_PMSI_PATH`, sinon `config_locale.R` (cherché sous `PATH_PROJET` si connu, sinon dans le
+  répertoire courant) sourcé AVANT le bloc PROFIL et pouvant définir `SCENARIOS_PMSI_PATH` (variable R),
+  `pschema` et toute valeur propre au poste ; sinon `stop()` nommant les deux mécanismes
+  (`MESSAGE_PATH_PROJET_ABSENT`). Les deux lanceurs font le même bootstrap (config_locale.R du répertoire
+  courant → `Sys.setenv`) avant de sourcer la config. `utils.R` : `pschema` retiré (commentaire ; aucune
+  utilisation dans le v8). `config_locale.exemple.R` versionné (valeurs factices commentées) ;
+  `config_locale.R` ajouté au `.gitignore`. Vérifié : tests (`test_helpers.R` pose désormais
+  `SCENARIOS_PMSI_PATH` ; la suite SQLite et la démo passaient déjà par `creer_projet_stub` + env) et démo
+  n'ont pas besoin de `config_locale.R`. Notebooks : commentaire `Sys.setenv(SCENARIOS_PMSI_PATH = "~/…")`
+  remplacé par la règle. **Q41-Q42 soldées.**
+- **§7 identifiants courts** — helpers G1 : `RECETTE_ID_COURTS = "id_courts_v1"`,
+  `COLONNES_RECETTE_ID_COURTS = PIVOTS_COURTS` (mode_hospit, sexe, cage, ghm2, diag2, duree — ordre figé),
+  `id_profil_courts_de(df)` = `"c"` + 15 hex du sha256 (concaténation `\r`, NA → "") ; `id_scenario_de`,
+  `hash_das_de` communs. `etape_tirage_courts` : colonnes posées après `pmap_chunks` (avant habillage
+  admin : les variantes d'habillage partagent l'`id_scenario`, comme les longs), jusqu'aux exports et à
+  la revue (`formater_revue` reprend `id_scenario`). PAS d'inscription au registre. Tests helpers :
+  valeur EN DUR `ce3839ff42c0f1ca`, préfixe, unicité, déterminisme, équivalence 2 / 2L, colonne
+  manquante ; SQLite : export courts recalculable, `id_scenario` unique par (profil, variante) hors
+  habillage, domaine disjoint des longs, revue renseignée. Identité bit à bit avec les anciens scripts
+  d'entrée conservée (ils appellent l'étape courante).
+
+- **Fuite d'état de session corrigée (découverte par le test d'identité)** — `etapes_v8.R :: etat_tirage()`
+  utilisait `exists()` / `get()` avec héritage : un objet global homonyme (`rapport`, `revue`, laissés dans
+  globalenv par l'ancien script d'entrée inline du test d'identité, ou par toute session précédente)
+  était pris pour l'état de session — invisible tant que les deux flux produisaient la même revue,
+  révélé par les identifiants courts (revue avec `id_scenario` NA). `inherits = FALSE` sur `etat_tirage`,
+  `ctx` et `typo`. L'état de session ne passe plus que par `poser_tirage`.
+
+### 20.3 Notebooks et démo
+
+- **§2 `RUN_aval.Rmd` restructuré** (cycle de vie) : 0 session (CAMPAGNE + statut registre + surcharge)
+  — carte des dossiers — 1 migration — 2 repartitionnement — 3 OUVRIR UNE CAMPAGNE (rappel `CAMPAGNE`
+  + Restart, chunk de vidage déplacé ici, puis sélection) — 4 tirage — 5 palier OPTIONNEL gardé — 6
+  habillage, finalisation, registre, rapport — 7 revue — 8 outils (rétro-inscription, registre,
+  couverture DP, mémoire). Chaque chunk destructeur ou optionnel : en-tête « touche / ne touche
+  JAMAIS / quand / quand pas ».
+- **§3 carte des dossiers** : bloc « Architecture des fichiers d'une campagne » (PERMANENT vs PAR
+  CAMPAGNE, écrit par / lu par, durée de vie) + encadré « Pourquoi deux répertoires d'exports » dans
+  `RUN_aval.Rmd`, `RUN.md` et `VISITE_GUIDEE.md` (§3, style du document) ; le chunk de migration affiche
+  le rappel.
+- **§8 démo dans les notebooks** : `demo/session_demo.R` (mock pRatihque, base créée si absente,
+  projet démo, surcharge « démo », env `SCENARIOS_PMSI_DEMO = 1`, campagne `SCENARIOS_PMSI_DEMO_CAMPAGNE`
+  ; ne vide `demo/resultats/` que sous `SCENARIOS_PMSI_DEMO_RAZ`) ; `lancer_demo.R` réécrit dessus.
+  Chunk `mode_demo` (eval=FALSE) en tête des deux Rmd ; chunks `session` : bannière « MODE DÉMO » quand
+  actif, profil/surcharge posés seulement hors démo. Chunks non pertinents en démo marqués `demo=FALSE`
+  avec en-tête explicite : `RUN.Rmd` sections 3.3-3.7 et tests (le cycle de campagne complet est
+  `RUN_aval.Rmd`), `RUN_aval.Rmd` migration et palier. Corrections au passage : `ANS_CHOISIES <-
+  ANS_HISTORIQUE` (le littéral `17:26` ne correspond à aucun périmètre réduit), `revue` lue en
+  `read.csv2` (le fichier est écrit en csv2), `rapport` lu par `DATE_TAG`.
+- `demo/executer_notebook.R [--raz] <Rmd>` : exécute les chunks dans l'ordre dans globalenv (chunk
+  `opts` sauté, `mode_demo` exécuté, `demo=FALSE` sautés, `View` remplacé, graphiques vers `pdf(NULL)`),
+  première erreur = code de sortie non nul. Pas de `rmarkdown::render` : les notebooks posent
+  `eval = FALSE` globalement (un Knit ne doit jamais lancer le pipeline) et pandoc n'est pas requis.
+  Mesuré : `RUN.Rmd` 11 chunks exécutés / 9 sautés en 0,4 min ; `RUN_aval.Rmd` 20 / 5 en 0,1 min ;
+  corpus `scenarios_longs_tirage_v8_DEMO/`, registre `DEMO`, couverture 8 DP / 8.
+- CI : deux étapes ajoutées après la démo (`--raz RUN.Rmd`, puis `RUN_aval.Rmd`). `demo/README.md` :
+  section « Dérouler les notebooks en mode démo ».
+
+### 20.4 Vérifications
+
+| Passe | Résultat |
+|---|---|
+| `tests/test_helpers.R` avec / sans arrow | 312 / 309 |
+| `tests/test_chaines_sqlite.R` avec / sans arrow | 148 / 148 (test d'identité avec les anciens scripts : hors colonnes d'identifiants courts, additives) |
+| `demo/lancer_demo.R` | 0,5 min ; 320 longs, 879 courts |
+| `demo/executer_notebook.R --raz RUN.Rmd` puis `RUN_aval.Rmd` | verts (mode démo) |
+
+### 20.5 Questions (aucune action non autorisée)
+
+- **Q48** — `DIR_FINAL` par campagne : les corpus produits AVANT ce lot (dossiers datés
+  `scenarios_longs_tirage_v8_<date>/`) ne sont ni renommés ni reconnus par `etat_pipeline` (listés comme
+  corpus de campagne « <date> ») ; les renommer à la main en `_<Cn>` et y poser un `_meta.yaml` ? Non fait.
+- **Q49** — Stop précoce de la sélection : il bloque aussi la simple reprise d'une campagne déjà
+  finalisée (relancer `tirage_scenarios_v8.R` après finalisation stoppe à la sélection). Comportement
+  voulu (une campagne inscrite est close) ; sinon assouplir en « relecture autorisée si la sélection
+  présente porte la même campagne ».
+- **Q50** — Identifiants courts : `id_scenario` est partagé par les `NB_VARIANTES_ADMIN_COURTS` variantes
+  d'habillage d'un même tirage (même convention que les longs) ; faut-il un suffixe d'habillage ?
+- **Q51** — `config_locale.R` est cherché dans le répertoire courant quand `SCENARIOS_PMSI_PATH` est
+  absent : depuis un autre répertoire (`Rscript /chemin/extraction…`), seul l'environnement fonctionne.
+  Documenté ; alternative : localiser via `--file=` comme les scripts de la démo. Non fait.
+- **Q52** — `RUN.Rmd` sections 3.3-3.7 : doublon raccourci de `RUN_aval.Rmd` (profil diagnostic) ; les
+  retirer de `RUN.Rmd` au profit d'un renvoi ? Conservées, marquées `demo=FALSE`.
+- **Q53** — Palier : `palier.R` conserve `REGISTRE_ACTIF` de la config (TRUE en production) ; une
+  mesure inscrirait la campagne au registre si elle allait jusqu'à la finalisation. L'en-tête du chunk
+  le dit (poser `REGISTRE_ACTIF <- FALSE` dans `palier.R`) ; faut-il l'imposer dans `palier_surcharge` ?

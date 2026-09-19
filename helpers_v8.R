@@ -1408,6 +1408,19 @@ hash_das_de <- function(diagnostic_associes){
   substr(sha256_vec(cle), 1, 16)
 }
 seed_campagne <- function(seed, campagne) as.integer(seed + 1000L * (sum(utf8ToInt(as.character(campagne))) %% 100000L))
+# Identifiants des SÉJOURS COURTS — recette FIGÉE id_courts_v1 (lot « notebook campagnes », §7) : même
+# mécanique que id_v1 (sha256, séparateur "\r", NA -> "") sur les PIVOTS_COURTS DANS CET ORDRE :
+# mode_hospit, sexe, cage, ghm2, diag2, duree ; id_profil = "c" + 15 hex (préfixe de domaine : les
+# longs restent 16 hex sans préfixe). id_scenario = id_profil-variante et hash_das : fonctions communes.
+# Les courts ne sont PAS inscrits au registre (aucune économie inter-campagnes côté courts, porte ouverte).
+RECETTE_ID_COURTS <- "id_courts_v1"
+COLONNES_RECETTE_ID_COURTS <- c("mode_hospit", "sexe", "cage", "ghm2", "diag2", "duree")
+id_profil_courts_de <- function(df, colonnes = COLONNES_RECETTE_ID_COURTS){
+  manq <- setdiff(colonnes, names(df)); if(length(manq)) stop("id_profil_courts_de : colonnes manquantes : " %+% paste(manq, collapse = ", "), call. = FALSE)
+  if(nrow(df) == 0) return(character(0))
+  cle <- do.call(paste, c(lapply(colonnes, function(cc) norm_val(df[[cc]])), sep = "\r"))
+  paste0("c", substr(sha256_vec(cle), 1, 15))
+}
 
 # --- G2. Registre des tirages (append-only) ------------------------------------------------
 COLONNES_REGISTRE <- c("id_profil", "variante", "id_scenario", "hash_das", "campagne", "population", "diag2", "DPEC", "date")
@@ -1527,4 +1540,46 @@ registre_depuis_chunks <- function(df_chunks, campagne, population = NA_characte
   d$DPEC <- if("DPEC" %in% names(d)) as.character(d$DPEC) else if(!is.null(dpec_par_profil)) unname(dpec_par_profil[d$id_profil]) else if(!is.null(typo)) typologie_sejour(d, typo, col_age = "age", duree_defaut = 3)$DPEC else NA_character_
   d$date <- as.character(Sys.Date())
   tibble::as_tibble(d[, COLONNES_REGISTRE])
+}
+
+## ---- H. Lot « notebook campagnes + config locale » : nommage par campagne, fichiers datés, garde-fous ----
+if(!exists("%||%")) `%||%` <- function(a, b) if(is.null(a)) b else a
+
+# --- H1. Fichiers datés inter-sessions : résolution en LECTURE (l'écriture garde le jour) --------
+# `fichiers` = list.files(EXPORTS_DIR) ; `nom` = préfixe (ex. "scenarios_courts") ; `date_tag` = jour de
+# la session. Retourne list(fichier, du_jour) : le fichier du jour s'il existe, sinon le plus récent au
+# motif ^<nom>_v8_[0-9]{8}\.parquet$ (tri lexical = chronologique sur AAAAMMJJ) ; NULL si aucun.
+resoudre_export_date <- function(fichiers, nom, date_tag){
+  motif <- "^" %+% nom %+% "_v8_[0-9]{8}\\.parquet$"
+  cand <- sort(fichiers[grepl(motif, fichiers)])
+  if(length(cand) == 0) return(NULL)
+  du_jour <- nom %+% "_v8_" %+% date_tag %+% ".parquet"
+  if(du_jour %in% cand) list(fichier = du_jour, du_jour = TRUE) else list(fichier = cand[length(cand)], du_jour = FALSE)
+}
+# Message à trois branches quand scenarios_courts est introuvable (aucun fichier daté, aucun jour).
+message_courts_absent <- function(exports_dir, nom = "scenarios_courts"){
+  paste0("etape_finalisation : aucun ", nom, "_v8_<date>.parquet dans ", sub("/$", "", exports_dir), " (ni du jour, ni d'une session antérieure). ",
+         "(1) Lancez etape_tirage_courts() — rapide, sans base : pivots_courts + refs du profil courant ; ",
+         "(2) NE copiez PAS ce fichier depuis l'autre profil (exports_diagnostic/ <-> exports/) : les sorties de tirage ne se migrent pas, elles se REFONT sous le profil cible ; ",
+         "(3) si pivots_courts / refs manquent aussi : etape_refs() (extraction, RUN.Rmd).")
+}
+
+# --- H2. Corpus final nommé par CAMPAGNE : garde-fou sur le dossier existant --------------------
+# `meta_existant` : NULL (dossier absent) ; list() (dossier présent sans _meta.yaml, antérieur au lot) ;
+# sinon le contenu de _meta.yaml. Retourne list(action = "creer" | "reprise" | "stop", message).
+verifier_dossier_final <- function(meta_existant, campagne, dossier = ""){
+  if(is.null(meta_existant)) return(list(action = "creer", message = "corpus " %+% campagne %+% " : dossier créé (" %+% dossier %+% ")"))
+  autre <- meta_existant$campagne
+  if(is.null(autre)) return(list(action = "reprise", message = "corpus " %+% campagne %+% " : dossier présent SANS _meta.yaml (antérieur au nommage par campagne) : repris, parts réécrites"))
+  if(!identical(as.character(autre), as.character(campagne)))
+    return(list(action = "stop", message = "etape_finalisation : le dossier " %+% dossier %+% " porte un _meta.yaml d'une AUTRE campagne (" %+% autre %+% ", du " %+% (meta_existant$date %||% "?") %+%
+                  "). Rien n'est écrasé. Choisissez un autre identifiant (CAMPAGNE <- \"Cn\", Restart R) ou déplacez ce corpus."))
+  list(action = "reprise", message = "corpus " %+% campagne %+% " : dossier présent (même campagne, du " %+% (meta_existant$date %||% "?") %+% ") : repris, parts réécrites")
+}
+
+# --- H3. Statut d'une campagne au registre (affichage session, stop précoce de la sélection) ------
+statut_campagne_registre <- function(campagne, registre){
+  l <- if(is.null(registre) || is.null(registre$lignes)) NULL else registre$lignes[registre$lignes$campagne == campagne, , drop = FALSE]
+  if(is.null(l) || nrow(l) == 0) return(list(inscrite = FALSE, nb = 0L, texte = "jamais inscrite au registre"))
+  list(inscrite = TRUE, nb = nrow(l), texte = sprintf("déjà inscrite au registre : %d scénarios le %s — changez d'identifiant", nrow(l), max(as.character(l$date))))
 }

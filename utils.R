@@ -1,5 +1,5 @@
 library(tidyverse)
-pschema = "rflicoteaux-1578."
+# pschema (schéma personnel de la plateforme) : plus aucun défaut versionné ; à définir dans config_locale.R si nécessaire.
 
 prep_grep<-function(x) paste(x,collapse = "|")
 

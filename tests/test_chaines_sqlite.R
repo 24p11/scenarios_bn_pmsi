@@ -337,9 +337,14 @@ ok("longs : graine conservée (hors doublon de catégorie interne), HTA et diab�
      all(mapply(function(h, d) h == "N" || "I10" %in% d || any(d %in% hta_autres), sc_longs$hta, split_das(sc_longs$diagnostic_associes))) &&
      all(mapply(function(f, d) f == "N" || any(substr(d,1,3) %in% c("E10","E11")), sc_longs$diabete_scenario, split_das(sc_longs$diagnostic_associes))))
 rev <- readr::read_csv2(file.path(EXPORTS_DIR, "echantillon_revue.csv"), show_col_types = FALSE)
+ok("courts : id_profil (c + 15 hex, recette id_courts_v1), id_scenario = id_profil-variante unique, hash_das ; recalculables",
+   all(c("id_profil", "id_scenario", "hash_das") %in% names(sc_courts)) && all(grepl("^c[0-9a-f]{15}$", sc_courts$id_profil)) && identical(sc_courts$id_profil, id_profil_courts_de(sc_courts)) &&
+     identical(sc_courts$id_scenario, id_scenario_de(sc_courts$id_profil, sc_courts$variante)) && !anyDuplicated(dplyr::distinct(sc_courts, id_scenario, mode_entree, mode_sortie)) &&
+     identical(sc_courts$hash_das, hash_das_de(sc_courts$diagnostic_associes)) && !any(sc_courts$id_profil %in% sc_longs$id_profil))
 ok("echantillon_revue.csv : <= 50 lignes, deux branches, libellés et [G] chez les longs",
    nrow(rev) <= 50 && setequal(unique(rev$branche), c("courts", "longs")) && any(grepl("\\[G\\]", rev$das_libelles[rev$branche == "longs"])) &&
      all(c("dp_libelle", "das_libelles", "cmd", "type_unite") %in% names(rev)) && any(grepl("BPCO", rev$dp_libelle)))
+ok("revue : id_scenario renseigné pour les courts (c…) comme pour les longs", all(grepl("^c[0-9a-f]{15}-[0-9]{3}$", rev$id_scenario[rev$branche == "courts"])))
 rap <- readLines(file.path(EXPORTS_DIR, "rapport_v8_" %+% DATE_TAG %+% ".txt"))
 ok("rapport : meta en tête, table diag2 × type_unite, top 30, anomalies = 0", any(grepl("^== 0\\. Meta du catalogue", rap)) && any(grepl("PROFIL: diagnostic", rap)) &&
      any(grepl("effectifs sélectionnés diag2", rap)) && any(grepl("== 3\\. Top 30 DAS par CMD", rap)) && any(grepl("TOTAL anomalies = 0", rap)))
@@ -365,10 +370,21 @@ Sys.setenv(SCENARIOS_PMSI_PATH = proj); surcharger("ANS_HISTORIQUE <- c(17L, 20L
 meme_parquet <- function(a, b) identical(as.data.frame(arrow::read_parquet(a)), as.data.frame(arrow::read_parquet(b)))
 ok("(a) catalogue et les 10 refs identiques aux anciens scripts",
    all(vapply(c("catalogue_longs_seuil.parquet", nom_ref(NOMS_REFS)), function(f) meme_parquet(file.path(EXPORTS_ANC, f), file.path(EXPORTS_DIR, f)), logical(1))))
-ok("(a) scenarios_courts et scenarios_longs_tirage identiques bit à bit aux anciens scripts",
-   meme_parquet(file.path(EXPORTS_ANC, basename(f_courts)), f_courts) && meme_parquet(file.path(EXPORTS_ANC, basename(f_longs)), f_longs) &&
+# Identifiants des courts (lot notebook campagnes, §7, ADDITIF) : les anciens scripts d'entrée (instantanés figés, tirage
+# inline) ne les posent pas ; l'identité est vérifiée hors ces trois colonnes, et leur absence côté ancien est prouvée.
+COLS_ID_COURTS <- c("id_profil", "id_scenario", "hash_das")
+sans_ids <- function(f){ d <- as.data.frame(arrow::read_parquet(f)); d[, setdiff(names(d), COLS_ID_COURTS), drop = FALSE] }
+ok("(a) scenarios_courts (hors identifiants courts ajoutés au §7) et scenarios_longs_tirage identiques bit à bit aux anciens scripts",
+   identical(sans_ids(file.path(EXPORTS_ANC, basename(f_courts))), sans_ids(f_courts)) && all(COLS_ID_COURTS %in% names(arrow::read_parquet(f_courts))) &&
+     !any(COLS_ID_COURTS %in% names(arrow::read_parquet(file.path(EXPORTS_ANC, basename(f_courts))))) &&
+     meme_parquet(file.path(EXPORTS_ANC, basename(f_longs)), f_longs) &&
      meme_parquet(file.path(EXPORTS_ANC, "selection_longs.parquet"), file.path(EXPORTS_DIR, "selection_longs.parquet")))
-ok("(a) echantillon_revue.csv et top30 identiques", identical(readLines(file.path(EXPORTS_ANC, "echantillon_revue.csv")), readLines(file.path(EXPORTS_DIR, "echantillon_revue.csv"))) &&
+# revue : comparaison TEXTUELLE ligne à ligne, le champ id_scenario (2e colonne du csv2) des lignes courts neutralisé
+revue_sans_id_courts <- function(f) vapply(strsplit(readLines(f), ";", fixed = TRUE), function(x){ if(length(x) > 1 && x[1] == "\"courts\"") x[2] <- "NA"; paste(x, collapse = ";") }, character(1))
+ok("(a) echantillon_revue.csv (hors id_scenario des courts, NA chez l'ancien) et top30 identiques",
+   { la <- readLines(file.path(EXPORTS_ANC, "echantillon_revue.csv")); ln <- readLines(file.path(EXPORTS_DIR, "echantillon_revue.csv"))
+     identical(revue_sans_id_courts(file.path(EXPORTS_ANC, "echantillon_revue.csv")), revue_sans_id_courts(file.path(EXPORTS_DIR, "echantillon_revue.csv"))) &&
+       all(grepl("^\"courts\";NA;", la[grepl("^\"courts\";", la)])) && all(grepl("^\"courts\";\"c[0-9a-f]{15}-[0-9]{3}\";", ln[grepl("^\"courts\";", ln)])) && sum(grepl("^\"courts\";", ln)) > 0 } &&
      identical(readLines(file.path(EXPORTS_ANC, "top30_das_par_cmd.csv")), readLines(file.path(EXPORTS_DIR, "top30_das_par_cmd.csv"))))
 
 # (d) étapes hors ordre -> erreur actionnable ; (e) etat_pipeline avant ; (b) étape par étape
@@ -502,6 +518,9 @@ invisible(sortie(lancer("tirage_scenarios_v8.R")))   # session neuve : finalisat
 invisible(sortie(etape_finalisation()))
 rap_f <- readLines(file.path(EXPORTS_DIR, "rapport_v8_" %+% DATE_TAG %+% ".txt"))
 finaux <- lu(list.files(DIR_FINAL(), pattern = "^part_", recursive = TRUE, full.names = TRUE))
+ok("C1 : corpus nommé par CAMPAGNE (scenarios_longs_tirage_v8_C1/), _meta.yaml (campagne, date, populations), etat_pipeline le liste",
+   basename(DIR_FINAL()) == "scenarios_longs_tirage_v8_C1" && file.exists(FICHIER_META_FINAL()) && { m <- yaml::read_yaml(FICHIER_META_FINAL()); m$campagne == "C1" && m$date == DATE_TAG && setequal(unlist(m$populations), names(POPULATIONS)) && m$total == nrow(finaux) } &&
+     { e <- sortie(ep <- etat_pipeline()); grepl("corpus par campagne : C1 \\(dont la campagne courante C1\\)", ep$preuve[ep$etape == "etape_finalisation"]) && ep$statut[ep$etape == "etape_finalisation"] == "FAIT" })
 ok("finalisation en flux : parts finales par population == lots habillés ; DPEC/TPEC en sortie ; monofichier fusionné (volume <= seuil)",
    nrow(finaux) == sum(vapply(names(POPULATIONS), function(pp) sum(vapply(list.files(DIR_HABILLE(pp), full.names = TRUE), function(f) nrow(arrow::read_parquet(f)), integer(1))), integer(1))) &&
      all(c("DPEC", "TPEC", "population") %in% names(finaux)) && file.exists(chemin_export("scenarios_longs_tirage")) && nrow(arrow::read_parquet(chemin_export("scenarios_longs_tirage"))) == nrow(finaux))
@@ -575,6 +594,29 @@ ok("classe plafonnée aux volumes attendus dans les deux campagnes (1 par DP de 
 ok("rapport C2 : section campagne (vierges / recyclés), consommation cumulée par DPEC, DP proches de l'épuisement",
    { r2 <- readLines(file.path(EXPORTS_DIR, "rapport_v8_" %+% DATE_TAG %+% ".txt")); any(grepl("Campagne C2 \\(registre actif\\)", r2)) && any(grepl("consommation cumulée du catalogue par DPEC", r2)) && any(grepl("épuisement total", r2)) && any(grepl("Classes DPEC plafonnées", r2)) })
 ok("corpus C2 : id_scenario, origine des profils et DPEC/TPEC en sortie", all(c("id_scenario", "id_profil", "hash_das", "DPEC", "TPEC") %in% names(finaux2)) && "recycle" %in% sel_c2$origine_profil)
+# --- lot « notebook campagnes » : deux corpus le même jour, garde-fous, relecture datée inter-sessions
+dir_c1 <- file.path(EXPORTS_DIR, "scenarios_longs_tirage_v8_C1"); dir_c2 <- file.path(EXPORTS_DIR, "scenarios_longs_tirage_v8_C2")
+ok("C1 puis C2 le même jour : deux dossiers de corpus, C1 intact (mêmes id_scenario qu'à sa finalisation)",
+   dir.exists(dir_c1) && dir.exists(dir_c2) && basename(DIR_FINAL()) == "scenarios_longs_tirage_v8_C2" && yaml::read_yaml(file.path(dir_c1, "_meta.yaml"))$campagne == "C1" &&
+     setequal(lu(list.files(dir_c1, pattern = "^part_", recursive = TRUE, full.names = TRUE))$id_scenario, finaux$id_scenario) && !identical(sort(unique(finaux2$id_scenario)), sort(unique(finaux$id_scenario))))
+ok("sélection sous registre : campagne C2 déjà inscrite -> stop précoce, AVANT tout calcul (aucun fichier touché)",
+   { avant <- file.info(list.files(DIR_SELECTION(), recursive = TRUE, full.names = TRUE))$mtime
+     err <- tryCatch({ invisible(sortie(etape_selection_longs())); NULL }, error = function(e) conditionMessage(e))
+     !is.null(err) && grepl("campagne C2 déjà inscrite au registre", err) && grepl("changez d'identifiant", err) && grepl("JE_CONFIRME_NOUVELLE_CAMPAGNE", err) &&
+       identical(avant, file.info(list.files(DIR_SELECTION(), recursive = TRUE, full.names = TRUE))$mtime) })
+ok("garde-fou du corpus : dossier de la campagne courante portant le _meta.yaml d'une AUTRE campagne -> stop, rien écrasé",
+   { yaml::write_yaml(list(campagne = "C1", date = "20000101"), FICHIER_META_FINAL()); n_avant <- length(list.files(DIR_FINAL(), recursive = TRUE))
+     err <- tryCatch({ invisible(sortie(etape_finalisation())); NULL }, error = function(e) conditionMessage(e))
+     yaml::write_yaml(list(campagne = "C2", date = DATE_TAG), FICHIER_META_FINAL())
+     !is.null(err) && grepl("AUTRE campagne \\(C1, du 20000101\\)", err) && length(list.files(DIR_FINAL(), recursive = TRUE)) == n_avant })
+ok("fichiers datés inter-sessions : DATE_TAG d'un autre jour -> scenarios_courts relu depuis le fichier le plus récent (annoncé), corpus C2 repris, rapport daté du jour de session",
+   { surcharger(SURCHARGE_PROD, "CAMPAGNE <- 'C2'", "REGISTRE_ACTIF <- TRUE", "DATE_TAG <- '20000102'"); invisible(sortie(lancer("tirage_scenarios_v8.R")))   # session neuve, un autre jour
+     log_f <- sortie(etape_finalisation())
+     surcharger(SURCHARGE_PROD, "CAMPAGNE <- 'C2'", "REGISTRE_ACTIF <- TRUE")
+     any(grepl("relu depuis scenarios_courts_v8_" %+% format(Sys.Date(), "%Y%m%d") %+% ".parquet", log_f)) && any(grepl("même campagne", log_f)) &&
+       file.exists(file.path(EXPORTS_DIR, "rapport_v8_20000102.txt")) && yaml::read_yaml(FICHIER_META_FINAL())$date == "20000102" &&
+       setequal(lu(list.files(dir_c2, pattern = "^part_", recursive = TRUE, full.names = TRUE))$id_scenario, finaux2$id_scenario) })
+ok("courts absent (aucun fichier daté) -> message à trois branches", { m <- message_courts_absent(EXPORTS_DIR); grepl("etape_tirage_courts", m) && grepl("NE copiez PAS", m) })
 Sys.unsetenv("SCENARIOS_PMSI_ETAPES_SEULEMENT")
 Sys.setenv(SCENARIOS_PMSI_PATH = proj); surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)"); source(file.path(proj, "config_v8.R"))
 options(pmsi_mock_interdit = TRUE)

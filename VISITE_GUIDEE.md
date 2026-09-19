@@ -81,7 +81,7 @@ chunks/<population>/longs_chunk_XXXX.parquet    (reprise fichier par fichier)
    ▼                              v_admin_longs — jamais depuis la base]
    │  etape_finalisation()       [contrôles, rapport, échantillon de revue]
    ▼
-scenarios_longs_tirage_v8_<date>/<population>/part_*.parquet
+scenarios_longs_tirage_v8_<campagne>/<population>/part_*.parquet  (+ _meta.yaml)
    +  registre_tirages/registre_<campagne>.parquet
 ```
 
@@ -89,6 +89,26 @@ La branche **séjours courts** est parallèle et plus simple : `pivots_courts`
 (seuil appliqué en base) → `etape_tirage_courts()` (nombre de pathologies
 chroniques tiré dans la distribution observée chez les séjours longs — voir
 §5b) → habillage → finalisation.
+
+### Où vit quoi : la carte des dossiers d'une campagne
+
+Deux familles sous le dossier d'exports du profil (`exports/` ou `exports_diagnostic/`,
+un par profil, jamais mélangés) :
+
+- **Permanent** — le catalogue en parts (`catalogue_longs_seuil/`), les dix tables
+  de référence, le registre (`registre_tirages/`, qui ne se vide jamais), les
+  corpus des campagnes passées (`scenarios_longs_tirage_v8_<Cn>/`, un dossier par
+  campagne avec son `_meta.yaml`, jamais écrasé par une autre campagne), les
+  scénarios courts datés. Écrits par le repartitionnement, les refs, la
+  finalisation ; lus par la sélection et la livraison.
+- **Par campagne** — la sélection (`selection_longs/`, `meta_tirage.yaml`), les
+  paquets de tirage (`chunks/`), l'habillé (`habille/`), le rapport et la revue.
+  Écrits par les étapes de la campagne, vidés (chunk gardé) à l'ouverture de la
+  suivante.
+
+Ce qui se migre d'un profil à l'autre : le catalogue et ses refs (condition Q13).
+Ce qui ne se migre pas : les sorties de tirage, qui se refont sous le profil cible
+(rapide, sans base) — le message « courts absent » le dit en trois branches.
 
 ## 4. `helpers_v8.R` : les sections A→G racontent l'histoire du projet
 
@@ -300,6 +320,21 @@ servi.
   AVANT l'existence du registre — possible précisément parce que les
   identifiants se recalculent sur les fichiers.
 
+### H. Notebook campagnes, config locale (leçons des premières campagnes réelles)
+
+Quatre défauts d'exploitation et leurs remèdes : le corpus final était nommé par
+date (deux campagnes le même jour s'écrasaient) → nommé par campagne, avec un
+`_meta.yaml` et un garde-fou (`verifier_dossier_final`) ; les fichiers datés
+(`scenarios_courts_v8_<date>`) cassaient la relecture un autre jour →
+`resoudre_export_date` relit le fichier du jour, sinon le plus récent, en
+l'annonçant ; le chunk de palier pouvait tirer par inadvertance → `palier_actif()`
+et une bannière qui affiche campagne, budget effectif et surcharge active ; une
+campagne déjà inscrite pouvait être resélectionnée → `statut_campagne_registre`,
+affiché en session et bloquant avant tout calcul. Enfin les chemins personnels ont
+quitté le code versionné : `config_locale.R` (ignoré par git) ou la variable
+d'environnement, sinon arrêt explicite. Les séjours courts reçoivent leurs
+identifiants (recette `id_courts_v1`, préfixe `c`), sans registre.
+
 ## 5. Les décisions de conception à connaître pour lire le code
 
 ### 5a. Le catalogue des longs
@@ -401,7 +436,11 @@ avant/après au journal. Tout le code **neuf** vit dans les helpers, testés.
 - **« Objet introuvable »** → la session ne charge pas la bonne version du
   code : `git -C <PATH_PROJET> log --oneline -1`, puis Restart R.
 - **Voir tourner le pipeline sans la base** → `Rscript demo/creer_base_demo.R`
-  puis `Rscript demo/lancer_demo.R` (base SQLite fictive, sorties sous `demo/resultats/`).
+  puis `Rscript demo/lancer_demo.R` (base SQLite fictive, sorties sous `demo/resultats/`) ;
+  ou les notebooks eux-mêmes, chunk « Mode démo » en tête (`demo/session_demo.R`),
+  vérifiés en CI par `demo/executer_notebook.R`.
+- **« Racine du projet inconnue »** → `SCENARIOS_PMSI_PATH` dans l'environnement,
+  ou `config_locale.R` à la racine (copier `config_locale.exemple.R`).
 - **Données de la démo** → aléatoires, sans aucune validité épidémiologique :
   utiles pour lire les étapes et les livrables, jamais pour une conclusion.
 
@@ -414,4 +453,5 @@ paquets → 5. taille de paquets dynamique → 6. conversion E669 → 7. mémoir
 15 GiB → 8. orchestration par étapes → 9. aval production (typologie,
 catalogue en parts, quota par DP, index de tirage) → 10. finitions
 exploitation → 11. campagnes (identifiants, registre, plafonds de classe,
-recyclage). Chaque chantier = une section du journal, avec ses questions.
+recyclage) → 12. packaging GitHub + mode démo → 13. notebook campagnes, config
+locale, démo dans les notebooks. Chaque chantier = une section du journal, avec ses questions.

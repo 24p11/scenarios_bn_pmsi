@@ -13,8 +13,12 @@
 ###############################################################################
 
 ## ---- 0. Bootstrap : config, sources, connexion ----
-PATH_PROJET <- Sys.getenv("SCENARIOS_PMSI_PATH",
-                          unset = "~/commun/projets_communs/DIM_siege/divers_projets/Scenario_crh_fictifs/")
+PATH_PROJET <- Sys.getenv("SCENARIOS_PMSI_PATH", unset = "")
+if(!nzchar(PATH_PROJET)){   # sinon config_locale.R (racine du dépôt, non versionné ; modèle config_locale.exemple.R) — cf. config_v8.R
+  if(file.exists("config_locale.R")){ source("config_locale.R"); PATH_PROJET <- get0("SCENARIOS_PMSI_PATH", ifnotfound = "") }
+  if(!nzchar(PATH_PROJET)) stop("Racine du projet inconnue : variable d'environnement SCENARIOS_PMSI_PATH, ou config_locale.R à la racine du dépôt (copiez config_locale.exemple.R) définissant SCENARIOS_PMSI_PATH <- \"...\".", call. = FALSE)
+  Sys.setenv(SCENARIOS_PMSI_PATH = PATH_PROJET)
+}
 source(file.path(PATH_PROJET, "config_v8.R"))
 
 source(file.path(PATH_PROJET, "utils.R"))

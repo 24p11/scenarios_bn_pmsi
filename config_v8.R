@@ -8,8 +8,19 @@
 ###############################################################################
 `%+%` <- function(x, y) paste0(x, y)   # aussi défini dans utils.R (identique)
 
-PATH_PROJET <- Sys.getenv("SCENARIOS_PMSI_PATH",
-                          unset = "~/commun/projets_communs/DIM_siege/divers_projets/Scenario_crh_fictifs/")
+# Racine du projet : variable d'environnement SCENARIOS_PMSI_PATH, sinon config_locale.R (racine du
+# dépôt, IGNORÉ par git : valeurs propres au poste — SCENARIOS_PMSI_PATH, pschema, ... ; modèle :
+# config_locale.exemple.R). Aucun chemin personnel n'est versionné (lot « notebook campagnes », §6).
+MESSAGE_PATH_PROJET_ABSENT <- paste0("Racine du projet inconnue : définissez (1) la variable d'environnement SCENARIOS_PMSI_PATH ",
+  "(Sys.setenv(SCENARIOS_PMSI_PATH = \"<racine du dépôt>\") avant le source), ou (2) un fichier config_locale.R à la racine du dépôt ",
+  "(copiez config_locale.exemple.R, non versionné) contenant SCENARIOS_PMSI_PATH <- \"<racine du dépôt>\".")
+PATH_PROJET <- Sys.getenv("SCENARIOS_PMSI_PATH", unset = "")
+CONFIG_LOCALE <- if(nzchar(PATH_PROJET)) file.path(PATH_PROJET, "config_locale.R") else "config_locale.R"   # sourcé AVANT le bloc PROFIL
+if(file.exists(CONFIG_LOCALE)){
+  source(CONFIG_LOCALE, local = FALSE)
+  if(!nzchar(PATH_PROJET) && exists("SCENARIOS_PMSI_PATH")) PATH_PROJET <- SCENARIOS_PMSI_PATH
+}
+if(!nzchar(PATH_PROJET)) stop(MESSAGE_PATH_PROJET_ABSENT, call. = FALSE)
 if(!grepl("/$", PATH_PROJET)) PATH_PROJET <- paste0(PATH_PROJET, "/")
 PATH_RESULTS        <- paste0(PATH_PROJET, "results/")
 PATH_PAIRES_EXCLUES <- paste0(PATH_PROJET, "referentiels/exclusions_paires.yaml")

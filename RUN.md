@@ -7,7 +7,9 @@ Fichiers : `config_v8.R` (config + profils), `helpers_v8.R` (helpers purs), `eta
 diagnostic, courts) et `RUN_aval.Rmd` (exploitation du catalogue parquet : repartitionnement, campagnes).
 Spécification : `SPEC_V8.md` ; journal : `MODIFICATIONS_V8.md`.
 
-Variables d'environnement : `SCENARIOS_PMSI_PATH` (racine du projet), `SCENARIOS_PMSI_PROFIL`
+Variables d'environnement : `SCENARIOS_PMSI_PATH` (racine du projet ; sinon `config_locale.R` à la racine du
+dépôt, non versionné, copié de `config_locale.exemple.R` — aucun chemin personnel n'est versionné, le pipeline
+s'arrête avec un message explicite si ni l'un ni l'autre n'est défini), `SCENARIOS_PMSI_PROFIL`
 (`diagnostic` par défaut, ou `production`), `SCENARIOS_PMSI_SURCHARGE` (fichier R optionnel de
 surcharges, évalué après le bloc profil), `SCENARIOS_PMSI_ETAPES_SEULEMENT=1` (charger la session
 — config, sources, connexion pour l'extraction — sans exécuter aucune étape).
@@ -30,7 +32,7 @@ actionnable (« lancez etape_X d'abord », « fichier Y manquant ») si elle est
 | `etape_selection_longs(budget = NB_CRH_CIBLE, mode = MODE_SELECTION, k = NB_LIGNES_PAR_DP)` | tirage | **quota_dp_fixe** (production) : `selection_longs/<population>/part_<L>.parquet`, `selection_longs_effectifs.csv`, `selection_longs_stats_dp.csv`, `meta_tirage.yaml` par population + global ; quota_dp (diagnostic) : `selection_longs.parquet` | changement de budget / mode / k : vider d'abord chunks + sélection + méta (garde-fou `meta_tirage.yaml`) | sélection relue si présente, jamais re-tirée ; `catalogue_complet` retiré (stop si budget < catalogue) |
 | `etape_tirage_das_longs(chunk_range = NULL, populations = …)` | tirage | `chunks/<population>/longs_chunk_*.parquet` (+ sidecar) ; rien en RAM (fixe) | reprise : relancer telle quelle ; **parallélisme** : une session par plage `chunk_range = c(i, j)` disjointe, même dossier | chunks présents sautés ; écriture atomique (.tmp) ; `ref_das_aigu` indexé une fois ; débit imprimé par chunk |
 | `etape_habillage_longs(populations = …)` | tirage | `habille/<population>/lot_*.parquet` (jointure `v_admin_longs.parquet` relu par lots de `LOT_CHUNKS_FINALISATION` chunks, DPEC/TPEC recalculés) | après un jeu de chunks complet (stop sinon) | réécrit les lots |
-| `etape_finalisation(fusionner = NULL, populations = …)` | tirage | `scenarios_longs_tirage_v8_<date>/<population>/part_*.parquet` (+ monofichier fusionné si volume ≤ `SEUIL_EXPORT_MONOFICHIER` ou `fusionner = TRUE`), `rapport_v8_<date>.txt` (réalisé vs cible, doublons éliminés, manque à gagner), `echantillon_revue.csv`, `top30_das_par_cmd.csv` | après habillage ; relecture des lots en flux, contrôles agrégés par lot | — |
+| `etape_finalisation(fusionner = NULL, populations = …)` | tirage | `scenarios_longs_tirage_v8_<CAMPAGNE>/<population>/part_*.parquet` + `_meta.yaml` (un dossier par campagne ; garde-fou : dossier d'une autre campagne ⇒ stop, même campagne ⇒ reprise) (+ monofichier fusionné si volume ≤ `SEUIL_EXPORT_MONOFICHIER` ou `fusionner = TRUE`), `rapport_v8_<date>.txt` (réalisé vs cible, doublons éliminés, manque à gagner), `echantillon_revue.csv`, `top30_das_par_cmd.csv` | après habillage ; relecture des lots en flux, contrôles agrégés par lot | — |
 
 `memoire_session()` : objets par taille (Mo) dans globalenv, `ETAPES_ENV` et `CACHE_E669`, triés,
 puis `gc()`. Discipline : **Restart R avant chaque étape lourde** (le RSS de R ne redescend pas
@@ -48,6 +50,28 @@ bit prouvée par `tests/test_chaines_sqlite.R`).
 
 Arborescence : `results/partiels/` (partagé entre profils), `results/exports_diagnostic/` ou
 `results/exports/` (par profil, avec `chunks/`). Aucune table n'est persistée en base.
+
+## Architecture des fichiers d'une campagne
+
+Sous `EXPORTS_DIR` (= `exports/` en production, `exports_diagnostic/` en diagnostic), deux familles :
+
+| Famille | Fichiers | Écrit par | Lu par | Durée de vie |
+|---|---|---|---|---|
+| **PERMANENT** | `catalogue_longs_seuil/part_<L>.parquet` + `_sidecar.yaml` (+ `.ancien`) | `etape_repartitionner_catalogue()` | sélection, rétro-inscription, rapports | toute la vie du corpus (refait seulement si typologie ou recette d'id change) |
+| PERMANENT | les 10 refs (`ref_*`, `pivots_courts`, `v_admin_*`, `distribution_e660`, `referentiel_*`) | `etape_refs()` | courts, tirage des DAS, habillage | tant que `AN_REF`, `SEUIL_REF_*`, `CONVERSION_E669` ne changent pas |
+| PERMANENT | `registre_tirages/registre_<Cn>.parquet` | `etape_registre_campagne()` (fin de finalisation), `etape_retro_inscrire()` | sélection sous registre, rapports | **append-only, ne se vide JAMAIS** |
+| PERMANENT | `scenarios_longs_tirage_v8_<Cn>/<population>/part_*.parquet` + `_meta.yaml` | `etape_finalisation()` | livraison | un dossier PAR CAMPAGNE, jamais écrasé par une autre (garde-fou) |
+| PERMANENT | `scenarios_courts_v8_<date>.parquet` | `etape_tirage_courts()` | finalisation (fichier du jour, sinon le plus récent, annoncé) | tant que les refs courts ne changent pas |
+| **PAR CAMPAGNE** | `selection_longs/<population>/`, `meta_tirage.yaml` | `etape_selection_longs()` | tirage, habillage, registre | vidés à l'ouverture de la campagne suivante |
+| PAR CAMPAGNE | `chunks/<population>/longs_chunk_*.parquet` + sidecar | `etape_tirage_das_longs()` | habillage, registre | idem |
+| PAR CAMPAGNE | `habille/<population>/lot_*.parquet` | `etape_habillage_longs()` | finalisation | idem (réécrits à chaque habillage) |
+| PAR CAMPAGNE | `rapport_v8_<date>.txt`, `echantillon_revue.csv`, `top30_das_par_cmd.csv` | finalisation | revue | écrasés à chaque finalisation |
+
+**Pourquoi deux répertoires d'exports** : `exports_diagnostic/` et `exports/` = un par profil, jamais
+mélangés. Se migre d'un profil à l'autre : le catalogue et ses refs (condition Q13, chunk de migration
+de `RUN_aval.Rmd`). Ne se migre PAS : les sorties de tirage (courts, sélection, chunks, habillé, corpus),
+qui se **refont** sous le profil cible — étapes rapides et sans base ; le message « courts absent »
+d'`etape_finalisation` le rappelle (trois branches : refaire, ne pas copier, refs).
 
 ---
 
@@ -115,8 +139,11 @@ inférieur (doublons éliminés, chiffrés au rapport).
    `<pop> : <l> lignes sélectionnées, <v> variantes attendues ; plafonds appliqués = <p> ; manque à gagner = <m>`
    (l = lignes distinctes retenues ; v = Σ n_var = volume attendu ; p = groupes (DP × DPEC) plafonnés ;
    m = Σ max(0, X_dp − lignes disponibles)).
-3. **Palier 100 k qui MESURE le débit** : surcharge `NB_CRH_CIBLE <- 100000L`, puis
-   `etape_tirage_das_longs()` ; le débit (scénarios/s) est imprimé par chunk. Extrapolation :
+3. **Palier de mesure (OPTIONNEL)** : `palier.R` = `NB_CRH_CIBLE <- 100000L` + marqueur `PALIER_ACTIF <- TRUE`,
+   `SCENARIOS_PMSI_SURCHARGE`, Restart R ; le chunk de palier de `RUN_aval.Rmd` §5 **refuse de tirer** si la
+   surcharge palier n'est pas active (`palier_actif()`), et la bannière d'`etape_tirage_das_longs` affiche en
+   première ligne `CAMPAGNE`, `NB_CRH_CIBLE` effectif et la surcharge active (« aucune » attendu en campagne).
+   Le débit (scénarios/s) est imprimé par chunk. Extrapolation :
    temps campagne ≈ volume_attendu / débit ; sessions parallèles suggérées ≈ ceiling(temps / durée
    de session acceptable), plages `chunk_range` disjointes.
 4. **Campagne parallèle** : une session par plage et par population, même dossier
@@ -124,9 +151,11 @@ inférieur (doublons éliminés, chiffrés au rapport).
    écriture atomique. Puis `etape_habillage_longs()` et `etape_finalisation()` (flux par lots).
    Restart R entre chaque étape.
 
-5. **Cycle de campagne** (registre des tirages, `RUN_aval.Rmd` §5b) : (0) `etape_retro_inscrire(dossier_selection,
+5. **Cycle de campagne** (registre des tirages, `RUN_aval.Rmd` §3 « ouvrir une campagne ») : (0) `etape_retro_inscrire(dossier_selection,
    dossier_chunks, campagne)` pour une campagne tirée avant le chantier campagnes ; (1) `CAMPAGNE <- "Cn"`,
-   `REGISTRE_ACTIF <- TRUE` ; (2) `etape_selection_longs()` sous registre : chaque DP reçoit au moins 1 scénario
+   `REGISTRE_ACTIF <- TRUE`, Restart R, session (affiche `CAMPAGNE` et son statut au registre : « jamais inscrite » /
+   « déjà N scénarios le <date> — changez d'identifiant »), puis vidage gardé (`JE_CONFIRME_NOUVELLE_CAMPAGNE`) ;
+   (2) `etape_selection_longs()` sous registre (stop précoce, avant tout calcul, si `CAMPAGNE` est déjà inscrite) : chaque DP reçoit au moins 1 scénario
    (plancher automatique : X ≥ 1 et règle de classe), lignes VIERGES d'abord (id_profil absent du registre),
    sinon RECYCLAGE à variantes nouvelles (numérotation après variante_max, hash_das déjà enregistrés exclus,
    sans re-tirage), colonne `origine_profil` ; (3) tirage / habillage / finalisation ; (4)
@@ -163,7 +192,13 @@ mêmes étapes ; les partiels sont réutilisés, seules les refs sont recalculé
   `catalogue_longs_seuil.parquet`, relancer `etape_repartitionner_catalogue()`, puis recalculer le registre
   par rétro-inscription de toutes les campagnes. À relancer une fois après le chantier campagnes (id_profil).
 - Registre des tirages (`registre_tirages/`) : append-only, ne se vide JAMAIS (stop si réécriture divergente) ;
-  nouvelle campagne = vider chunks + sélection + `meta_tirage.yaml` + `habille/`, poser `CAMPAGNE`.
+  nouvelle campagne = poser `CAMPAGNE`, Restart R, vider chunks + sélection + `meta_tirage.yaml` + `habille/`.
+- Corpus final : `scenarios_longs_tirage_v8_<CAMPAGNE>/` + `_meta.yaml` (campagne, date, populations, total) ; deux
+  campagnes le même jour = deux dossiers ; un dossier portant le `_meta.yaml` d'une autre campagne ⇒ stop.
+- Fichiers datés (`scenarios_courts_v8_<date>.parquet`, `rapport_v8_<date>.txt`, monofichier) : écrits au jour de la
+  session ; en lecture, le fichier du jour sinon le plus récent (`chemin_export_lecture`, annoncé « relu depuis … »).
+- Identifiants des séjours courts : recette `id_courts_v1` figée (sha256 des `PIVOTS_COURTS`, `id_profil` = `c` + 15 hex,
+  `id_scenario` = `id_profil-variante`, `hash_das`) ; pas d'inscription au registre.
 - **Chunking dynamique** : la taille des chunks est calculée par les données,
   `taille_chunk(n) = max(CHUNK_SIZE_MIN, ceiling(n / NB_CHUNKS_MAX))` — au plus `NB_CHUNKS_MAX` (50)
   chunks par tirage, plancher `CHUNK_SIZE_MIN` (500) ; `CHUNK_SIZE_FIXE` (NA par défaut) impose une
@@ -184,6 +219,7 @@ mêmes étapes ; les partiels sont réutilisés, seules les refs sont recalculé
 Rscript tests/test_helpers.R            # helpers purs
 Rscript tests/test_chaines_sqlite.R     # scripts réels sur SQLite fichier : sessions multiples, étapes, identité avec les anciens scripts
 Rscript demo/creer_base_demo.R && Rscript demo/lancer_demo.R   # mode démo : pipeline complet sur base fictive (demo/README.md ; données aléatoires)
+Rscript demo/executer_notebook.R --raz RUN.Rmd ; Rscript demo/executer_notebook.R RUN_aval.Rmd   # les notebooks déroulés en mode démo
 ```
 Prérequis du second : dbplyr, DBI, RSQLite, yaml (arrow réel ou mock RDS de repli) ;
 `R_LIBS_TEST=<lib>` pour une bibliothèque additionnelle.

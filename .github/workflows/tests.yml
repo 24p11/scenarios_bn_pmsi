@@ -1,4 +1,5 @@
-# Intégration continue : les deux suites de tests hors base, puis la démo bout en bout.
+# Intégration continue : les deux suites de tests hors base, la démo bout en bout, puis les deux notebooks
+# déroulés en mode démo (demo/executer_notebook.R : chunks exécutés dans l'ordre, sans rmarkdown).
 # Le job échoue dès qu'une étape échoue (les suites et la démo terminent par stop() en cas d'échec :
 # Rscript rend alors un code non nul). Si la suite SQLite ou la démo dépasse les runners (temps ou
 # RAM ~7 Go), la scinder en job séparé sur push main seulement — sans réduire les fixtures.
@@ -34,3 +35,7 @@ jobs:
         run: Rscript demo/creer_base_demo.R
       - name: Démo — pipeline complet
         run: Rscript demo/lancer_demo.R
+      - name: Notebooks en mode démo — RUN.Rmd (amont)
+        run: Rscript demo/executer_notebook.R --raz RUN.Rmd
+      - name: Notebooks en mode démo — RUN_aval.Rmd (cycle de campagne)
+        run: Rscript demo/executer_notebook.R RUN_aval.Rmd

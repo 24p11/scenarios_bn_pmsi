@@ -26,8 +26,9 @@ tables produites est affiché.
 
 ## Ce que fait `lancer_demo.R`
 
-1. installe dans `tempdir()` le faux paquet `pRatihque` (SQLite) et, si besoin, le mock `arrow`
-   (`demo/mock_pratihque.R`, source unique partagée avec les tests) ;
+1. source `demo/session_demo.R` (commun aux notebooks) : installe dans `tempdir()` le faux paquet
+   `pRatihque` (SQLite) et, si besoin, le mock `arrow` (`demo/mock_pratihque.R`, source unique partagée
+   avec les tests), crée la base si elle manque ;
 2. copie le code du dépôt dans `demo/resultats/projet_demo/` avec des **stubs** `utils.R` /
    `referentiels.R` (les référentiels Excel externes ne sont pas distribués) ;
 3. écrit le profil « démo » (`demo/resultats/surcharge_demo.R`, surcharge du profil production) :
@@ -42,6 +43,31 @@ tables produites est affiché.
 
 `demo/resultats/` est **vidé à chaque lancement** (la démo repart de zéro) et ignoré par git,
 comme `demo/base_demo*`.
+
+## Dérouler les notebooks en mode démo
+
+Les deux notebooks sont la documentation **exécutable** du projet et tournent tels quels sur la base
+démo. Dans RStudio, ouvrir `RUN.Rmd` puis `RUN_aval.Rmd` et exécuter d'abord leur premier chunk
+« Mode démo (optionnel) » (il source `demo/session_demo.R` : faux `pRatihque`, base créée si absente,
+projet démo, profil « démo », variable `SCENARIOS_PMSI_DEMO`) ; le chunk `session` affiche alors
+« MODE DÉMO » en évidence. Les chunks non pertinents hors plateforme (migration inter-profils, palier
+de mesure, vidages, tests) le disent dans leur en-tête et portent l'option `demo=FALSE` ; les chunks
+`JE_CONFIRME…` restent à `FALSE`. Ordre : `RUN.Rmd` (amont : prep_data → refs → courts → partiels →
+catalogue → repartitionnement) puis `RUN_aval.Rmd` (cycle de campagne : sélection → tirage →
+habillage → finalisation → registre → revue). `demo/resultats/` n'est pas vidé entre les deux
+(sauf `SCENARIOS_PMSI_DEMO_RAZ=1`).
+
+Sans RStudio (et en CI) :
+
+```sh
+Rscript demo/executer_notebook.R --raz RUN.Rmd     # exécute les chunks dans l'ordre, comme des clics « Run »
+Rscript demo/executer_notebook.R RUN_aval.Rmd
+```
+
+`executer_notebook.R` n'utilise pas `rmarkdown::render` : les notebooks posent
+`knitr::opts_chunk$set(eval = FALSE)` (un Knit ne doit jamais lancer le pipeline) ; le lanceur lit les
+chunks, saute `opts` et les `demo=FALSE`, exécute `mode_demo` puis tout le reste, et s'arrête à la
+première erreur (code de sortie non nul).
 
 ## Tables de la base démo (`creer_base_demo.R`)
 
@@ -68,8 +94,8 @@ fusion E669 → E660 : `IDENT_FUSION`, GHM `88M991`), utilisés par les tests.
 | `exports_demo/selection_longs/<population>/` (+ `meta_tirage.yaml`) | la sélection (quota par DP, plafonds de classe) |
 | `exports_demo/chunks/<population>/longs_chunk_XXXX.parquet` | tirage des DAS par paquets (reprise) |
 | `exports_demo/habille/<population>/lot_XXXX.parquet` | habillage admin |
-| `exports_demo/scenarios_longs_tirage_v8_<date>/<population>/part_*.parquet` | **les scénarios longs** (pivots, graine, diagnostic_associes, DPEC, TPEC, id_scenario, campagne…) |
-| `exports_demo/scenarios_courts_v8_<date>.parquet` | les scénarios courts |
+| `exports_demo/scenarios_longs_tirage_v8_DEMO/<population>/part_*.parquet` + `_meta.yaml` | **les scénarios longs** (pivots, graine, diagnostic_associes, DPEC, TPEC, id_scenario, campagne…) — un dossier par campagne |
+| `exports_demo/scenarios_courts_v8_<date>.parquet` | les scénarios courts (id_profil `c…`, id_scenario, hash_das) |
 | `exports_demo/registre_tirages/registre_DEMO.parquet` | registre append-only de la campagne |
 | `exports_demo/echantillon_revue.csv`, `top30_das_par_cmd.csv`, `rapport_v8_<date>.txt`, `rapport_extraction_v8_<date>.txt`, `diagnostic_apports.csv`, `diagnostic_memoire.csv`, `recouvrement.csv` | livrables de validation et diagnostics |
 

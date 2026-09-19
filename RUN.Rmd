@@ -9,6 +9,15 @@ output: html_notebook
 knitr::opts_chunk$set(eval = FALSE)
 ```
 
+```{r mode_demo, eval=FALSE}
+# MODE DÉMO (optionnel) — données FICTIVES et ALÉATOIRES : aucune validité épidémiologique.
+# Sur la plateforme : NE PAS exécuter ce chunk. Hors plateforme : l'exécuter AVANT le chunk `session`.
+# Il installe un faux paquet pRatihque sur demo/base_demo.sqlite (créée si absente), copie le code dans
+# demo/resultats/projet_demo/ (stubs utils/referentiels), active la surcharge du profil « démo » (sorties
+# sous demo/resultats/) et pose SCENARIOS_PMSI_DEMO = 1 (le chunk `session` l'affiche). Voir demo/README.md.
+source("demo/session_demo.R")
+```
+
 Version notebook de `RUN.md` (qui reste la référence texte) pour l'AMONT ; la phase aval
 (exploitation du catalogue parquet : repartitionnement, sélection de campagne, palier de débit,
 campagnes parallèles, habillage, finalisation) a son propre notebook : `RUN_aval.Rmd`. Fichiers du pipeline :
@@ -28,11 +37,15 @@ chaque grosse étape.
 Charge config, sources, connexion et les fonctions d'étape SANS rien exécuter
 (`SCENARIOS_PMSI_ETAPES_SEULEMENT`). À ré-exécuter après tout Restart R.
 
+Racine du projet : variable d'environnement `SCENARIOS_PMSI_PATH`, sinon `config_locale.R` à la racine du
+dépôt (copier `config_locale.exemple.R` ; jamais versionné).
+
 ```{r session}
 rm(list = ls())
-Sys.setenv(SCENARIOS_PMSI_PROFIL = "diagnostic",          # ou "production"
-           SCENARIOS_PMSI_ETAPES_SEULEMENT = "1")
-# Sys.setenv(SCENARIOS_PMSI_PATH = "~/commun/scenarios_bn_pmsi/")   # si le projet n'est pas au chemin par défaut
+if (nzchar(Sys.getenv("SCENARIOS_PMSI_DEMO"))) {
+  cat("################  MODE DÉMO : base fictive (faux pRatihque), sorties sous demo/resultats/ — AUCUNE validité épidémiologique  ################\n")
+} else Sys.setenv(SCENARIOS_PMSI_PROFIL = "diagnostic")   # ou "production"
+Sys.setenv(SCENARIOS_PMSI_ETAPES_SEULEMENT = "1")
 source("extraction_associations_codes_v8.R")   # connecte la base ; pour le tirage seul : source("tirage_scenarios_v8.R")
 etat_pipeline()
 ```
@@ -89,8 +102,8 @@ if (file.exists(f_mem)) { memoire <- read.csv(f_mem); memoire[order(-memoire$pic
 la trace. Le rapport d'extraction mesure l'impact de la conversion E669.
 
 ```{r catalogue}
-ANS_CHOISIES  <- 17:26                 # <- À ÉDITER (ex. 22:26)
-ETBS_CHOISIS  <- c("CHR/U", "CH")      # <- À ÉDITER (ex. "CHR/U")
+ANS_CHOISIES  <- ANS_HISTORIQUE        # <- À ÉDITER (ex. 22:26) ; défaut = périmètre du profil (démo : millésimes de la base)
+ETBS_CHOISIS  <- TYPES_ETBS_LONGS      # <- À ÉDITER (ex. "CHR/U")
 etape_catalogue(ans = ANS_CHOISIES, etbs = ETBS_CHOISIS)
 cat(readLines(list.files(EXPORTS_DIR, "^rapport_extraction", full.names = TRUE)[1]), sep = "\n")
 ```
@@ -124,36 +137,40 @@ memoire_session()
 
 `quota_dp_fixe` (production) : k = `NB_LIGNES_PAR_DP` lignes distinctes par DP, variantes
 déduites, par population, plafonds `PLAFONDS_DPEC`. `NB_CRH_CIBLE` est un ordre de grandeur.
+Les sections 3.3 à 3.7 sont la version courte du cycle de campagne ; la version complète (ouverture de
+campagne, registre, palier gardé, carte des fichiers) est `RUN_aval.Rmd`. En mode démo, elles sont
+sautées (`demo=FALSE`) : dérouler `RUN_aval.Rmd` à la suite.
 
-```{r selection}
+```{r selection, demo=FALSE}
 etape_selection_longs()    # diagnostic : quota_dp, 1 000 ; production : quota_dp_fixe, NB_CRH_CIBLE
 ```
 
 ## 3.3b Palier 100 k : mesurer le débit
 
-```{r palier_100k}
-writeLines("NB_CRH_CIBLE <- 100000L", "palier.R"); Sys.setenv(SCENARIOS_PMSI_SURCHARGE = normalizePath("palier.R"))
-source("tirage_scenarios_v8.R")   # session (ETAPES_SEULEMENT)
-etape_selection_longs(); etape_tirage_das_longs()   # débit (scénarios/s) imprimé par chunk
+```{r palier_100k, demo=FALSE}
+# Palier de MESURE (optionnel) : voir RUN_aval.Rmd §5 (chunks gardés : ne tire que si la surcharge palier est active).
+writeLines(c("NB_CRH_CIBLE <- 100000L", "PALIER_ACTIF <- TRUE"), "palier.R"); Sys.setenv(SCENARIOS_PMSI_SURCHARGE = normalizePath("palier.R"))
+source("tirage_scenarios_v8.R")   # session (ETAPES_SEULEMENT) ; la bannière du tirage affiche la surcharge active
+if (palier_actif()) { etape_selection_longs(); etape_tirage_das_longs() } else cat("palier non actif : rien exécuté\n")   # débit (scénarios/s) imprimé par chunk
 # extrapolation : temps campagne ≈ volume_attendu / débit ; sessions parallèles ≈ ceiling(temps / durée acceptable)
 ```
 
 ## 3.4 Tirage DAS par chunks (reprise : relancer tel quel ; parallélisme par plages)
 
-```{r tirage_das}
+```{r tirage_das, demo=FALSE}
 etape_tirage_das_longs()                                                  # tout
 # etape_tirage_das_longs(chunk_range = c(1, 10), populations = "adulte")  # une session par plage disjointe
 ```
 
 ## 3.5 Habillage admin (flux par lots)
 
-```{r habillage}
+```{r habillage, demo=FALSE}
 etape_habillage_longs()
 ```
 
 ## 3.6 Fichiers définitifs, rapport, revue
 
-```{r finalisation}
+```{r finalisation, demo=FALSE}
 etape_finalisation()
 etat_pipeline()
 ```
@@ -161,8 +178,8 @@ etat_pipeline()
 **Critères** : rapport « TOTAL anomalies = 0 » (dont ^E669 résiduels) ; distribution du nombre
 de DAS par classe d'âge conforme aux cibles ; revue humaine de `echantillon_revue.csv`.
 
-```{r revue}
-revue <- read.csv(file.path(EXPORTS_DIR, "echantillon_revue.csv")); View(revue)
+```{r revue, demo=FALSE}
+revue <- read.csv2(file.path(EXPORTS_DIR, "echantillon_revue.csv")); View(revue)   # csv2 (write_excel_csv2)
 top30 <- read.csv(file.path(EXPORTS_DIR, "top30_das_par_cmd.csv")); View(top30)
 ```
 
@@ -171,7 +188,9 @@ top30 <- read.csv(file.path(EXPORTS_DIR, "top30_das_par_cmd.csv")); View(top30)
 Changer le budget change `NB_VARIANTES` : le garde-fou `meta_tirage.yaml` refuse de mélanger des
 chunks tirés sous d'autres paramètres. Vider chunks + sélection + méta avant de rejouer 3.3-3.6.
 
-```{r vider_chunks}
+```{r vider_chunks, demo=FALSE}
+# Ce que ce chunk touche (SUPPRIME) : chunks/ et la sélection (selection_longs.parquet, effectifs, meta_tirage.yaml).
+# Ce qu'il ne touche JAMAIS : registre_tirages/, les corpus scenarios_longs_tirage_v8_<Cn>/, le catalogue, les refs.
 JE_CONFIRME <- FALSE   # passer à TRUE en connaissance de cause
 if (JE_CONFIRME) {
   unlink(CHUNKS_DIR, recursive = TRUE)
@@ -203,9 +222,9 @@ if (JE_CONFIRME) {
 - Sessions multiples : les tables temporaires disparaissent à la déconnexion ;
   `etape_prep_data()` recrée à la demande. Ne jamais persister de table en base.
 
-# Tests hors base
+# Tests hors base (et mode démo : `Rscript demo/executer_notebook.R --raz RUN.Rmd` déroule ce notebook sur la base fictive)
 
-```{r tests}
+```{r tests, demo=FALSE}
 system("Rscript tests/test_helpers.R")
 system("Rscript tests/test_chaines_sqlite.R")
 ```

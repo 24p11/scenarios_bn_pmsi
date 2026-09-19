@@ -19,9 +19,10 @@ catalogue_longs_seuil/
 # Mode démo (base factice et sorties)
 demo/base_demo*
 demo/resultats/
-# Fichiers de palier / campagne locaux (surcharges personnelles)
+# Fichiers de palier / campagne locaux (surcharges personnelles) et configuration propre au poste
 palier.R
 campagne.R
+config_locale.R
 # R
 .Rhistory
 .RData

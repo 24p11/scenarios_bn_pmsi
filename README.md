@@ -101,9 +101,14 @@ cat demo/resultats/exports_demo/echantillon_revue.csv
 
 **Attention : données aléatoires, aucune validité épidémiologique.** La démo sert à voir
 tourner les étapes, les garde-fous et les livrables ; le détail (profil « démo », tables,
-sorties) est dans [demo/README.md](demo/README.md). L'intégration continue l'exécute à chaque push.
+sorties) est dans [demo/README.md](demo/README.md). Les deux notebooks `RUN.Rmd` et `RUN_aval.Rmd`
+se déroulent aussi tels quels sur la base démo (chunk « Mode démo » en tête) : ils sont la
+documentation exécutable du projet. L'intégration continue exécute la démo et les deux notebooks
+à chaque push.
 
-**Sur la plateforme sécurisée** — suivre [RUN.md](RUN.md) : profil
+**Sur la plateforme sécurisée** — définir la racine du projet (variable d'environnement
+`SCENARIOS_PMSI_PATH`, ou `config_locale.R` copié de `config_locale.exemple.R`, jamais versionné),
+puis suivre [RUN.md](RUN.md) : profil
 diagnostic (mesure de l'apport de chaque année/catégorie d'établissements),
 choix du périmètre, puis profil production. Prérequis non distribués ici :
 le paquet `pRatihque` (ATIH), et les référentiels externes attendus par
@@ -115,7 +120,7 @@ listes de codes) est versionné ici.
 
 | Fichier / dossier | Rôle |
 |---|---|
-| `config_v8.R` | Paramètres, profils diagnostic/production, surcharges |
+| `config_v8.R` | Paramètres, profils diagnostic/production, surcharges ; `config_locale.exemple.R` = modèle de la configuration propre au poste (`config_locale.R`, non versionné) |
 | `helpers_v8.R` | Fonctions pures (sections A→G, une par chantier) |
 | `etapes_v8.R` | Requêtes base + fonctions d'étape + tableau de bord |
 | `extraction_associations_codes_v8.R` | Lanceur extraction (46 lignes) |
@@ -123,7 +128,7 @@ listes de codes) est versionné ici.
 | `referentiels/` | Doctrine versionnée (typologie des séjours, exclusions…) |
 | `tests/` | Deux suites + instantanés de référence des versions antérieures |
 | `utils.R`, `referentiels.R`, `exclusions.R` | Héritage v7 toujours utilisé (les scripts v7 historiques, sources des diffs de la règle d'or, sont relus par `git show e9f70c7:<fichier>`) |
-| `demo/` | Mode démo hors plateforme : générateur de données fictives, mock `pRatihque`, base SQLite, lanceur ([demo/README.md](demo/README.md)) |
+| `demo/` | Mode démo hors plateforme : générateur de données fictives, mock `pRatihque`, base SQLite, lanceur, session démo pour les notebooks et lanceur de notebooks ([demo/README.md](demo/README.md)) |
 | `.github/workflows/tests.yml` | Intégration continue : les deux suites puis la démo bout en bout |
 | `VISITE_GUIDEE.md` | La visite guidée : où est chaque chose et pourquoi |
 | `RUN.md`, `RUN.Rmd`, `RUN_aval.Rmd` | Séquences opérationnelles |
