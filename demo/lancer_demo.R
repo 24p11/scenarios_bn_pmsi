@@ -13,8 +13,8 @@
 racine_depot <- function(){   # dupliqué de creer_base_demo.R (les scripts doivent se suffire)
   a <- grep("^--file=", commandArgs(), value = TRUE)
   d <- if(length(a)) dirname(normalizePath(sub("^--file=", "", a[1]))) else getwd()
-  for(cand in c(d, file.path(d, ".."), getwd(), file.path(getwd(), ".."))) if(file.exists(file.path(cand, "config_v8.R"))) return(normalizePath(cand))
-  stop("Racine du dépôt introuvable (config_v8.R) : lancer depuis la racine du dépôt, ex. Rscript demo/lancer_demo.R")
+  for(cand in c(d, file.path(d, ".."), getwd(), file.path(getwd(), ".."))) if(file.exists(file.path(cand, "config.R"))) return(normalizePath(cand))
+  stop("Racine du dépôt introuvable (config.R) : lancer depuis la racine du dépôt, ex. Rscript demo/lancer_demo.R")
 }
 `%+%` <- function(x, y) paste0(x, y)
 Sys.setenv(SCENARIOS_PMSI_DEMO_RAZ = "1"); Sys.unsetenv("SCENARIOS_PMSI_ETAPES_SEULEMENT")
@@ -23,13 +23,13 @@ suppressPackageStartupMessages({library(dplyr); library(tibble); library(stringr
 t0 <- Sys.time()
 
 ## ---- 1. Extraction (base mock) puis repartitionnement ----
-source(file.path(DEMO$projet, "extraction_associations_codes_v8.R"))   # etape_prep_data, etape_refs, etape_partiels_longs, etape_catalogue
+source(file.path(DEMO$projet, "extraction.R"))   # etape_prep_data, etape_refs, etape_partiels_longs, etape_catalogue
 etape_repartitionner_catalogue()
 DBI::dbDisconnect(conn); rm(conn)
 options(pmsi_mock_interdit = TRUE)   # à partir d'ici, tout appel base stoppe
 
 ## ---- 2. Tirage (sans base) ----
-source(file.path(DEMO$projet, "tirage_scenarios_v8.R"))                # courts, sélection, DAS longs, habillage, finalisation
+source(file.path(DEMO$projet, "tirage.R"))                # courts, sélection, DAS longs, habillage, finalisation
 
 ## ---- 3. Résumé ----
 chemin_export_dir <- function(x) sub("/+$", "", EXPORTS_DIR) %+% "/" %+% x   # EXPORTS_DIR se termine par "/"

@@ -58,7 +58,7 @@ if (nzchar(Sys.getenv("SCENARIOS_PMSI_DEMO"))) {
              SCENARIOS_PMSI_SURCHARGE = "")            # ou normalizePath("palier.R") : §5 (palier de mesure, optionnel)
 }
 Sys.setenv(SCENARIOS_PMSI_ETAPES_SEULEMENT = "1")
-source("tirage_scenarios_v8.R")
+source("tirage.R")
 cat("CAMPAGNE =", CAMPAGNE, "|", statut_campagne_registre(CAMPAGNE, lire_registre(DIR_REGISTRE()))$texte, "| surcharge active :", surcharge_active(), "\n")
 etat_pipeline()
 ```
@@ -68,7 +68,7 @@ etat_pipeline()     # réutilisable entre chaque étape
 memoire_session()   # objets par taille (Mo) ; Restart R si le pic monte
 ```
 
-Paramètres effectifs de la campagne (config_v8.R, bloc production, surchargeables) :
+Paramètres effectifs de la campagne (config.R, bloc production, surchargeables) :
 
 ```{r parametres}
 cat("CAMPAGNE =", CAMPAGNE, "; REGISTRE_ACTIF =", REGISTRE_ACTIF, "; MODE_SELECTION =", MODE_SELECTION, "; NB_CRH_CIBLE =", NB_CRH_CIBLE, "; NB_LIGNES_PAR_DP =", NB_LIGNES_PAR_DP, "\n")

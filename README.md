@@ -40,10 +40,10 @@ BASE NATIONALE ──► EXTRACTION ──► comptes agrégés (parquet) ──
                  accès pRatihque)
 ```
 
-- **Extraction** (`extraction_associations_codes_v8.R`) : seule partie qui
+- **Extraction** (`extraction.R`) : seule partie qui
   requiert la base (accès via le paquet ATIH `pRatihque`, non distribué
   ici). Ne produit que des agrégats seuillés.
-- **Tirage** (`tirage_scenarios_v8.R`) : n'ouvre jamais de connexion ; lit
+- **Tirage** (`tirage.R`) : n'ouvre jamais de connexion ; lit
   les parquets, tire les scénarios par campagnes itératives avec un registre
   de ce qui a déjà servi.
 
@@ -120,11 +120,11 @@ listes de codes) est versionné ici.
 
 | Fichier / dossier | Rôle |
 |---|---|
-| `config_v8.R` | Paramètres, profils diagnostic/production, surcharges ; `config_locale.exemple.R` = modèle de la configuration propre au poste (`config_locale.R`, non versionné) |
-| `helpers_v8.R` | Fonctions pures (sections A→G, une par chantier) |
-| `etapes_v8.R` | Requêtes base + fonctions d'étape + tableau de bord |
-| `extraction_associations_codes_v8.R` | Lanceur extraction (46 lignes) |
-| `tirage_scenarios_v8.R` | Lanceur aval (32 lignes, sans base) |
+| `config.R` | Paramètres, profils diagnostic/production, surcharges ; `config_locale.exemple.R` = modèle de la configuration propre au poste (`config_locale.R`, non versionné) |
+| `helpers.R` | Fonctions pures (sections A→G, une par chantier) |
+| `etapes.R` | Requêtes base + fonctions d'étape + tableau de bord |
+| `extraction.R` | Lanceur extraction (46 lignes) |
+| `tirage.R` | Lanceur aval (32 lignes, sans base) |
 | `referentiels/` | Doctrine versionnée (typologie des séjours, exclusions…) |
 | `tests/` | Deux suites + instantanés de référence des versions antérieures |
 | `utils.R`, `referentiels.R`, `exclusions.R` | Héritage v7 toujours utilisé (les scripts v7 historiques, sources des diffs de la règle d'or, sont relus par `git show e9f70c7:<fichier>`) |

@@ -1,9 +1,9 @@
 # RUN.md — pipeline scenarios_bn_pmsi v8, exécution par étapes
 
-Fichiers : `config_v8.R` (config + profils), `helpers_v8.R` (helpers purs), `etapes_v8.R`
+Fichiers : `config.R` (config + profils), `helpers.R` (helpers purs), `etapes.R`
 (chaînes base déplacées telles quelles + fonctions d'étape + `etat_pipeline()`),
-`extraction_associations_codes_v8.R` (script d'entrée extraction : n'appelle que les étapes),
-`tirage_scenarios_v8.R` (script d'entrée tirage, **sans base**). Notebooks : `RUN.Rmd` (amont : extraction,
+`extraction.R` (script d'entrée extraction : n'appelle que les étapes),
+`tirage.R` (script d'entrée tirage, **sans base**). Notebooks : `RUN.Rmd` (amont : extraction,
 diagnostic, courts) et `RUN_aval.Rmd` (exploitation du catalogue parquet : repartitionnement, campagnes).
 Spécification : `SPEC_V8.md` ; journal : `MODIFICATIONS_V8.md`.
 
@@ -43,8 +43,8 @@ avec preuves (partiels présents / attendus, refs / 10, catalogue + date + péri
 budget, chunks n / attendus, exports finaux + dates). Fichiers seulement : appelable partout, sans
 connexion (les tables temporaires affichent « inconnu hors connexion »).
 
-Scripts bout-en-bout : `Rscript extraction_associations_codes_v8.R` = prep_data → refs →
-partiels → catalogue ; `Rscript tirage_scenarios_v8.R` = courts → sélection → DAS longs →
+Scripts bout-en-bout : `Rscript extraction.R` = prep_data → refs →
+partiels → catalogue ; `Rscript tirage.R` = courts → sélection → DAS longs →
 habillage → finalisation. Comportement identique à l'ancien flux monolithique (identité bit à
 bit prouvée par `tests/test_chaines_sqlite.R`).
 
@@ -167,7 +167,7 @@ inférieur (doublons éliminés, chiffrés au rapport).
    `etape_registre_campagne()` (automatique en fin de finalisation) ; (5) rapport de consommation.
    Plafonds DPEC = plafond du TOTAL de la classe par population, 1 représentant par DP prime (dépassement consigné).
 
-Passage diagnostic → production : éditer le bloc `production` de `config_v8.R` (ANS_HISTORIQUE,
+Passage diagnostic → production : éditer le bloc `production` de `config.R` (ANS_HISTORIQUE,
 TYPES_ETBS_LONGS) d'après apports + recouvrement, puis `SCENARIOS_PMSI_PROFIL=production` et les
 mêmes étapes ; les partiels sont réutilisés, seules les refs sont recalculées dans `exports/`
 (copie possible depuis `exports_diagnostic/` si `AN_REF`, `SEUIL_REF_*`, `CONVERSION_E669`,
@@ -199,7 +199,7 @@ mêmes étapes ; les partiels sont réutilisés, seules les refs sont recalculé
 - Registre des tirages (`registre_tirages/`) : append-only, ne se vide JAMAIS (stop si réécriture divergente) ;
   nouvelle campagne = poser `CAMPAGNE`, Restart R, vider chunks + sélection + `meta_tirage.yaml` + `habille/`.
   Campagne déjà inscrite = **close** (Q49 actée) : si la sélection présente sur disque porte la même campagne,
-  `etape_selection_longs()` la relit sans rien tirer (relancer `tirage_scenarios_v8.R` après finalisation reste
+  `etape_selection_longs()` la relit sans rien tirer (relancer `tirage.R` après finalisation reste
   un no-op sûr) ; sinon stop explicite (« campagne close, ouvrez une nouvelle campagne — section 3 »). Aucun
   re-tirage possible d'une campagne inscrite.
 - Palier de mesure (Q53 actée) : `palier.R` impose `REGISTRE_ACTIF <- FALSE` et `etape_registre_campagne()`

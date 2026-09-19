@@ -1,7 +1,7 @@
 ###############################################################################
-# helpers_v8.R — helpers purs du pipeline scenarios_bn_pmsi (v8, industrialisation)
+# helpers.R — helpers purs du pipeline scenarios_bn_pmsi (v8, industrialisation)
 #
-# Sourcé par extraction_associations_codes_v8.R, tirage_scenarios_v8.R et les tests.
+# Sourcé par extraction.R, tirage.R et les tests.
 # Règles : aucune variable globale implicite (toute table de référence est un argument),
 # aucun `<<-`, dépendances limitées à dplyr/tidyr/tibble/stringr/purrr/base (+ arrow via
 # les arguments `ecrire`/`lire` de pmap_chunks). Ces fonctions masquent les versions

@@ -5,6 +5,11 @@ lignes), lignes du v8, et liste exhaustive des caractères modifiés avec la ré
 config qui l'autorise. Les blocs ont été comparés par `diff` avec leur source (commandes
 en fin de document). Tout écart non listé ici est une violation du spec.
 
+**Renommage des fichiers de code (chantier « livrable unique + nommage + arborescence », section 22)** :
+`config_v8.R` → `config.R`, `helpers_v8.R` → `helpers.R`, `etapes_v8.R` → `etapes.R`,
+`extraction_associations_codes_v8.R` → `extraction.R`, `tirage_scenarios_v8.R` → `tirage.R`. Les sections
+antérieures de ce journal citent les anciens noms (historique conservé tel quel).
+
 Conventions : `v7.1.2` = `extraction_associations_codes_v7.1.2.R`, `v7.2` =
 `extraction_associations_codes_v7.2.R` (retirés de l'arbre au chantier « packaging », section 19 ;
 relus par `git show e9f70c7:<fichier>`, dernier commit les contenant). Depuis le chantier « industrialisation » (section 10),

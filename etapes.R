@@ -1,7 +1,7 @@
 ###############################################################################
-# etapes_v8.R — ORCHESTRATION PAR ÉTAPES du pipeline scenarios_bn_pmsi v8
+# etapes.R — ORCHESTRATION PAR ÉTAPES du pipeline scenarios_bn_pmsi v8
 #
-# Sourcé par extraction_associations_codes_v8.R et tirage_scenarios_v8.R (après config,
+# Sourcé par extraction.R et tirage.R (après config,
 # utils, exclusions, referentiels, helpers), et par RUN.Rmd. Contenu :
 #   0. Chaînes base (définitions DÉPLACÉES telles quelles depuis le script d'extraction :
 #      prep_data, tables de référence, prep_scenarios2, fabriques ; diff vide, voir
@@ -1429,7 +1429,7 @@ etape_finalisation <- function(fusionner = NULL, populations = names(POPULATIONS
   f_top <- file.path(EXPORTS_DIR, "top30_das_par_cmd.csv")
   utils::write.csv(dplyr::bind_rows(courts = rapport$courts$top_das, longs = rapport$longs$top_das, .id = "branche"), f_top, row.names = FALSE)
   mode <- meta_tirage$MODE_SELECTION; conv <- ctx$conversion_e669
-  lignes <- c("RAPPORT DE CONTROLE — tirage_scenarios_v8.R — " %+% DATE_TAG %+% " — PROFIL = " %+% PROFIL,
+  lignes <- c("RAPPORT DE CONTROLE — tirage.R — " %+% DATE_TAG %+% " — PROFIL = " %+% PROFIL,
               "", "== 0. Meta du catalogue (catalogue_longs_seuil_meta.yaml) ==",
               "   " %+% strsplit(yaml::as.yaml(ctx$meta_catalogue), "\n")[[1]],
               "", "== 0b. Meta du tirage (meta_tirage.yaml) ==",
@@ -1552,7 +1552,7 @@ finalisation_fixe <- function(t0, ctx, fusionner, populations){
   f_revue <- file.path(EXPORTS_DIR, "echantillon_revue.csv"); readr::write_excel_csv2(df_revue, f_revue)
   f_top <- file.path(EXPORTS_DIR, "top30_das_par_cmd.csv")
   utils::write.csv(dplyr::bind_rows(c(list(courts = rapport$courts$top_das), lapply(resultats, function(r) r$stats$top_das)), .id = "branche"), f_top, row.names = FALSE)
-  lignes <- c("RAPPORT DE CONTROLE — tirage_scenarios_v8.R (quota_dp_fixe) — " %+% DATE_TAG %+% " — PROFIL = " %+% PROFIL,
+  lignes <- c("RAPPORT DE CONTROLE — tirage.R (quota_dp_fixe) — " %+% DATE_TAG %+% " — PROFIL = " %+% PROFIL,
               "", "== 0. Meta du catalogue ==", "   " %+% strsplit(yaml::as.yaml(ctx$meta_catalogue), "\n")[[1]],
               "", "== 0b. Meta du tirage (meta_tirage.yaml) ==", "   " %+% strsplit(yaml::as.yaml(meta_tirage), "\n")[[1]], "",
               "== 1. Volumétrie : réalisé vs cible (NB_CRH_CIBLE = " %+% meta_tirage$NB_CRH_CIBLE %+% " ; k = " %+% meta_tirage$NB_LIGNES_PAR_DP %+% ") ==",

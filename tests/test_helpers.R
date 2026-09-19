@@ -1,7 +1,7 @@
 ###############################################################################
 # tests/test_helpers.R — tests unitaires hors base des helpers purs (SPEC §8.1 + brief
 # industrialisation §8). Exécution : Rscript tests/test_helpers.R (racine du dépôt ou tests/).
-# Source config_v8.R (constantes, sans effet de bord) puis helpers_v8.R : aucune connexion
+# Source config.R (constantes, sans effet de bord) puis helpers.R : aucune connexion
 # base, aucune dépendance à utils.R / referentiels.R. arrow optionnel (repli saveRDS/readRDS
 # pour pmap_chunks, dans le test uniquement).
 ###############################################################################
@@ -11,15 +11,15 @@ lib_test <- Sys.getenv("R_LIBS_TEST", unset = ""); if(nzchar(lib_test)) .libPath
 
 # Repli arrow (tests UNIQUEMENT) : si arrow est absent, un paquet mock `arrow` (write_parquet/read_parquet =
 # saveRDS/readRDS) est installé dans tempdir — source unique : demo/mock_pratihque.R (chantier « packaging + démo »).
-racine <- c(".", "..")[file.exists(c("config_v8.R", "../config_v8.R"))][1]
+racine <- c(".", "..")[file.exists(c("config.R", "../config.R"))][1]
 stopifnot(!is.na(racine))
 source(file.path(racine, "demo", "mock_pratihque.R"))
 ARROW_MOCK <- !requireNamespace("arrow", quietly = TRUE)
 if(ARROW_MOCK) installer_mock_arrow()
 
 Sys.unsetenv("SCENARIOS_PMSI_SURCHARGE"); Sys.setenv(SCENARIOS_PMSI_PATH = normalizePath(racine))   # les tests posent leur chemin (plus de défaut versionné)
-source(file.path(racine, "config_v8.R"))
-source(file.path(racine, "helpers_v8.R"))
+source(file.path(racine, "config.R"))
+source(file.path(racine, "helpers.R"))
 
 `%+%` <- function(x, y) paste0(x, y)
 n_ok <- 0

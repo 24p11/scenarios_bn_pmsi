@@ -1,7 +1,7 @@
 ###############################################################################
 # tests/test_chaines_sqlite.R — les SCRIPTS RÉELS du v8 sur une base SQLite FICHIER
 #
-# Objet : exécuter extraction_associations_codes_v8.R puis tirage_scenarios_v8.R tels
+# Objet : exécuter extraction.R puis tirage.R tels
 # quels, dans un projet temporaire (config/helpers/scripts copiés, utils.R et referentiels.R
 # remplacés par des stubs sans Excel ni base), avec un faux paquet `pRatihque` dont
 # atihble = dplyr::tbl et connection_database = nouvelle connexion SQLite sur un fichier :
@@ -21,7 +21,7 @@ if(nzchar(lib_test)) .libPaths(c(lib_test, .libPaths()))
 for(p in c("dbplyr", "DBI", "RSQLite", "yaml", "tidyr", "readr")) if(!requireNamespace(p, quietly = TRUE)) stop("Paquet manquant : ", p)
 # Environnement hors plateforme (source unique, chantier « packaging + démo ») : faux paquets pRatihque
 # et arrow (repli RDS, tests/démo uniquement), stubs utils/referentiels, générateur de données fictives.
-racine <- normalizePath(c(".", "..")[file.exists(c("config_v8.R", "../config_v8.R"))][1])
+racine <- normalizePath(c(".", "..")[file.exists(c("config.R", "../config.R"))][1])
 `%+%` <- function(x, y) paste0(x, y)
 source(file.path(racine, "demo", "mock_pratihque.R"))
 source(file.path(racine, "demo", "generateur_donnees_fictives.R"))
@@ -63,7 +63,7 @@ sortie <- function(expr) utils::capture.output(expr, type = "output")
 # =============================================================== SESSION 1 ==
 cat("\n# session 1 : extraction partielle (années 17 et 26, CHR/U et CH)\n")
 surcharger("ANS_HISTORIQUE <- c(17L, 26L)")
-log1 <- sortie(lancer("extraction_associations_codes_v8.R"))
+log1 <- sortie(lancer("extraction.R"))
 ok("plan session 1 : 4 itérations, 10 refs, années 17 et 26, prep_das_chronique",
    sum(ETAPES_ENV$plan$iterations$a_faire) == 4 && all(ETAPES_ENV$plan$refs$a_faire) && identical(ETAPES_ENV$plan$annees_a_preparer, c(17L, 26L)) && ETAPES_ENV$plan$prep_das_chronique)
 tt <- temp_tables(conn)
@@ -224,7 +224,7 @@ fermer()
 # =============================================================== SESSION 2 ==
 cat("\n# session 2 : reconnexion, année 20 ajoutée -> seules les itérations manquantes\n")
 surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)")
-log2 <- sortie(lancer("extraction_associations_codes_v8.R"))
+log2 <- sortie(lancer("extraction.R"))
 ok("plan session 2 : 2 itérations (CHR/U 20, CH 20), 0 ref, année 20 seule, pas de prep_das_chronique",
    sum(ETAPES_ENV$plan$iterations$a_faire) == 2 && all(ETAPES_ENV$plan$iterations$an[ETAPES_ENV$plan$iterations$a_faire] == 20) && !any(ETAPES_ENV$plan$refs$a_faire) &&
      identical(ETAPES_ENV$plan$annees_a_preparer, 20L) && !ETAPES_ENV$plan$prep_das_chronique)
@@ -240,7 +240,7 @@ fermer()
 # ------------------------------------------------ run mono-session (projet 2) --
 cat("\n# run mono-session (3 années d'un coup) : identité du catalogue\n")
 proj2 <- creer_projet("projet_v8_mono"); Sys.setenv(SCENARIOS_PMSI_PATH = proj2)
-log_mono <- sortie(lancer("extraction_associations_codes_v8.R"))
+log_mono <- sortie(lancer("extraction.R"))
 ok("mono-session : 6 itérations calculées", sum(ETAPES_ENV$plan$iterations$a_faire) == 6)
 cat_mono <- lire_cat(EXPORTS_DIR)
 ok("identité du catalogue final multi-sessions == mono-session", identical(cat_multi, cat_mono))
@@ -251,7 +251,7 @@ Sys.setenv(SCENARIOS_PMSI_PATH = proj)
 
 # =============================================================== SESSION 3 ==
 cat("\n# session 3 : tout présent -> rien à faire\n")
-log3 <- sortie(lancer("extraction_associations_codes_v8.R"))
+log3 <- sortie(lancer("extraction.R"))
 ok("plan : rien à faire, message explicite", ETAPES_ENV$plan$rien_a_faire && any(grepl("TOUT EST A JOUR", log3)))
 ok("aucune table temporaire créée", length(temp_tables(conn)) == 0)
 ok("catalogue ré-agrégé identique", identical(lire_cat(EXPORTS_DIR), cat_multi))
@@ -261,7 +261,7 @@ fermer()
 cat("\n# FORCER_REFS\n")
 mt_avant <- file.info(file.path(EXPORTS_DIR, nom_ref(NOMS_REFS)))$mtime; Sys.sleep(1.1)
 surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)", "FORCER_REFS <- TRUE")
-invisible(sortie(lancer("extraction_associations_codes_v8.R")))
+invisible(sortie(lancer("extraction.R")))
 ok("FORCER_REFS : 9 refs recalculées, 0 itération, année AN_REF seule, prep_das_chronique",
    all(ETAPES_ENV$plan$refs$a_faire) && !any(ETAPES_ENV$plan$iterations$a_faire) && identical(ETAPES_ENV$plan$annees_a_preparer, 26L) && ETAPES_ENV$plan$prep_das_chronique)
 ok("tables temporaires : prep_data_26 et prep_das_chro_26 uniquement", setequal(temp_tables(conn), c("prep_data_26", "prep_das_chro_26")))
@@ -271,7 +271,7 @@ fermer()
 # ------------------------------------------------ garde-fou partiels_meta --
 cat("\n# garde-fou partiels_meta\n")
 surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)", "K_GRAINE_LONGS <- 3L")
-err <- tryCatch({ invisible(sortie(lancer("extraction_associations_codes_v8.R"))); NULL }, error = function(e) conditionMessage(e))
+err <- tryCatch({ invisible(sortie(lancer("extraction.R"))); NULL }, error = function(e) conditionMessage(e))
 ok("K_GRAINE_LONGS différent -> stop() demandant de vider PARTIELS_DIR", !is.null(err) && grepl("K_GRAINE_LONGS", err) && grepl("PARTIELS_DIR", err))
 fermer()
 
@@ -279,7 +279,7 @@ fermer()
 cat("\n# reprise des partiels\n")
 unlink(file.path(PARTIELS_DIR, "catalogue_partiel_CH_20.parquet"))
 surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)")
-invisible(sortie(lancer("extraction_associations_codes_v8.R")))
+invisible(sortie(lancer("extraction.R")))
 ok("un partiel supprimé -> 1 itération, année 20", sum(ETAPES_ENV$plan$iterations$a_faire) == 1 && identical(ETAPES_ENV$plan$annees_a_preparer, 20L))
 ok("catalogue identique après reprise", identical(lire_cat(EXPORTS_DIR), cat_multi))
 fermer()
@@ -288,7 +288,7 @@ fermer()
 cat("\n# CONVERSION_E669 = FALSE : E669 présents, partiels bruts identiques\n")
 proj3 <- creer_projet("projet_v8_noconv"); Sys.setenv(SCENARIOS_PMSI_PATH = proj3)
 surcharger("ANS_HISTORIQUE <- c(17L, 26L)", "CONVERSION_E669 <- FALSE")
-invisible(sortie(lancer("extraction_associations_codes_v8.R")))
+invisible(sortie(lancer("extraction.R")))
 cat_nc <- lire_cat(EXPORTS_DIR)
 ok("toggle FALSE : ^E669 présents dans le catalogue et les refs", compter_e669(cat_nc, c("diag2", "diagnostic_associes")) > 0 &&
      compter_e669(arrow::read_parquet(file.path(EXPORTS_DIR, "ref_das_chronique.parquet")), "das") > 0 && !isTRUE(yaml::read_yaml(file.path(EXPORTS_DIR, "catalogue_longs_seuil_meta.yaml"))$CONVERSION_E669))
@@ -301,14 +301,14 @@ ok("toggle FALSE : partiels bruts identiques à ceux du projet converti (cache i
 fermer()
 Sys.setenv(SCENARIOS_PMSI_PATH = proj)
 surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)")
-invisible(sortie(lancer("extraction_associations_codes_v8.R")))   # replace la config du projet principal (plan : rien à faire)
+invisible(sortie(lancer("extraction.R")))   # replace la config du projet principal (plan : rien à faire)
 fermer()
 
 # =============================================================== TIRAGE (sans base) ==
 cat("\n# tirage : phase sans base (mock interdit)\n")
 options(pmsi_mock_interdit = TRUE)
-ok("aucun appel pRatihque:: dans tirage_scenarios_v8.R", !any(grepl("pRatihque::", readLines(file.path(proj, "tirage_scenarios_v8.R")))))
-log_t <- sortie(lancer("tirage_scenarios_v8.R"))
+ok("aucun appel pRatihque:: dans tirage.R", !any(grepl("pRatihque::", readLines(file.path(proj, "tirage.R")))))
+log_t <- sortie(lancer("tirage.R"))
 f_courts <- file.path(EXPORTS_DIR, "scenarios_courts_v8_" %+% DATE_TAG %+% ".parquet")
 f_longs  <- file.path(EXPORTS_DIR, "scenarios_longs_tirage_v8_" %+% DATE_TAG %+% ".parquet")
 ok("exports du tirage présents", all(file.exists(c(f_courts, f_longs, file.path(EXPORTS_DIR, c("selection_longs.parquet", "selection_longs_effectifs.csv", "meta_tirage.yaml",
@@ -351,7 +351,7 @@ ok("rapport : meta en tête, table diag2 × type_unite, top 30, anomalies = 0", 
 # reprise des chunks : identité bit à bit
 ch_longs <- sort(list.files(CHUNKS_DIR, pattern = "^longs_chunk_", full.names = TRUE))
 unlink(ch_longs[min(2, length(ch_longs))]); unlink(sort(list.files(CHUNKS_DIR, pattern = "^courts_chunk_", full.names = TRUE))[1])
-log_t2 <- sortie(lancer("tirage_scenarios_v8.R"))
+log_t2 <- sortie(lancer("tirage.R"))
 ok("reprise : sélection relue, chunks présents sautés", any(grepl("relue depuis", log_t2)) && any(grepl("déjà présent, sauté", log_t2)))
 ok("reprise après suppression d'un chunk : parquets identiques bit à bit", identical(arrow::read_parquet(f_courts), sc_courts) && identical(arrow::read_parquet(f_longs), sc_longs))
 # courts : parité avec les longs — plages disjointes (parallélisme simulé) == run complet, reprise après suppression d'un chunk d'une plage
@@ -370,13 +370,17 @@ ok("courts : run complet après plages (un chunk d'une plage supprimé, retiré)
 cat("\n# orchestration (a) : nouveau flux == anciens scripts d'entrée (bit à bit)\n")
 options(pmsi_mock_interdit = FALSE)
 proj_anc <- creer_projet("projet_v8_ancien")
+# Instantanés FIGÉS (anciens noms de fichiers) : copiés sous leur nom d'origine ; shims config_v8.R / helpers_v8.R
+# (sourcent config.R / helpers.R) pour que les instantanés restent intacts après le renommage des fichiers de code.
 for(f in c("extraction_associations_codes_v8.R", "tirage_scenarios_v8.R")) file.copy(file.path(racine, "tests", "ancien_20260914", f), file.path(proj_anc, f), overwrite = TRUE)
+writeLines('source(file.path(PATH_PROJET, "config.R"))', file.path(proj_anc, "config_v8.R"))
+writeLines('source(file.path(PATH_PROJET, "helpers.R"))', file.path(proj_anc, "helpers_v8.R"))
 Sys.setenv(SCENARIOS_PMSI_PATH = proj_anc); surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)")
 invisible(sortie(lancer("extraction_associations_codes_v8.R"))); fermer()
 options(pmsi_mock_interdit = TRUE)
 invisible(sortie(lancer("tirage_scenarios_v8.R")))
 EXPORTS_ANC <- EXPORTS_DIR
-Sys.setenv(SCENARIOS_PMSI_PATH = proj); surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)"); source(file.path(proj, "config_v8.R"))
+Sys.setenv(SCENARIOS_PMSI_PATH = proj); surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)"); source(file.path(proj, "config.R"))
 meme_parquet <- function(a, b) identical(as.data.frame(arrow::read_parquet(a)), as.data.frame(arrow::read_parquet(b)))
 ok("(a) catalogue et les 10 refs identiques aux anciens scripts",
    all(vapply(c("catalogue_longs_seuil.parquet", nom_ref(NOMS_REFS)), function(f) meme_parquet(file.path(EXPORTS_ANC, f), file.path(EXPORTS_DIR, f)), logical(1))))
@@ -401,7 +405,7 @@ ok("(a) echantillon_revue.csv (hors id_scenario des courts, NA chez l'ancien) et
 cat("\n# orchestration (b)(d)(e) : étape par étape, hors ordre, tableau de bord\n")
 proj_et <- creer_projet("projet_v8_etapes"); Sys.setenv(SCENARIOS_PMSI_PATH = proj_et, SCENARIOS_PMSI_ETAPES_SEULEMENT = "1")
 options(pmsi_mock_interdit = FALSE)
-invisible(sortie(lancer("extraction_associations_codes_v8.R")))   # session chargée sans exécution
+invisible(sortie(lancer("extraction.R")))   # session chargée sans exécution
 etat0 <- etat_pipeline()
 ok("(e) avant toute étape : refs, partiels, catalogue, courts, sélection, finalisation À FAIRE",
    all(etat0$statut[etat0$etape %in% c("etape_refs", "etape_partiels_longs", "etape_catalogue", "etape_tirage_courts", "etape_selection_longs", "etape_tirage_das_longs", "etape_finalisation")] == "À FAIRE"))
@@ -412,7 +416,7 @@ ok("(d) etape_tirage_das_longs() sans sélection -> erreur actionnable", !is.nul
 invisible(sortie(etape_prep_data())); invisible(sortie(etape_refs()))
 ok("(b) après etape_refs : refs FAIT, partiels À FAIRE", { e <- etat_pipeline(); e$statut[e$etape == "etape_refs"] == "FAIT" && e$statut[e$etape == "etape_partiels_longs"] == "À FAIRE" })
 fermer()   # déconnexion entre etape_refs et etape_partiels_longs
-invisible(sortie(lancer("extraction_associations_codes_v8.R")))   # reconnexion (session chargée sans exécution)
+invisible(sortie(lancer("extraction.R")))   # reconnexion (session chargée sans exécution)
 err <- tryCatch({ invisible(sortie(etape_partiels_longs())); NULL }, error = function(e) conditionMessage(e))
 ok("(b) etape_partiels_longs() après reconnexion sans prep_data -> erreur actionnable", !is.null(err) && grepl("etape_prep_data", err))
 invisible(sortie(etape_prep_data()))
@@ -423,9 +427,9 @@ ok("(b) catalogue et refs par étapes == bout-en-bout",
 fermer(); rm(conn)
 ok("(e) sans connexion : tables temporaires « inconnu hors connexion », catalogue FAIT", { e <- etat_pipeline(); grepl("inconnu hors connexion", e$preuve[e$etape == "etape_prep_data"]) && e$statut[e$etape == "etape_catalogue"] == "FAIT" })
 options(pmsi_mock_interdit = TRUE)
-invisible(sortie(lancer("tirage_scenarios_v8.R")))   # session tirage chargée sans exécution
+invisible(sortie(lancer("tirage.R")))   # session tirage chargée sans exécution
 invisible(sortie(etape_tirage_courts())); invisible(sortie(etape_selection_longs()))
-invisible(sortie(lancer("tirage_scenarios_v8.R")))   # nouvelle session : la sélection et les chunks doivent être relus
+invisible(sortie(lancer("tirage.R")))   # nouvelle session : la sélection et les chunks doivent être relus
 ok("(b) nouvelle session : état de tirage vide", is.null(etat_tirage("selection")) && is.null(etat_tirage("df_tirage_longs")))
 invisible(sortie(etape_tirage_das_longs())); invisible(sortie(etape_habillage_longs())); invisible(sortie(etape_finalisation()))
 ok("(b) sorties du tirage par étapes (sessions séparées) == bout-en-bout, bit à bit",
@@ -439,8 +443,8 @@ ok("(c) etape_catalogue(ans, etbs) : catalogue restreint au périmètre passé, 
    identical(unlist(mres$ANS_HISTORIQUE), c(17L, 26L)) && identical(unlist(mres$TYPES_ETBS_LONGS), "CHR/U") && identical(unlist(mres$perimetre_ans), c(17L, 26L)) &&
      comparer(lire_cat(EXPORTS_DIR), ancien_flux(file.path(PARTIELS_DIR, nom_partiel("CHR/U", c(17L, 26L))), TRUE)))
 Sys.unsetenv("SCENARIOS_PMSI_ETAPES_SEULEMENT")
-Sys.setenv(SCENARIOS_PMSI_PATH = proj); surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)"); source(file.path(proj, "config_v8.R"))
-invisible(sortie(lancer("tirage_scenarios_v8.R")))   # rétablit l'état de session du projet principal (chunks présents : reprise)
+Sys.setenv(SCENARIOS_PMSI_PATH = proj); surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)"); source(file.path(proj, "config.R"))
+invisible(sortie(lancer("tirage.R")))   # rétablit l'état de session du projet principal (chunks présents : reprise)
 
 # =============================================================== AVAL PRODUCTION ==
 cat("\n# aval production : repartitionnement, quota_dp_fixe, tirage indexé par population, flux\n")
@@ -449,21 +453,21 @@ options(pmsi_mock_interdit = FALSE)
 SURCHARGE_PROD <- c("ANS_HISTORIQUE <- c(17L, 20L, 26L)", "MODE_SELECTION <- 'quota_dp_fixe'", "NB_CRH_CIBLE <- 200L", "NB_LIGNES_PAR_DP <- 1L", "CHUNK_SIZE_FIXE <- 30L", "LOT_CHUNKS_FINALISATION <- 2L",
                     'PLAFONDS_DPEC <- list("Accouchement normal mère" = 3L)')
 surcharger(SURCHARGE_PROD, "CAMPAGNE <- 'C1'", "REGISTRE_ACTIF <- FALSE")
-invisible(sortie(lancer("extraction_associations_codes_v8.R")))
+invisible(sortie(lancer("extraction.R")))
 invisible(sortie(etape_prep_data())); invisible(sortie(etape_refs())); invisible(sortie(etape_partiels_longs())); invisible(sortie(etape_catalogue()))
 fermer(); rm(conn); options(pmsi_mock_interdit = TRUE)
-invisible(sortie(lancer("tirage_scenarios_v8.R")))
+invisible(sortie(lancer("tirage.R")))
 ok("diagnostic_memoire.csv écrit en fin d'etape_refs / etape_partiels_longs (avant etape_catalogue) et listé par etat_pipeline",
    { proj_m <- creer_projet("projet_v8_mem"); Sys.setenv(SCENARIOS_PMSI_PATH = proj_m); options(pmsi_mock_interdit = FALSE)
-     invisible(sortie(lancer("extraction_associations_codes_v8.R"))); invisible(sortie(etape_prep_data())); invisible(sortie(etape_refs()))
+     invisible(sortie(lancer("extraction.R"))); invisible(sortie(etape_prep_data())); invisible(sortie(etape_refs()))
      a <- file.exists(file.path(EXPORTS_DIR, "diagnostic_memoire.csv")); n1 <- nrow(utils::read.csv(file.path(EXPORTS_DIR, "diagnostic_memoire.csv")))
      invisible(sortie(etape_partiels_longs())); n2 <- nrow(utils::read.csv(file.path(EXPORTS_DIR, "diagnostic_memoire.csv")))
      e <- etat_pipeline(); fermer(); rm(conn); options(pmsi_mock_interdit = TRUE)
      # message à trois branches quand le catalogue est absent (etape_catalogue non lancée dans ce projet)
-     invisible(sortie(lancer("tirage_scenarios_v8.R")))
+     invisible(sortie(lancer("tirage.R")))
      msg <- tryCatch({ invisible(sortie(etape_repartitionner_catalogue())); "" }, error = function(e) conditionMessage(e))
      msg2 <- tryCatch({ invisible(sortie(etape_selection_longs())); "" }, error = function(e) conditionMessage(e))
-     Sys.setenv(SCENARIOS_PMSI_PATH = proj_pr); invisible(sortie(lancer("tirage_scenarios_v8.R")))
+     Sys.setenv(SCENARIOS_PMSI_PATH = proj_pr); invisible(sortie(lancer("tirage.R")))
      a && n2 > n1 && grepl("diagnostic_memoire.csv : présent", e$preuve[e$etape == "etape_partiels_longs"]) &&
        grepl(sub("/$", "", file.path(proj_m, "results", "exports_diagnostic")), msg, fixed = TRUE) && grepl("copiez-le", msg) && grepl("Q13", msg) && grepl("etape_catalogue\\(\\) \\(extraction, coûteux\\)", msg) &&
        grepl("copiez-le", msg2) })
@@ -524,7 +528,7 @@ ok("une ligne et ses variantes dans le même chunk (aucune clé pivots × graine
      toutes <- unlist(cles_par_fichier); length(cles_par_fichier) >= 2 && !any(duplicated(toutes)) && length(toutes) > 0 })
 invisible(sortie(etape_habillage_longs()))
 ok("habillage fixe : lots habillés par population avec DPEC/TPEC", all(vapply(names(POPULATIONS), function(pp){ fs <- list.files(DIR_HABILLE(pp), pattern = "^lot_", full.names = TRUE); length(fs) == 0 || all(c("DPEC", "TPEC", "mode_entree", "population") %in% names(arrow::read_parquet(fs[1]))) }, logical(1))) && sum(vapply(names(POPULATIONS), function(pp) length(list.files(DIR_HABILLE(pp), pattern = "^lot_")), integer(1))) > 0)
-invisible(sortie(lancer("tirage_scenarios_v8.R")))   # session neuve : finalisation en flux depuis les fichiers
+invisible(sortie(lancer("tirage.R")))   # session neuve : finalisation en flux depuis les fichiers
 invisible(sortie(etape_finalisation()))
 rap_f <- readLines(file.path(EXPORTS_DIR, "rapport_v8_" %+% DATE_TAG %+% ".txt"))
 finaux <- lu(list.files(DIR_FINAL(), pattern = "^part_", recursive = TRUE, full.names = TRUE))
@@ -565,8 +569,8 @@ reg1 <- lire_registre(DIR_REGISTRE())
 ok("registre synthétique C1b : DP " %+% dp_epuise %+% " entièrement consommé chez les adultes", all(lig_ep$id_profil %in% reg1$par_profil$id_profil) && reg1$nb_campagnes == 2)
 # changement de campagne : vider chunks + sélection + méta + habillé (le registre ne se vide JAMAIS)
 unlink(c(CHUNKS_DIR, DIR_SELECTION(), file.path(EXPORTS_DIR, "habille"), file.path(EXPORTS_DIR, "meta_tirage.yaml")), recursive = TRUE)
-surcharger(SURCHARGE_PROD, "CAMPAGNE <- 'C2'", "REGISTRE_ACTIF <- TRUE"); source(file.path(proj_pr, "config_v8.R"))
-invisible(sortie(lancer("tirage_scenarios_v8.R")))
+surcharger(SURCHARGE_PROD, "CAMPAGNE <- 'C2'", "REGISTRE_ACTIF <- TRUE"); source(file.path(proj_pr, "config.R"))
+invisible(sortie(lancer("tirage.R")))
 invisible(sortie(etape_selection_longs()))
 sel_c2 <- purrr::list_rbind(purrr::compact(lapply(names(POPULATIONS), function(pp) lire_catalogue(DIR_SELECTION(pp)))))
 vierges_c2 <- sel_c2[sel_c2$origine_profil == "vierge", ]; recycles_c2 <- sel_c2[sel_c2$origine_profil == "recycle", ]
@@ -612,7 +616,7 @@ ok("C1 puis C2 le même jour : deux dossiers de corpus, C1 intact (mêmes id_sce
 # Q49 ACTÉE : campagne inscrite = close ; sélection présente de la même campagne -> relecture (reprise sûre) ; sinon stop
 ok("Q49 (a) : reprise complète du lanceur après finalisation + registre -> no-op sûr (sélection relue, chunks sautés, corpus repris, registre inchangé)",
    { reg_avant <- lire_registre(DIR_REGISTRE())$nb_scenarios; Sys.unsetenv("SCENARIOS_PMSI_ETAPES_SEULEMENT")
-     log_rep <- sortie(lancer("tirage_scenarios_v8.R")); Sys.setenv(SCENARIOS_PMSI_ETAPES_SEULEMENT = "1")
+     log_rep <- sortie(lancer("tirage.R")); Sys.setenv(SCENARIOS_PMSI_ETAPES_SEULEMENT = "1")
      any(grepl("déjà inscrite au registre .* sélection relue, aucune nouvelle sélection", log_rep)) && any(grepl("déjà présent, sauté", log_rep)) && any(grepl("même campagne", log_rep)) &&
        lire_registre(DIR_REGISTRE())$nb_scenarios == reg_avant && setequal(lu(list.files(DIR_FINAL(), pattern = "^part_", recursive = TRUE, full.names = TRUE))$id_scenario, finaux2$id_scenario) })
 ok("Q49 (b) : campagne inscrite SANS sélection sur disque -> stop « campagne close », renvoi section 3 du notebook, aucun fichier touché",
@@ -638,7 +642,7 @@ ok("garde-fou du corpus : dossier de la campagne courante portant le _meta.yaml 
      yaml::write_yaml(list(campagne = "C2", date = DATE_TAG), FICHIER_META_FINAL())
      !is.null(err) && grepl("AUTRE campagne \\(C1, du 20000101\\)", err) && length(list.files(DIR_FINAL(), recursive = TRUE)) == n_avant })
 ok("fichiers datés inter-sessions : DATE_TAG d'un autre jour -> scenarios_courts relu depuis le fichier le plus récent (annoncé), corpus C2 repris, rapport daté du jour de session",
-   { surcharger(SURCHARGE_PROD, "CAMPAGNE <- 'C2'", "REGISTRE_ACTIF <- TRUE", "DATE_TAG <- '20000102'"); invisible(sortie(lancer("tirage_scenarios_v8.R")))   # session neuve, un autre jour
+   { surcharger(SURCHARGE_PROD, "CAMPAGNE <- 'C2'", "REGISTRE_ACTIF <- TRUE", "DATE_TAG <- '20000102'"); invisible(sortie(lancer("tirage.R")))   # session neuve, un autre jour
      log_f <- sortie(etape_finalisation())
      surcharger(SURCHARGE_PROD, "CAMPAGNE <- 'C2'", "REGISTRE_ACTIF <- TRUE")
      any(grepl("relu depuis scenarios_courts_v8_" %+% format(Sys.Date(), "%Y%m%d") %+% ".parquet", log_f)) && any(grepl("même campagne", log_f)) &&
@@ -646,16 +650,16 @@ ok("fichiers datés inter-sessions : DATE_TAG d'un autre jour -> scenarios_court
        setequal(lu(list.files(dir_c2, pattern = "^part_", recursive = TRUE, full.names = TRUE))$id_scenario, finaux2$id_scenario) })
 ok("courts absent (aucun fichier daté) -> message à trois branches", { m <- message_courts_absent(EXPORTS_DIR); grepl("etape_tirage_courts", m) && grepl("NE copiez PAS", m) })
 Sys.unsetenv("SCENARIOS_PMSI_ETAPES_SEULEMENT")
-Sys.setenv(SCENARIOS_PMSI_PATH = proj); surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)"); source(file.path(proj, "config_v8.R"))
+Sys.setenv(SCENARIOS_PMSI_PATH = proj); surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)"); source(file.path(proj, "config.R"))
 options(pmsi_mock_interdit = TRUE)
-invisible(sortie(lancer("tirage_scenarios_v8.R")))   # rétablit l'état de session du projet principal
+invisible(sortie(lancer("tirage.R")))   # rétablit l'état de session du projet principal
 
 # changement de paramètres -> garde-fou meta_tirage, puis mode catalogue_complet
 surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)", "MODE_SELECTION <- 'catalogue_complet'", "NB_CRH_CIBLE <- " %+% (3 * nrow(cat_multi)) %+% "L", "BUDGET_TOTAL_LONGS <- " %+% (3 * nrow(cat_multi)) %+% "L")
-err <- tryCatch({ invisible(sortie(lancer("tirage_scenarios_v8.R"))); NULL }, error = function(e) conditionMessage(e))
+err <- tryCatch({ invisible(sortie(lancer("tirage.R"))); NULL }, error = function(e) conditionMessage(e))
 ok("meta_tirage : paramètres différents -> stop() demandant de vider les chunks", !is.null(err) && grepl("meta_tirage.yaml", err))
 unlink(CHUNKS_DIR, recursive = TRUE); unlink(file.path(EXPORTS_DIR, c("meta_tirage.yaml", "selection_longs.parquet")))
-log_t3 <- sortie(lancer("tirage_scenarios_v8.R"))
+log_t3 <- sortie(lancer("tirage.R"))
 mt3 <- yaml::read_yaml(file.path(EXPORTS_DIR, "meta_tirage.yaml"))
 ok("catalogue_complet : NB_VARIANTES = 3, volume attendu = nrow × 3, variante max = 3",
    mt3$NB_VARIANTES == 3 && mt3$volume_attendu == 3 * nrow(cat_multi) && max(arrow::read_parquet(f_longs)$variante) == 3 && ETAPES_ENV$rapport$longs_tirage_n <= mt3$volume_attendu)

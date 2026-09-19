@@ -73,7 +73,7 @@ STUB_REFERENTIELS <- c(
   'cim <- tibble::tibble(code = c("J44.9","J44.0","I10","N18.9","N18.5","K80.2","I50.9","I50.0","E78.5","F17.2","I48"),',
   '  libelle = c("BPCO, sans précision","BPCO avec infection","HTA essentielle","IRC, sans précision","IRC stade 5","Lithiase",',
   '              "Insuffisance cardiaque, sans précision","IC congestive","Hyperlipidémie","Tabagisme","Fibrillation auriculaire"))')
-FICHIERS_PROJET <- c("config_v8.R", "helpers_v8.R", "etapes_v8.R", "extraction_associations_codes_v8.R", "tirage_scenarios_v8.R", "exclusions.R")
+FICHIERS_PROJET <- c("config.R", "helpers.R", "etapes.R", "extraction.R", "tirage.R", "exclusions.R")
 creer_projet_stub <- function(nom, racine, dossier = tempdir()){
   proj <- file.path(dossier, nom); unlink(proj, recursive = TRUE); dir.create(file.path(proj, "referentiels"), recursive = TRUE)
   for(f in FICHIERS_PROJET){

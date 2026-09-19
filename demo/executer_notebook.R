@@ -17,7 +17,7 @@ local({
   args <- commandArgs(trailingOnly = TRUE)
   raz <- "--raz" %in% args; fichier <- setdiff(args, "--raz")
   if(length(fichier) != 1 || !file.exists(fichier)) stop("Usage : Rscript demo/executer_notebook.R [--raz] <notebook.Rmd> (depuis la racine du dépôt)")
-  if(!file.exists("config_v8.R")) stop("À lancer depuis la racine du dépôt (config_v8.R introuvable dans ", getwd(), ")")
+  if(!file.exists("config.R")) stop("À lancer depuis la racine du dépôt (config.R introuvable dans ", getwd(), ")")
   if(raz) Sys.setenv(SCENARIOS_PMSI_DEMO_RAZ = "1") else Sys.unsetenv("SCENARIOS_PMSI_DEMO_RAZ")
   lib_test <- Sys.getenv("R_LIBS_TEST", unset = ""); if(nzchar(lib_test)) .libPaths(c(lib_test, .libPaths()))
   pdf(NULL)

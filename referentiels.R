@@ -11,7 +11,7 @@ cim_cancer <-readxl::read_excel(path_projet %+% "/referentiels/REFERENTIEL_METHO
 code_cancer <-cim_cancer |> dplyr::filter(substr(code,1,1)!="Z") |> 
   dplyr::pull(code)
 
-# Appel base gardé : referentiels.R est aussi sourcé par tirage_scenarios_v8.R, sans connexion.
+# Appel base gardé : referentiels.R est aussi sourcé par tirage.R, sans connexion.
 if(exists("conn")) dplyr::copy_to(conn,cim_chronique |>  dplyr::mutate(type= ifelse(code%in%code_cancer,"Cancer",
                                                                  ifelse(ind %in% 1:3,
                                                                  "Chronique","Aigu"))) |> dplyr::select(code,type),"cim_chronique",overwrite = TRUE) 
@@ -31,7 +31,7 @@ code_dnid =  c("E1128","E1138","E1148",
 code_dnid_ = prep_grep(code_dnid)
 
 # Millésime de la table des niveaux : ANSEQTA_REF est défini par la config de
-# extraction_associations_codes_v8.R (§5.8) ; défaut "25" pour compatibilité v7.
+# extraction.R (§5.8) ; défaut "25" pour compatibilité v7.
 if(!exists("ANSEQTA_REF")) ANSEQTA_REF <- "25"
 if(exists("conn")) cma<- pRatihque::atihble(conn, 'prd_vue_nompmsi.mco_diag_niveau') |> dplyr::filter(!!dplyr::sym("v20" %+% ANSEQTA_REF)>1) |> dplyr::collect() |> dplyr::pull(code)
 # codes_diabete.yaml est versionné dans le dépôt (referentiels/) : listes de codes CIM-10 et doctrine, sans donnée.

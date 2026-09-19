@@ -16,8 +16,8 @@ local({
   racine_depot <- function(){
     a <- grep("^--file=", commandArgs(), value = TRUE)
     d <- if(length(a)) dirname(normalizePath(sub("^--file=", "", a[1]))) else getwd()
-    for(cand in c(d, file.path(d, ".."), getwd(), file.path(getwd(), ".."))) if(file.exists(file.path(cand, "config_v8.R"))) return(normalizePath(cand))
-    stop("Racine du dépôt introuvable (config_v8.R) : lancer depuis la racine du dépôt (source(\"demo/session_demo.R\"))")
+    for(cand in c(d, file.path(d, ".."), getwd(), file.path(getwd(), ".."))) if(file.exists(file.path(cand, "config.R"))) return(normalizePath(cand))
+    stop("Racine du dépôt introuvable (config.R) : lancer depuis la racine du dépôt (source(\"demo/session_demo.R\"))")
   }
   `%+%` <- function(x, y) paste0(x, y)
   racine <- racine_depot()

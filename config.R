@@ -1,7 +1,7 @@
 ###############################################################################
-# config_v8.R — configuration du pipeline scenarios_bn_pmsi (v8, industrialisation)
+# config.R — configuration du pipeline scenarios_bn_pmsi (v8, industrialisation)
 #
-# Sourcé par extraction_associations_codes_v8.R, tirage_scenarios_v8.R et les tests.
+# Sourcé par extraction.R, tirage.R et les tests.
 # Toutes les constantes paramétrables ; aucun nombre magique dans les scripts.
 # Structure : constantes communes -> bloc PROFIL -> surcharges individuelles ->
 # surcharge externe optionnelle (SCENARIOS_PMSI_SURCHARGE) -> dérivés -> set.seed(SEED).

@@ -7,11 +7,11 @@
 # Source unique du générateur : demo/generateur_donnees_fictives.R (aussi utilisé par les tests).
 # Affiche le schéma de la base produite (tables et colonnes).
 ###############################################################################
-racine_depot <- function(){   # racine = dossier contenant config_v8.R (dupliqué dans lancer_demo.R : les deux scripts doivent se suffire)
+racine_depot <- function(){   # racine = dossier contenant config.R (dupliqué dans lancer_demo.R : les deux scripts doivent se suffire)
   a <- grep("^--file=", commandArgs(), value = TRUE)
   d <- if(length(a)) dirname(normalizePath(sub("^--file=", "", a[1]))) else getwd()
-  for(cand in c(d, file.path(d, ".."), getwd(), file.path(getwd(), ".."))) if(file.exists(file.path(cand, "config_v8.R"))) return(normalizePath(cand))
-  stop("Racine du dépôt introuvable (config_v8.R) : lancer depuis la racine du dépôt, ex. Rscript demo/creer_base_demo.R")
+  for(cand in c(d, file.path(d, ".."), getwd(), file.path(getwd(), ".."))) if(file.exists(file.path(cand, "config.R"))) return(normalizePath(cand))
+  stop("Racine du dépôt introuvable (config.R) : lancer depuis la racine du dépôt, ex. Rscript demo/creer_base_demo.R")
 }
 arg <- function(nom, defaut){ a <- grep("^--" %+% nom %+% "=", commandArgs(trailingOnly = TRUE), value = TRUE); if(length(a)) sub("^--[^=]+=", "", a[1]) else defaut }
 `%+%` <- function(x, y) paste0(x, y)

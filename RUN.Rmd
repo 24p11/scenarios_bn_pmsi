@@ -21,9 +21,9 @@ source("demo/session_demo.R")
 Version notebook de `RUN.md` (qui reste la référence texte) pour l'AMONT ; la phase aval
 (exploitation du catalogue parquet : repartitionnement, sélection de campagne, palier de débit,
 campagnes parallèles, habillage, finalisation) a son propre notebook : `RUN_aval.Rmd`. Fichiers du pipeline :
-`config_v8.R` (config + profils), `helpers_v8.R`, `etapes_v8.R` (chaînes base + fonctions
-d'étape + `etat_pipeline()`), `extraction_associations_codes_v8.R` (entrée extraction),
-`tirage_scenarios_v8.R` (entrée tirage, **sans base**). Journal : `MODIFICATIONS_V8.md`.
+`config.R` (config + profils), `helpers.R`, `etapes.R` (chaînes base + fonctions
+d'étape + `etat_pipeline()`), `extraction.R` (entrée extraction),
+`tirage.R` (entrée tirage, **sans base**). Journal : `MODIFICATIONS_V8.md`.
 
 **Usage** : un chunk par étape, dans l'ordre, en lisant les critères de passage entre deux ;
 `etat_pipeline()` à tout moment. En cas de plantage : relancer le même chunk, le cache fait le
@@ -46,7 +46,7 @@ if (nzchar(Sys.getenv("SCENARIOS_PMSI_DEMO"))) {
   cat("################  MODE DÉMO : base fictive (faux pRatihque), sorties sous demo/resultats/ — AUCUNE validité épidémiologique  ################\n")
 } else Sys.setenv(SCENARIOS_PMSI_PROFIL = "diagnostic")   # ou "production"
 Sys.setenv(SCENARIOS_PMSI_ETAPES_SEULEMENT = "1")
-source("extraction_associations_codes_v8.R")   # connecte la base ; pour le tirage seul : source("tirage_scenarios_v8.R")
+source("extraction.R")   # connecte la base ; pour le tirage seul : source("tirage.R")
 etat_pipeline()
 ```
 
@@ -72,7 +72,7 @@ etape_refs()               # forcer = TRUE après changement d'AN_REF, de SEUIL_
 ```
 
 ```{r courts}
-Sys.setenv(SCENARIOS_PMSI_ETAPES_SEULEMENT = "1"); source("tirage_scenarios_v8.R")   # famille tirage (sans base)
+Sys.setenv(SCENARIOS_PMSI_ETAPES_SEULEMENT = "1"); source("tirage.R")   # famille tirage (sans base)
 etape_tirage_courts()      # chunks courts + scenarios_courts_v8_<date>.parquet ; parallélisme : etape_tirage_courts(chunk_range = c(i, j)) par session, plages disjointes, puis un appel final sans plage
 etat_pipeline()
 ```
@@ -155,7 +155,7 @@ etape_selection_longs()    # diagnostic : quota_dp, 1 000 ; production : quota_d
 ```{r palier_100k, demo=FALSE}
 # Palier de MESURE (optionnel) : voir RUN_aval.Rmd §5 (chunks gardés : ne tire que si la surcharge palier est active).
 writeLines(c("NB_CRH_CIBLE <- 100000L", "PALIER_ACTIF <- TRUE"), "palier.R"); Sys.setenv(SCENARIOS_PMSI_SURCHARGE = normalizePath("palier.R"))
-source("tirage_scenarios_v8.R")   # session (ETAPES_SEULEMENT) ; la bannière du tirage affiche la surcharge active
+source("tirage.R")   # session (ETAPES_SEULEMENT) ; la bannière du tirage affiche la surcharge active
 if (palier_actif()) { etape_selection_longs(); etape_tirage_das_longs() } else cat("palier non actif : rien exécuté\n")   # débit (scénarios/s) imprimé par chunk
 # extrapolation : temps campagne ≈ volume_attendu / débit ; sessions parallèles ≈ ceiling(temps / durée acceptable)
 ```

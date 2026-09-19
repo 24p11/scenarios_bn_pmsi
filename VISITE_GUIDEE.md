@@ -12,7 +12,7 @@ exhaustive des modifications ; ce document est le récit qui les relie.
 Tout le pipeline repose sur une frontière posée très tôt et jamais franchie :
 
 - **Le monde EXTRACTION** a besoin de la base nationale. La connexion est
-  ouverte à un seul endroit : le début d'`extraction_associations_codes_v8.R`.
+  ouverte à un seul endroit : le début d'`extraction.R`.
   Ce monde ne produit que des **fichiers de comptes agrégés** (parquet) —
   jamais de données au niveau du séjour sur le disque. Les tables au niveau
   séjour (`prep_data_<an>`…) vivent en tables temporaires dans la base : elles
@@ -32,11 +32,11 @@ dehors de la plateforme.
 
 | Fichier | Rôle |
 |---|---|
-| `config_v8.R` | Tous les paramètres ; bloc PROFIL (diagnostic / production), surcharge par fichier externe, vérifications de cohérence. |
-| `helpers_v8.R` | Les fonctions « pures » (calcul seul, pas d'accès base), testables sur ordinateur — sections A à G, voir §4. |
-| `etapes_v8.R` | Le cœur : les requêtes base recopiées des v7 + les fonctions d'étape (`etape_...`) + le tableau de bord `etat_pipeline()`. |
-| `extraction_associations_codes_v8.R` | Lanceur du monde extraction (46 lignes : config, chargements, connexion, 4 appels d'étapes). |
-| `tirage_scenarios_v8.R` | Lanceur du monde aval (32 lignes, aucune connexion). |
+| `config.R` | Tous les paramètres ; bloc PROFIL (diagnostic / production), surcharge par fichier externe, vérifications de cohérence. |
+| `helpers.R` | Les fonctions « pures » (calcul seul, pas d'accès base), testables sur ordinateur — sections A à G, voir §4. |
+| `etapes.R` | Le cœur : les requêtes base recopiées des v7 + les fonctions d'étape (`etape_...`) + le tableau de bord `etat_pipeline()`. |
+| `extraction.R` | Lanceur du monde extraction (46 lignes : config, chargements, connexion, 4 appels d'étapes). |
+| `tirage.R` | Lanceur du monde aval (32 lignes, aucune connexion). |
 | `utils.R`, `referentiels.R`, `exclusions.R` | Héritage v7 toujours chargé (opérateur `%+%`, codes diabète, listes d'exclusion). |
 | `RUN.Rmd` | Notebook de l'amont (extraction, passe diagnostic). |
 | `RUN_aval.Rmd` | Notebook de l'exploitation (du catalogue aux campagnes). |
@@ -51,7 +51,7 @@ dehors de la plateforme.
 
 ```
 BASE NATIONALE (vues PMSI .fixe / .um / .diag / .rgp)
-   │  etape_prep_data()          [etapes_v8.R :: prep_data]
+   │  etape_prep_data()          [etapes.R :: prep_data]
    ▼
 prep_data_<an>   table TEMPORAIRE en base — UNE ligne par séjour,
    │             unité la plus « prioritaire » retenue (réa d'abord),
@@ -110,7 +110,7 @@ Ce qui se migre d'un profil à l'autre : le catalogue et ses refs (condition Q13
 Ce qui ne se migre pas : les sorties de tirage, qui se refont sous le profil cible
 (rapide, sans base) — le message « courts absent » le dit en trois branches.
 
-## 4. `helpers_v8.R` : les sections A→G racontent l'histoire du projet
+## 4. `helpers.R` : les sections A→G racontent l'histoire du projet
 
 Les sections sont chronologiques — chacune correspond à un chantier. Voici ce
 que fait chacune, étape par étape.
@@ -437,7 +437,7 @@ avant/après au journal. Tout le code **neuf** vit dans les helpers, testés.
 
 - **Où en suis-je ?** → `etat_pipeline()` (l'état de chaque étape, fichiers
   présents / attendus, sans connexion).
-- **Qui définit ce paramètre ?** → `grep -n "NOM_PARAM" config_v8.R`
+- **Qui définit ce paramètre ?** → `grep -n "NOM_PARAM" config.R`
 - **Que contient ce fichier de sortie ?** → chaque parquet a son fichier
   compagnon yaml à côté ; commencer par le lire.
 - **Ça a cassé** → le message des garde-fous dit quoi faire ; sinon la

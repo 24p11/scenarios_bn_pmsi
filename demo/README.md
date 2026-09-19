@@ -34,9 +34,9 @@ tables produites est affiché.
 3. écrit le profil « démo » (`demo/resultats/surcharge_demo.R`, surcharge du profil production) :
    millésimes de la base, seuils abaissés (`SEUIL_PIVOT = 1`, refs à 5), `NB_CRH_CIBLE = 2000`,
    `MODE_SELECTION = quota_dp_fixe`, campagne `DEMO`, registre actif, sorties sous `demo/resultats/` ;
-4. exécute `extraction_associations_codes_v8.R` (prep_data → refs → partiels → catalogue), puis
+4. exécute `extraction.R` (prep_data → refs → partiels → catalogue), puis
    `etape_repartitionner_catalogue()` (typologie DPEC/TPEC), ferme la connexion et **interdit
-   tout appel base** (`pmsi_mock_interdit`), puis `tirage_scenarios_v8.R` (courts → sélection →
+   tout appel base** (`pmsi_mock_interdit`), puis `tirage.R` (courts → sélection →
    DAS longs → habillage → finalisation) ;
 5. affiche le résumé : nombre de scénarios longs par population, courts, répartition par TPEC,
    chemins des livrables.
