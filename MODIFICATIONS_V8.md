@@ -1513,3 +1513,96 @@ en-tête sur `migrer_registre`) ; `RUN.md` : procédure complète de changement 
 - **Q63** — Préfixe `c` des identifiants courts : `c` est aussi un chiffre hexadécimal, un `id_profil` long peut
   commencer par `c` ; le préfixe n'est donc pas un discriminant à lui seul (la colonne `branche` du livrable l'est).
   Constaté en écrivant les tests du livrable ; changer le préfixe (ex. `k`) changerait la recette `id_courts_v1`.
+  **Actée (lot « trois niveaux de paramètres + préfixe courts », §23.4)** : préfixe `k`, corrigé avant toute circulation.
+
+## 23. Lot « trois niveaux de paramètres + préfixe courts »
+
+Deux compléments au chantier arborescence (§22) : la séparation stricte des paramètres (doctrine / poste /
+campagne) et la correction du préfixe des identifiants courts (Q63) tant qu'aucun livrable n'a circulé. Aucun
+changement de logique de tirage hors la recette `id_courts_v1` ; les chaînes dbplyr sont intactes.
+
+### 23.1 Trois niveaux de paramètres (§1)
+
+| Niveau | Fichier | Contenu | Fréquence de changement | Versionné |
+|---|---|---|---|---|
+| 1 doctrine | `config.R` | seuils, profils, DÉFAUTS documentés de `CAMPAGNE`, `NB_CRH_CIBLE`, `NB_LIGNES_PAR_DP`, `REGISTRE_ACTIF`, `PLAFONDS_DPEC` | par chantier | oui |
+| 2 poste | `config_locale.R` | racine du dépôt (`SCENARIOS_PMSI_PATH`), `PATH_RESULTS`, `pschema` | à l'installation | non |
+| 3 exploitation | `campagne.R` OU `palier.R` | identifiant, budget, k, registre / budget de palier | par campagne, par palier | non |
+
+Ordre de chargement (en tête de `config.R`) : défauts → `config_locale.R` (avant le bloc PROFIL) → surcharge
+`SCENARIOS_PMSI_SURCHARGE` (`campagne.R` OU `palier.R`, après le bloc PROFIL ; surcharge démo = troisième cas) →
+dérivés → vérifications → `set.seed`.
+
+- **Helpers, section J** (purs) : `PARAMETRES_CAMPAGNE` ; `contenu_surcharge_campagne(campagne, nb_crh_cible,
+  nb_lignes_par_dp, registre_actif, plafonds_dpec)` (entiers écrits avec `L`, identifiant validé
+  `[A-Za-z0-9_-]`, marqueur `SURCHARGE_CAMPAGNE_ACTIVE <- TRUE`, `PLAFONDS_DPEC` seulement s'il est ajusté) ;
+  `contenu_surcharge_palier(nb_crh_cible)` (marqueur `PALIER_ACTIF <- TRUE`, `REGISTRE_ACTIF <- FALSE` imposé, Q53) ;
+  `type_surcharge(lignes)` → `palier` / `campagne` / `autre` (démo) / `aucune`, sur les lignes hors commentaires ;
+  `verifier_exclusivite_surcharges(type_demande, chemin_actif, lignes_actives)` → refus avec message disant lequel
+  retirer et comment (`vider_palier` ou `Sys.setenv(SCENARIOS_PMSI_SURCHARGE = "")` + Restart R) ;
+  `sources_parametres(noms, lignes_surcharge, chemin)` → `défaut config` / `surcharge <type> (<fichier>)`.
+- **Étapes** : `ecrire_surcharge_campagne(...)` et `ecrire_surcharge_palier(...)` (même mécanique : écriture du
+  fichier, `Sys.setenv(SCENARIOS_PMSI_SURCHARGE)`, message « surcharge écrite — Restart R puis chunk session ») ;
+  réécrire la surcharge active sur elle-même est accepté (corriger un budget) ; `campagne_active()` ;
+  `surcharge_active()` qualifie désormais aussi la campagne ; `afficher_sources_campagne()` (valeur effective
+  et source de chaque paramètre), appelé par le chunk `session`.
+- **Notebook `RUN_aval.Rmd`** : chunk `ouvrir_campagne` en tête du §3 (paramètres EN CLAIR : `CAMPAGNE_A_OUVRIR`,
+  `NB_CRH_CIBLE_CAMP`, `NB_LIGNES_PAR_DP_CAMP`, `REGISTRE_ACTIF_CAMP`, `PLAFONDS_DPEC_CAMP` optionnel) ; le
+  chunk `session` ne pose plus `SCENARIOS_PMSI_SURCHARGE = ""` (la surcharge posée par `ouvrir_campagne` ou
+  `palier_surcharge` survit au Restart R ; remise à vide documentée en commentaire) ; `palier_surcharge` passe par
+  `ecrire_surcharge_palier(100000L)`. Le cycle de campagne documenté commence par `ouvrir_campagne`.
+
+### 23.2 Frontière de `config.R` (§2)
+
+Balayage : aucun chemin personnel, pschema ou identifiant ; les valeurs de campagne y sont explicitement
+marquées `DÉFAUT` et renvoient à `campagne.R`. Garde dans la suite helpers : les lignes hors commentaires de
+`config.R` ne contiennent ni `~/`, `/home/`, `/Users/`, `commun/`, ni `pschema`. `config_locale.exemple.R`
+réécrit : une ligne par clé (`SCENARIOS_PMSI_PATH`, `PATH_RESULTS`, `pschema`) — rôle, exemple factice, qui la
+fournit — et la ligne multi-utilisateurs (chacun son `config_locale.R`, magasins partagés communs, tables
+temporaires disjointes par `pschema`).
+
+### 23.3 Exclusivité palier / campagne
+
+Un seul fichier de surcharge à la fois : `ecrire_surcharge_campagne` s'arrête si la surcharge active est un palier
+(message : chunk `vider_palier`), `ecrire_surcharge_palier` s'arrête si c'est une campagne (message : `Sys.setenv`
++ Restart R ; `campagne.R` peut rester sur disque, il n'est actif que par la variable). La surcharge démo
+(`demo/resultats/surcharge_demo.R`, type `autre`) est hors exclusivité : les notebooks en mode démo restent verts.
+
+### 23.4 Préfixe des identifiants courts (Q63 actée)
+
+`id_courts_v1` : `id_profil` = `k` + 15 hex (`k` hors alphabet hexadécimal : l'identifiant dit sa branche à lui
+seul ; aucun identifiant long, 16 hex, ne peut commencer par `k`). Justification : corrigé avant toute circulation
+d'un livrable. Recette, commentaire figé, valeur de test en dur (`ke3839ff42c0f1ca` pour la ligne de référence),
+conventions documentées (RUN.md, VISITE_GUIDEE.md) mis à jour ; `id_v1` longs inchangés.
+
+### 23.5 Tests
+
+- Helpers (+6) : contenu de `campagne.R` (marqueur, entiers `L`, rechargement par `sys.source` donnant des entiers),
+  contenu de `palier.R`, `type_surcharge` (dont marqueur en commentaire = `autre`), exclusivité dans les deux sens et
+  cas neutres (même type, démo, aucune), `sources_parametres` dans les trois cas, garde grep de `config.R` ;
+  assertion notebook mise à jour (`palier_surcharge` via `ecrire_surcharge_palier`, `ouvrir_campagne` en clair,
+  aucun `CAMPAGNE <-` en dur dans le notebook) ; préfixe `k` : valeur en dur, tout id court commence par `k`,
+  aucun id long ne le peut (alphabet strict).
+- SQLite (+4, fichiers en tempdir) : écriture de `campagne.R` par `ecrire_surcharge_campagne` (contenu attendu,
+  variable posée, message) ; palier refusé sous campagne active ; surcharge retirée → palier accepté → campagne
+  refusée → palier retiré → campagne acceptée ; sources affichées en session (`campagne.R` active vs aucune) ;
+  motifs `^k[0-9a-f]{15}` sur le livrable et la revue.
+- Démo et notebooks (`executer_notebook.R`, ± arrow) : le chunk `ouvrir_campagne` est marqué `demo=FALSE` comme
+  `palier_surcharge` (Q64) ; le chunk `session` appelle `afficher_sources_campagne()` sous la surcharge démo
+  (type `autre` : `CAMPAGNE` et `NB_CRH_CIBLE` affichés `surcharge autre (surcharge_demo.R)`, le reste `défaut config`).
+
+### 23.6 Vérifications
+
+Voir le compte rendu de livraison (passes helpers ± arrow, SQLite ± arrow, démo, notebooks ± arrow).
+
+### 23.7 Questions (aucune action non autorisée)
+
+- **Q64** — En mode démo, le chunk `ouvrir_campagne` écrirait `campagne.R` dans la copie du projet démo et poserait
+  `SCENARIOS_PMSI_SURCHARGE` par-dessus la surcharge démo (perte de `PATH_RESULTS` démo). Il est donc marqué
+  `demo=FALSE` comme `palier_surcharge` ; la démo reste pilotée par `SCENARIOS_PMSI_DEMO_CAMPAGNE`. À confirmer.
+- **Q65** — `PLAFONDS_DPEC` dans `campagne.R` est écrit par `deparse` (liste nommée) ; les autres ajustements de
+  doctrine (seuils, `CHUNK_SIZE_FIXE`, `SEUIL_MONOFICHIER`) restent hors du chunk `ouvrir_campagne` : une surcharge
+  manuelle de `campagne.R` est possible mais non documentée comme voie officielle.
+- **Q66** — La variable `SCENARIOS_PMSI_SURCHARGE` survit au Restart R mais pas à une nouvelle session RStudio :
+  après réouverture, relancer `ouvrir_campagne` (réécriture identique, acceptée) ou poser la variable à la main ;
+  la session affiche `défaut config` partout dans ce cas, ce qui est le signal.

@@ -808,13 +808,14 @@ ok("registre_depuis_chunks : id_profil recalculé sur pivots + graine, hash sur 
 # ================================== lot « notebook campagnes » : identifiants courts, section H ==
 cat("\n# identifiants des séjours courts (recette id_courts_v1 figée)\n")
 ligne_c <- tibble::tibble(mode_hospit = "HC", sexe = "1", cage = "[60-70[", ghm2 = "04M053", diag2 = "J449", duree = 2L)
-ok("recette courts figée : valeur attendue EN DUR, préfixe c + 15 hex", id_profil_courts_de(ligne_c) == "ce3839ff42c0f1ca" && RECETTE_ID_COURTS == "id_courts_v1" &&
-     identical(COLONNES_RECETTE_ID_COURTS, PIVOTS_COURTS) && grepl("^c[0-9a-f]{15}$", id_profil_courts_de(ligne_c)) && nchar(id_profil_courts_de(ligne_c)) == 16)
+ok("recette courts figée : valeur attendue EN DUR, préfixe k + 15 hex (k hors alphabet hexadécimal)", id_profil_courts_de(ligne_c) == "ke3839ff42c0f1ca" && RECETTE_ID_COURTS == "id_courts_v1" &&
+     identical(COLONNES_RECETTE_ID_COURTS, PIVOTS_COURTS) && grepl("^k[0-9a-f]{15}$", id_profil_courts_de(ligne_c)) && nchar(id_profil_courts_de(ligne_c)) == 16)
 df_c4 <- dplyr::bind_rows(ligne_c, dplyr::mutate(ligne_c, duree = 1L), dplyr::mutate(ligne_c, sexe = "2"), dplyr::mutate(ligne_c, diag2 = "I10"))
 ok("courts : unicité et déterminisme (ordre des lignes indifférent, duree 2 / 2L équivalents)", length(unique(id_profil_courts_de(df_c4))) == 4 &&
      identical(sort(id_profil_courts_de(df_c4)), sort(id_profil_courts_de(df_c4[4:1, ]))) && id_profil_courts_de(dplyr::mutate(ligne_c, duree = 2)) == id_profil_courts_de(ligne_c))
-ok("courts : domaine distinct des longs (préfixe) et colonne manquante -> stop", !grepl("^c", id_profil_de(ligne_id)) && grepl("colonnes manquantes", tryCatch(id_profil_courts_de(ligne_c[, -1]), error = function(e) conditionMessage(e))) &&
-     id_scenario_de(id_profil_courts_de(ligne_c), 2) == "ce3839ff42c0f1ca-002")
+ok("courts : domaine distinct des longs — tout id court commence par k, aucun id long ne le peut (alphabet hexadécimal strict) ; colonne manquante -> stop",
+   all(grepl("^k", id_profil_courts_de(df_c4))) && all(grepl("^[0-9a-f]{16}$", id_profil_de(df_ids))) && !grepl("^k", id_profil_de(ligne_id)) &&
+     grepl("colonnes manquantes", tryCatch(id_profil_courts_de(ligne_c[, -1]), error = function(e) conditionMessage(e))) && id_scenario_de(id_profil_courts_de(ligne_c), 2) == "ke3839ff42c0f1ca-002")
 
 cat("\n# section H : fichiers datés, dossier final par campagne, statut au registre, message courts absent\n")
 # (resoudre_export_date retirée : règle « nom stable, date dans le méta » — section 22 du journal)
@@ -869,7 +870,34 @@ ok("pmap_chunks : débit par chunk et extrapolation tous les 10 chunks (25 chunk
    sum(grepl("— débit", lg)) == 25 && sum(grepl("restant dans la plage", lg)) == 2 && any(grepl("restant dans la plage : 15 ", lg)) && any(grepl("restant dans la plage : 5 ", lg)) && nrow(r) == 25)
 rmd <- lapply(c("RUN.Rmd", "RUN_aval.Rmd"), function(f) readLines(file.path(racine, f), warn = FALSE))
 ok("notebooks : aucun appel direct à un dataset arrow (open_dataset / write_dataset) — lecteurs à repli seulement", !any(grepl("arrow::open_dataset|arrow::write_dataset|open_dataset\\(", unlist(rmd))))
-ok("notebooks : le chunk palier_surcharge impose REGISTRE_ACTIF <- FALSE dans palier.R",
-   { l <- rmd[[2]]; i <- grep("^```\\{r palier_surcharge", l); j <- i + which(grepl("^```\\s*$", l[(i + 1):length(l)]))[1]; any(grepl("writeLines\\(.*REGISTRE_ACTIF <- FALSE.*\"palier.R\"", l[i:j])) })
+ok("notebooks : le chunk palier_surcharge passe par ecrire_surcharge_palier (REGISTRE_ACTIF <- FALSE imposé par contenu_surcharge_palier) ; chunk ouvrir_campagne avec paramètres en clair et ecrire_surcharge_campagne",
+   { l <- rmd[[2]]; i <- grep("^```\\{r palier_surcharge", l); j <- i + which(grepl("^```\\s*$", l[(i + 1):length(l)]))[1]
+     i2 <- grep("^```\\{r ouvrir_campagne", l); j2 <- i2 + which(grepl("^```\\s*$", l[(i2 + 1):length(l)]))[1]
+     any(grepl("ecrire_surcharge_palier\\(", l[i:j])) && !any(grepl("writeLines", l[i:j])) && length(i2) == 1 && i2 < i &&
+       any(grepl("^CAMPAGNE_A_OUVRIR\\s*<-\\s*\"", l[i2:j2])) && any(grepl("^NB_CRH_CIBLE_CAMP\\s*<-\\s*[0-9]+L", l[i2:j2])) && any(grepl("ecrire_surcharge_campagne\\(", l[i2:j2])) && !any(grepl("^CAMPAGNE\\s*<-", l)) })
+
+
+# ============================ lot « trois niveaux de paramètres » : surcharges campagne / palier, sources, frontière de config.R ==
+cat("\n# trois niveaux de paramètres : contenu de campagne.R, exclusivité palier / campagne, sources des paramètres, frontière de config.R\n")
+lc <- contenu_surcharge_campagne("C2", 500000, 1L, TRUE)
+ok("contenu_surcharge_campagne : marqueur, CAMPAGNE, entiers avec L, REGISTRE_ACTIF ; plafonds optionnels ; identifiant et entiers validés",
+   any(lc == MARQUEUR_CAMPAGNE) && 'CAMPAGNE <- "C2"' %in% lc && "NB_CRH_CIBLE <- 500000L" %in% lc && "NB_LIGNES_PAR_DP <- 1L" %in% lc && "REGISTRE_ACTIF <- TRUE" %in% lc &&
+     any(grepl("^PLAFONDS_DPEC <- list", contenu_surcharge_campagne("C3", 10L, 1L, FALSE, list(a = 2L)))) && !any(grepl("PLAFONDS", lc)) &&
+     grepl("identifiant court", tryCatch(contenu_surcharge_campagne("C 2", 10L), error = function(e) conditionMessage(e))) && grepl("entier", tryCatch(contenu_surcharge_campagne("C2", 1.5), error = function(e) conditionMessage(e))) &&
+     { f <- file.path(tempdir(), "campagne_test.R"); writeLines(lc, f); e <- new.env(); sys.source(f, e); e$CAMPAGNE == "C2" && is.integer(e$NB_CRH_CIBLE) && e$NB_CRH_CIBLE == 500000L && isTRUE(e$SURCHARGE_CAMPAGNE_ACTIVE) })
+lp <- contenu_surcharge_palier(100000L)
+ok("contenu_surcharge_palier : budget, marqueur PALIER_ACTIF, REGISTRE_ACTIF <- FALSE imposé", "NB_CRH_CIBLE <- 100000L" %in% lp && any(lp == MARQUEUR_PALIER) && any(grepl("^REGISTRE_ACTIF <- FALSE", lp)))
+ok("type_surcharge : palier / campagne / autre (démo) / aucune", type_surcharge(lp) == "palier" && type_surcharge(lc) == "campagne" && type_surcharge(c("PATH_RESULTS <- '/x/'", "CAMPAGNE <- 'DEMO'")) == "autre" && type_surcharge(NULL) == "aucune" && type_surcharge(character(0)) == "aucune" && type_surcharge("# PALIER_ACTIF <- TRUE (commentaire)") == "autre")
+ok("exclusivité : campagne refusée sous palier actif (message : retirer le palier, chunk vider_palier) ; palier refusé sous campagne active ; même type, démo ou aucune -> ok",
+   { v1 <- verifier_exclusivite_surcharges("campagne", "/p/palier.R", lp); v2 <- verifier_exclusivite_surcharges("palier", "/p/campagne.R", lc)
+     !v1$ok && grepl("PALIER \\(/p/palier.R\\)", v1$message) && grepl("vider_palier", v1$message) && !v2$ok && grepl("CAMPAGNE \\(/p/campagne.R\\)", v2$message) && grepl("Sys.setenv", v2$message) &&
+       verifier_exclusivite_surcharges("campagne", "/p/campagne.R", lc)$ok && verifier_exclusivite_surcharges("palier", "/d/surcharge_demo.R", c("PATH_RESULTS <- '/x/'"))$ok && verifier_exclusivite_surcharges("campagne", "", NULL)$ok })
+ok("sources_parametres : défaut config / surcharge campagne (campagne.R) / surcharge palier (palier.R), paramètre non défini par la surcharge = défaut",
+   { s0 <- sources_parametres(PARAMETRES_CAMPAGNE, NULL, ""); s1 <- sources_parametres(PARAMETRES_CAMPAGNE, lc, "/p/campagne.R"); s2 <- sources_parametres(PARAMETRES_CAMPAGNE, lp, "/p/palier.R")
+     all(s0 == "défaut config") && s1[["CAMPAGNE"]] == "surcharge campagne (campagne.R)" && s1[["NB_CRH_CIBLE"]] == "surcharge campagne (campagne.R)" && s1[["PLAFONDS_DPEC"]] == "défaut config" &&
+       s2[["NB_CRH_CIBLE"]] == "surcharge palier (palier.R)" && s2[["REGISTRE_ACTIF"]] == "surcharge palier (palier.R)" && s2[["CAMPAGNE"]] == "défaut config" })
+cfg_txt <- sub("#.*$", "", readLines(file.path(racine, "config.R"), warn = FALSE))
+ok("frontière de config.R : aucun chemin personnel (~/, /home/, /Users/, commun/), aucun pschema ni identifiant en dur — doctrine et défauts seulement",
+   !any(grepl("~/|/home/|/Users/|commun/|rflicoteaux|pschema", cfg_txt)) && any(grepl("^CAMPAGNE\\s*<-", cfg_txt)) && any(grepl("DÉFAUT", readLines(file.path(racine, "config.R"), warn = FALSE))))
 
 cat("\nTOUS LES TESTS SONT VERTS :", n_ok, "assertions\n")

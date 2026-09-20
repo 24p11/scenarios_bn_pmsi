@@ -7,11 +7,25 @@ Fichiers : `config.R` (config + profils), `helpers.R` (helpers purs), `etapes.R`
 diagnostic, courts) et `RUN_aval.Rmd` (exploitation du catalogue parquet : repartitionnement, campagnes).
 Spécification : `SPEC_V8.md` ; journal : `MODIFICATIONS_V8.md`.
 
+**Trois niveaux de paramètres** (ordre de chargement, documenté en tête de `config.R`) :
+
+| Fichier | Contenu | Change | Versionné |
+|---|---|---|---|
+| `config.R` | la DOCTRINE et les DÉFAUTS (seuils, profils, `NB_CRH_CIBLE`, `NB_LIGNES_PAR_DP`, `CAMPAGNE`, `REGISTRE_ACTIF`, `PLAFONDS_DPEC` par défaut) | à chaque chantier | oui |
+| `config_locale.R` | le POSTE : racine du dépôt, `PATH_RESULTS`, `pschema` (modèle `config_locale.exemple.R`, une ligne par clé) | à l'installation | non (gitignoré) |
+| `campagne.R` OU `palier.R` | la DÉCISION D'EXPLOITATION : identifiant de campagne, budget, k, registre — écrits depuis `RUN_aval.Rmd` (chunks `ouvrir_campagne` / `palier_surcharge`), activés par `SCENARIOS_PMSI_SURCHARGE` ; **exclusifs** (l'un refuse de s'écrire tant que l'autre est actif, le message dit lequel retirer et comment) | à chaque campagne / palier | non (gitignorés) |
+
+Défauts → `config_locale.R` (poste) → surcharge (`SCENARIOS_PMSI_SURCHARGE` : `campagne.R` OU `palier.R` ; la
+surcharge démo de `demo/session_demo.R` est le troisième cas légitime, hors exclusivité) → vérifications. Le chunk
+`session` affiche, à côté de chaque valeur effective, sa SOURCE (`défaut config` / `surcharge campagne (campagne.R)` /
+`surcharge palier (palier.R)`). Multi-utilisateurs : chacun son `config_locale.R`, magasins partagés communs, tables
+temporaires disjointes par `pschema`.
+
 Variables d'environnement : `SCENARIOS_PMSI_PATH` (racine du projet ; sinon `config_locale.R` à la racine du
 dépôt, non versionné, copié de `config_locale.exemple.R` — aucun chemin personnel n'est versionné, le pipeline
 s'arrête avec un message explicite si ni l'un ni l'autre n'est défini), `SCENARIOS_PMSI_PROFIL`
 (`diagnostic` par défaut, ou `production`), `SCENARIOS_PMSI_SURCHARGE` (fichier R optionnel de
-surcharges, évalué après le bloc profil), `SCENARIOS_PMSI_ETAPES_SEULEMENT=1` (charger la session
+surcharges — `campagne.R` ou `palier.R` — évalué après le bloc profil), `SCENARIOS_PMSI_ETAPES_SEULEMENT=1` (charger la session
 — config, sources, connexion pour l'extraction — sans exécuter aucune étape).
 
 ## Les étapes
@@ -172,8 +186,9 @@ inférieur (doublons éliminés, chiffrés au rapport).
    `<pop> : <l> lignes sélectionnées, <v> variantes attendues ; plafonds appliqués = <p> ; manque à gagner = <m>`
    (l = lignes distinctes retenues ; v = Σ n_var = volume attendu ; p = groupes (DP × DPEC) plafonnés ;
    m = Σ max(0, X_dp − lignes disponibles)).
-3. **Palier de mesure (OPTIONNEL)** : `palier.R` = `NB_CRH_CIBLE <- 100000L` + marqueur `PALIER_ACTIF <- TRUE`,
-   `SCENARIOS_PMSI_SURCHARGE`, Restart R ; le chunk de palier de `RUN_aval.Rmd` §5 **refuse de tirer** si la
+3. **Palier de mesure (OPTIONNEL)** : chunk `palier_surcharge` (`ecrire_surcharge_palier(100000L)`) écrit `palier.R` =
+   `NB_CRH_CIBLE <- 100000L` + marqueur `PALIER_ACTIF <- TRUE` + `REGISTRE_ACTIF <- FALSE`, pose
+   `SCENARIOS_PMSI_SURCHARGE`, Restart R (refusé tant que `campagne.R` est actif) ; le chunk de palier de `RUN_aval.Rmd` §5 **refuse de tirer** si la
    surcharge palier n'est pas active (`palier_actif()`), et la bannière d'`etape_tirage_das_longs` affiche en
    première ligne `CAMPAGNE`, `NB_CRH_CIBLE` effectif et la surcharge active (« aucune » attendu en campagne).
    Le débit (scénarios/s) est imprimé par chunk. Extrapolation :
@@ -190,9 +205,12 @@ inférieur (doublons éliminés, chiffrés au rapport).
    extrapolation du restant en bannière tous les 10 chunks traités.
 
 5. **Cycle de campagne** (registre des tirages, `RUN_aval.Rmd` §3 « ouvrir une campagne ») : (0) `etape_retro_inscrire(dossier_selection,
-   dossier_chunks, campagne)` pour une campagne tirée avant le chantier campagnes ; (1) `CAMPAGNE <- "Cn"`,
-   `REGISTRE_ACTIF <- TRUE`, Restart R, session (affiche `CAMPAGNE` et son statut au registre : « jamais inscrite » /
-   « déjà N scénarios le <date> — changez d'identifiant »), puis vidage gardé (`JE_CONFIRME_NOUVELLE_CAMPAGNE`) ;
+   dossier_chunks, campagne)` pour une campagne tirée avant le chantier campagnes ; (1) chunk `ouvrir_campagne` :
+   paramètres en clair (`CAMPAGNE_A_OUVRIR`, `NB_CRH_CIBLE_CAMP`, `NB_LIGNES_PAR_DP_CAMP`, `REGISTRE_ACTIF_CAMP`),
+   `ecrire_surcharge_campagne()` écrit `campagne.R` (entiers `L`, marqueur `SURCHARGE_CAMPAGNE_ACTIVE`) et pose
+   `SCENARIOS_PMSI_SURCHARGE` (refusé tant qu'un palier est actif : `vider_palier` d'abord) ; Restart R, session
+   (affiche `CAMPAGNE`, son statut au registre : « jamais inscrite » / « déjà N scénarios le <date> — changez
+   d'identifiant », et la source de chaque paramètre), puis vidage gardé (`JE_CONFIRME_NOUVELLE_CAMPAGNE`) ;
    (2) `etape_selection_longs()` sous registre (stop précoce, avant tout calcul, si `CAMPAGNE` est déjà inscrite) : chaque DP reçoit au moins 1 scénario
    (plancher automatique : X ≥ 1 et règle de classe), lignes VIERGES d'abord (id_profil absent du registre),
    sinon RECYCLAGE à variantes nouvelles (numérotation après variante_max, hash_das déjà enregistrés exclus,
@@ -253,7 +271,8 @@ et `60_export_final/` sont propres au profil.
   jamais écrasé par une autre (méta d'une autre campagne ⇒ stop) ; même campagne ⇒ réécriture idempotente.
 - Nommage : aucun fichier daté (règle « nom stable, date dans le méta ») ; la résolution de fichiers datés
   inter-sessions est retirée (sans objet).
-- Identifiants des séjours courts : recette `id_courts_v1` figée (sha256 des `PIVOTS_COURTS`, `id_profil` = `c` + 15 hex,
+- Identifiants des séjours courts : recette `id_courts_v1` figée (sha256 des `PIVOTS_COURTS`, `id_profil` = `k` + 15 hex —
+  `k` hors alphabet hexadécimal, aucun identifiant long ne peut commencer par `k` (Q63 résolue, corrigé avant toute circulation),
   `id_scenario` = `id_profil-variante`, `hash_das`) ; pas d'inscription au registre.
 - **Chunking dynamique** : la taille des chunks est calculée par les données,
   `taille_chunk(n) = max(CHUNK_SIZE_MIN, ceiling(n / NB_CHUNKS_MAX))` — au plus `NB_CHUNKS_MAX` (50)

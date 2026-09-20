@@ -1375,8 +1375,9 @@ hash_das_de <- function(diagnostic_associes){
 seed_campagne <- function(seed, campagne) as.integer(seed + 1000L * (sum(utf8ToInt(as.character(campagne))) %% 100000L))
 # Identifiants des SÉJOURS COURTS — recette FIGÉE id_courts_v1 (lot « notebook campagnes », §7) : même
 # mécanique que id_v1 (sha256, séparateur "\r", NA -> "") sur les PIVOTS_COURTS DANS CET ORDRE :
-# mode_hospit, sexe, cage, ghm2, diag2, duree ; id_profil = "c" + 15 hex (préfixe de domaine : les
-# longs restent 16 hex sans préfixe). id_scenario = id_profil-variante et hash_das : fonctions communes.
+# mode_hospit, sexe, cage, ghm2, diag2, duree ; id_profil = "k" + 15 hex (préfixe de domaine HORS alphabet
+# hexadécimal : l'identifiant dit sa branche à lui seul ; les longs restent 16 hex sans préfixe — Q63 résolue,
+# corrigé avant toute circulation). id_scenario = id_profil-variante et hash_das : fonctions communes.
 # Les courts ne sont PAS inscrits au registre (aucune économie inter-campagnes côté courts, porte ouverte).
 RECETTE_ID_COURTS <- "id_courts_v1"
 COLONNES_RECETTE_ID_COURTS <- c("mode_hospit", "sexe", "cage", "ghm2", "diag2", "duree")
@@ -1384,7 +1385,7 @@ id_profil_courts_de <- function(df, colonnes = COLONNES_RECETTE_ID_COURTS){
   manq <- setdiff(colonnes, names(df)); if(length(manq)) stop("id_profil_courts_de : colonnes manquantes : " %+% paste(manq, collapse = ", "), call. = FALSE)
   if(nrow(df) == 0) return(character(0))
   cle <- do.call(paste, c(lapply(colonnes, function(cc) norm_val(df[[cc]])), sep = "\r"))
-  paste0("c", substr(sha256_vec(cle), 1, 15))
+  paste0("k", substr(sha256_vec(cle), 1, 15))
 }
 
 # --- G2. Registre des tirages (append-only) ------------------------------------------------
@@ -1729,4 +1730,50 @@ imprimer_plan_reorganisation <- function(plan){
     for(i in seq_len(nrow(p))) cat(sprintf("   %-60s %s%s\n", p$source[i], if(cat_ == "reconnu") "-> " %+% p$destination[i] %+% "  [" %+% p$action[i] %+% "]" else p$motif[i], if(cat_ == "reconnu") "" else ""))
   }
   invisible(plan)
+}
+
+## ---- J. Trois niveaux de paramètres : doctrine (config.R) / poste (config_locale.R) / campagne (campagne.R) ----
+# La décision d'exploitation d'une campagne ne s'édite plus dans config.R : elle s'écrit dans campagne.R (gitignoré),
+# depuis le notebook (chunk ouvrir_campagne), et s'active par SCENARIOS_PMSI_SURCHARGE — même mécanique que palier.R.
+# Les deux surcharges sont EXCLUSIVES ; la surcharge démo (troisième cas légitime) est hors de cette exclusivité.
+PARAMETRES_CAMPAGNE <- c("CAMPAGNE", "NB_CRH_CIBLE", "NB_LIGNES_PAR_DP", "REGISTRE_ACTIF", "PLAFONDS_DPEC")
+MARQUEUR_CAMPAGNE <- "SURCHARGE_CAMPAGNE_ACTIVE <- TRUE"
+MARQUEUR_PALIER   <- "PALIER_ACTIF <- TRUE"
+entier_R <- function(x, nom){ if(length(x) != 1 || is.na(x) || x != round(x) || x < 1) stop(nom %+% " : entier >= 1 attendu", call. = FALSE); sprintf("%dL", as.integer(x)) }
+contenu_surcharge_campagne <- function(campagne, nb_crh_cible, nb_lignes_par_dp = 1L, registre_actif = TRUE, plafonds_dpec = NULL){
+  if(!is.character(campagne) || length(campagne) != 1 || !nzchar(campagne) || grepl("[^A-Za-z0-9_-]", campagne)) stop("CAMPAGNE : identifiant court obligatoire ([A-Za-z0-9_-])", call. = FALSE)
+  c("# campagne.R — DÉCISION D'EXPLOITATION de la campagne (niveau campagne ; gitignoré ; écrit par le chunk ouvrir_campagne de RUN_aval.Rmd).",
+    "# Activé par SCENARIOS_PMSI_SURCHARGE ; exclusif du palier (palier.R). Les défauts vivent dans config.R, le poste dans config_locale.R.",
+    MARQUEUR_CAMPAGNE,
+    "CAMPAGNE <- \"" %+% campagne %+% "\"",
+    "NB_CRH_CIBLE <- " %+% entier_R(nb_crh_cible, "NB_CRH_CIBLE"),
+    "NB_LIGNES_PAR_DP <- " %+% entier_R(nb_lignes_par_dp, "NB_LIGNES_PAR_DP"),
+    "REGISTRE_ACTIF <- " %+% (if(isTRUE(registre_actif)) "TRUE" else "FALSE"),
+    if(!is.null(plafonds_dpec)) "PLAFONDS_DPEC <- " %+% paste(deparse(plafonds_dpec), collapse = ""))
+}
+contenu_surcharge_palier <- function(nb_crh_cible = 100000L){
+  c("# palier.R — PALIER DE MESURE (budget réduit, hors registre) ; gitignoré ; écrit par le chunk palier_surcharge de RUN_aval.Rmd.",
+    "NB_CRH_CIBLE <- " %+% entier_R(nb_crh_cible, "NB_CRH_CIBLE"), MARQUEUR_PALIER, "REGISTRE_ACTIF <- FALSE   # imposé : un palier n'écrit jamais au registre")
+}
+# Type d'une surcharge d'après son contenu : "palier", "campagne", "autre" (ex. démo), "aucune" (vide / absente).
+type_surcharge <- function(lignes){
+  if(is.null(lignes) || length(lignes) == 0) return("aucune")
+  l <- sub("#.*$", "", lignes)
+  if(any(grepl("^\\s*PALIER_ACTIF\\s*<-\\s*TRUE", l))) return("palier")
+  if(any(grepl("^\\s*SURCHARGE_CAMPAGNE_ACTIVE\\s*<-\\s*TRUE", l))) return("campagne")
+  "autre"
+}
+# Exclusivité palier / campagne : écrire l'une alors que l'autre est active -> refus, message disant laquelle retirer et comment.
+verifier_exclusivite_surcharges <- function(type_demande, chemin_actif, lignes_actives = NULL){
+  type_actif <- type_surcharge(lignes_actives)
+  if(type_actif %in% c("aucune", "autre") || type_actif == type_demande) return(list(ok = TRUE, message = NULL))
+  autre <- if(type_actif == "palier") "le PALIER (" %+% chemin_actif %+% ")" else "la CAMPAGNE (" %+% chemin_actif %+% ")"
+  list(ok = FALSE, message = "surcharge " %+% type_demande %+% " refusée : " %+% autre %+% " est actif. Retirez-le d'abord : " %+%
+         (if(type_actif == "palier") "chunk vider_palier (JE_CONFIRME) de RUN_aval.Rmd §5, ou Sys.setenv(SCENARIOS_PMSI_SURCHARGE = \"\") puis Restart R"
+          else "Sys.setenv(SCENARIOS_PMSI_SURCHARGE = \"\") puis Restart R (campagne.R peut rester : il n'est actif que par SCENARIOS_PMSI_SURCHARGE)") %+% ", puis relancez ce chunk.")
+}
+# Source de chaque paramètre de campagne : "défaut config" ou "surcharge <type> (<fichier>)" si la surcharge active le définit.
+sources_parametres <- function(noms, lignes_surcharge = NULL, chemin = ""){
+  type <- type_surcharge(lignes_surcharge); l <- if(is.null(lignes_surcharge)) character(0) else sub("#.*$", "", lignes_surcharge)
+  vapply(noms, function(n) if(type != "aucune" && any(grepl("^\\s*" %+% n %+% "\\s*<-", l))) "surcharge " %+% type %+% " (" %+% basename(chemin) %+% ")" else "défaut config", character(1))
 }

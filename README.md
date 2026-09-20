@@ -106,8 +106,10 @@ se déroulent aussi tels quels sur la base démo (chunk « Mode démo » en têt
 documentation exécutable du projet. L'intégration continue exécute la démo et les deux notebooks
 à chaque push.
 
-**Sur la plateforme sécurisée** — définir la racine du projet (variable d'environnement
-`SCENARIOS_PMSI_PATH`, ou `config_locale.R` copié de `config_locale.exemple.R`, jamais versionné),
+**Sur la plateforme sécurisée** — créer `config_locale.R` à partir de `config_locale.exemple.R`
+(le poste : racine du dépôt, `PATH_RESULTS`, `pschema` ; jamais versionné ; ou la variable
+d'environnement `SCENARIOS_PMSI_PATH` pour la seule racine) — `config.R` ne porte que la doctrine et
+les défauts, la campagne s'ouvre depuis le notebook (`campagne.R`, chunk `ouvrir_campagne`) —
 puis suivre [RUN.md](RUN.md) : profil
 diagnostic (mesure de l'apport de chaque année/catégorie d'établissements),
 choix du périmètre, puis profil production. Prérequis non distribués ici :
@@ -120,7 +122,7 @@ listes de codes) est versionné ici.
 
 | Fichier / dossier | Rôle |
 |---|---|
-| `config.R` | Paramètres, profils diagnostic/production, surcharges, bloc unique des chemins (arborescence par étapes : magasins partagés `00_partiels`…`30_courts`, dossiers par profil `40_campagnes`, `50_registre`, `60_export_final`) ; `config_locale.exemple.R` = modèle de la configuration propre au poste (`config_locale.R`, non versionné : racine du dépôt, `PATH_RESULTS`) |
+| `config.R` | Paramètres, profils diagnostic/production, surcharges, bloc unique des chemins (arborescence par étapes : magasins partagés `00_partiels`…`30_courts`, dossiers par profil `40_campagnes`, `50_registre`, `60_export_final`) ; `config_locale.exemple.R` = modèle de la configuration propre au poste (`config_locale.R`, non versionné : racine du dépôt, `PATH_RESULTS`, `pschema`) ; la décision d'exploitation (`campagne.R` / `palier.R`, non versionnés) est écrite depuis `RUN_aval.Rmd` |
 | `helpers.R` | Fonctions pures (sections A→I, une par chantier ; gardes des magasins, livrable, plan de réorganisation) |
 | `etapes.R` | Requêtes base + fonctions d'étape + tableau de bord + `etape_reorganiser` |
 | `extraction.R` | Lanceur extraction (46 lignes) |

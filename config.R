@@ -2,9 +2,16 @@
 # config.R — configuration du pipeline scenarios_bn_pmsi (v8, industrialisation)
 #
 # Sourcé par extraction.R, tirage.R et les tests.
+# TROIS NIVEAUX DE PARAMÈTRES, ordre de chargement :
+#   1. config.R (ce fichier)   = la DOCTRINE et les DÉFAUTS — versionné, public ; aucune valeur de poste (chemin
+#                                 absolu, pschema, identifiant) ni valeur « courante » d'exploitation ;
+#   2. config_locale.R         = le POSTE (racine du dépôt, PATH_RESULTS, pschema) — local, gitignoré, modèle
+#                                 config_locale.exemple.R ; sourcé AVANT le bloc PROFIL ;
+#   3. SCENARIOS_PMSI_SURCHARGE = la DÉCISION D'EXPLOITATION : campagne.R (chunk ouvrir_campagne de RUN_aval.Rmd)
+#                                 OU palier.R (chunk palier_surcharge) — exclusifs ; locaux, gitignorés ; sourcés
+#                                 après le bloc PROFIL ; la surcharge démo (demo/session_demo.R) est le troisième cas ;
+#   puis les dérivés (chemins) et les vérifications, enfin set.seed(SEED).
 # Toutes les constantes paramétrables ; aucun nombre magique dans les scripts.
-# Structure : constantes communes -> bloc PROFIL -> surcharges individuelles ->
-# surcharge externe optionnelle (SCENARIOS_PMSI_SURCHARGE) -> dérivés -> set.seed(SEED).
 ###############################################################################
 `%+%` <- function(x, y) paste0(x, y)   # aussi défini dans utils.R (identique)
 
@@ -155,13 +162,13 @@ if(PROFIL == "diagnostic"){
   ANS_HISTORIQUE     <- 17:AN_REF
   TYPES_ETBS_LONGS   <- c("CHR/U", "CH")
   MODE_SELECTION     <- "quota_dp_fixe"     # k lignes par DP, variantes déduites (catalogue_complet retiré pour ce corpus)
-  NB_CRH_CIBLE       <- 500000L             # volume de la campagne : un ORDRE DE GRANDEUR, pas un engagement
+  NB_CRH_CIBLE       <- 500000L             # DÉFAUT : volume de la campagne, un ORDRE DE GRANDEUR (la valeur de la campagne vient de campagne.R)
   # CHEMINS_SURCHARGES$references <- "..."  # exemple de soupape : magasin partagé détourné pour ce seul profil (non utilisé par défaut)
 }
 QUOTA_MIN_PAR_UNITE <- 5L        # mode quota_dp : plancher par type_unite présent au catalogue du DP
 # Mode quota_dp_fixe (production par campagnes ; doctrine : représentativité des DP avant celle des
 # situations cliniques, la diversité des contextes se reconstituant ENTRE les campagnes).
-NB_LIGNES_PAR_DP <- 1L           # k : lignes distinctes tirées par DP (sans remise), variantes déduites
+NB_LIGNES_PAR_DP <- 1L           # DÉFAUT : k lignes distinctes tirées par DP (sans remise), variantes déduites (campagne.R pour l'ajuster)
 POPULATIONS <- list(              # partition EXACTE des modalités de cage (vérifiée, stop sinon)
   pediatrie = c("[0-1[", "[1-5[", "[5-10[", "[10-15[", "[15-18["),
   adulte    = c("[18-30[", "[30-40[", "[40-50[", "[50-60[", "[60-70[", "[70-80[", "[80-[")
@@ -170,9 +177,11 @@ POPULATIONS <- list(              # partition EXACTE des modalités de cage (vé
 # inopérant sur les classes standardisées — 25 000 accouchements normaux / 15 000 bébés normaux constatés).
 # Chaque DP de la classe reçoit d'abord 1 représentant (prime sur le plafond), le surplus est réparti au poids.
 PLAFONDS_DPEC <- list("Accouchement normal mère" = 100L, "Bébé normal" = 100L)   # extensible
-# Campagnes itératives (registre des tirages, append-only)
-CAMPAGNE       <- "C1"    # identifiant court de la campagne, OBLIGATOIRE, tracé partout (sélection, corpus, registre)
-REGISTRE_ACTIF <- TRUE    # FALSE = comportement sans registre (tests / diagnostic)
+# Campagnes itératives (registre des tirages, append-only). DÉFAUTS documentés : la décision d'exploitation d'une
+# campagne (CAMPAGNE, NB_CRH_CIBLE, NB_LIGNES_PAR_DP, REGISTRE_ACTIF, PLAFONDS_DPEC ajustés) ne s'édite PAS ici mais
+# dans campagne.R, écrit depuis le notebook (chunk ouvrir_campagne) et activé par SCENARIOS_PMSI_SURCHARGE.
+CAMPAGNE       <- "C1"    # DÉFAUT : identifiant court de la campagne, OBLIGATOIRE, tracé partout (sélection, livrable, registre)
+REGISTRE_ACTIF <- TRUE    # DÉFAUT : FALSE = comportement sans registre (tests / diagnostic / palier)
 LOT_CHUNKS_FINALISATION <- 10L   # finalisation en flux : nb de chunks relus par lot
 SEUIL_EXPORT_MONOFICHIER <- 2000000L   # au-delà, l'export final reste en parts (pas de monofichier)
 # Chunking DYNAMIQUE (les deux profils) : la taille des chunks est dimensionnée par les données,

@@ -351,13 +351,13 @@ ok("longs : graine conservée (hors doublon de catégorie interne), HTA et diab�
      all(mapply(function(f, d) f == "N" || any(substr(d,1,3) %in% c("E10","E11")), sc_longs$diabete_scenario, split_das(sc_longs$diagnostic_associes))))
 rev <- readr::read_csv2(FICHIER_REVUE(), show_col_types = FALSE)
 ok("courts : id_profil (c + 15 hex, recette id_courts_v1), id_scenario = id_profil-variante unique, hash_das ; recalculables",
-   all(c("id_profil", "id_scenario", "hash_das") %in% names(sc_courts)) && all(grepl("^c[0-9a-f]{15}$", sc_courts$id_profil)) && identical(sc_courts$id_profil, id_profil_courts_de(sc_courts)) &&
+   all(c("id_profil", "id_scenario", "hash_das") %in% names(sc_courts)) && all(grepl("^k[0-9a-f]{15}$", sc_courts$id_profil)) && identical(sc_courts$id_profil, id_profil_courts_de(sc_courts)) &&
      identical(sc_courts$id_scenario, id_scenario_de(sc_courts$id_profil, sc_courts$variante)) && !anyDuplicated(dplyr::distinct(sc_courts, id_scenario, mode_entree, mode_sortie)) &&
      identical(sc_courts$hash_das, hash_das_de(sc_courts$diagnostic_associes)) && !any(sc_courts$id_profil %in% sc_longs$id_profil))
 ok("echantillon_revue.csv : <= 50 lignes, deux branches, libellés et [G] chez les longs",
    nrow(rev) <= 50 && setequal(unique(rev$branche), c("court", "long")) && any(grepl("\\[G\\]", rev$das_libelles[rev$branche == "long"])) &&
      all(c("dp_libelle", "das_libelles", "cmd", "type_unite") %in% names(rev)) && any(grepl("BPCO", rev$dp_libelle)))
-ok("revue : id_scenario renseigné pour les courts (c…) comme pour les longs", all(grepl("^c[0-9a-f]{15}-[0-9]{3}$", rev$id_scenario[rev$branche == "court"])))
+ok("revue : id_scenario renseigné pour les courts (k…) comme pour les longs", all(grepl("^k[0-9a-f]{15}-[0-9]{3}$", rev$id_scenario[rev$branche == "court"])))
 rap <- readLines(FICHIER_RAPPORT())
 ok("rapport : meta en tête, table diag2 × type_unite, top 30, anomalies = 0", any(grepl("^== 0\\. Meta du catalogue", rap)) && any(grepl("PROFIL: diagnostic", rap)) &&
      any(grepl("effectifs sélectionnés diag2", rap)) && any(grepl("== 3\\. Top 30 DAS par CMD", rap)) && any(grepl("TOTAL anomalies = 0", rap)))
@@ -579,7 +579,7 @@ ok("livrable unique C1 : longs (toutes populations) == lots habillés, DPEC/TPEC
 ok("livrable unique : union de schémas — NA typés croisés (graine, racine, nbda, population, DPEC/TPEC NA chez les courts ; nb_cible, source_ref NA chez les longs), types unifiés (age texte), id_scenario partout",
    all(is.na(liv1$graine[liv1$branche == "court"])) && all(is.na(liv1$population[liv1$branche == "court"])) && all(is.na(liv1$DPEC[liv1$branche == "court"])) && all(is.na(liv1$nbda[liv1$branche == "court"])) &&
      all(!is.na(liv1$graine[liv1$branche == "long"])) && all(!is.na(liv1$population[liv1$branche == "long"])) && all(is.na(liv1$nb_cible[liv1$branche == "long"])) && all(!is.na(liv1$nb_cible[liv1$branche == "court"])) &&
-     is.character(liv1$age) && all(!is.na(liv1$id_scenario)) && all(grepl("^c[0-9a-f]{15}-[0-9]{3}$", liv1$id_scenario[liv1$branche == "court"])) && all(grepl("^[0-9a-f]{16}-[0-9]{3}$", liv1$id_scenario[liv1$branche == "long"])) &&
+     is.character(liv1$age) && all(!is.na(liv1$id_scenario)) && all(grepl("^k[0-9a-f]{15}-[0-9]{3}$", liv1$id_scenario[liv1$branche == "court"])) && all(grepl("^[0-9a-f]{16}-[0-9]{3}$", liv1$id_scenario[liv1$branche == "long"])) &&
      all(!is.na(liv1$poids)))
 ok("repli parts au-delà de SEUIL_MONOFICHIER : scenarios_C1/part_*.parquet + méta (forme parts) ; lire_corpus_final identique ; retour au monofichier (idempotence)",
    { assign("SEUIL_MONOFICHIER", 10L, envir = globalenv()); invisible(sortie(etape_finalisation())); mlp <- yaml::read_yaml(FICHIER_LIVRABLE_META()); lp <- lire_corpus_final("C1")
@@ -765,6 +765,25 @@ mt3 <- yaml::read_yaml(FICHIER_SELECTION_META())
 ok("catalogue_complet : NB_VARIANTES = 3, volume attendu = nrow × 3, variante max = 3",
    mt3$NB_VARIANTES == 3 && mt3$volume_attendu == 3 * nrow(cat_multi) && max(lire_longs()$variante) == 3 && ETAPES_ENV$rapport$longs_tirage_n <= mt3$volume_attendu)
 ok("rapport catalogue_complet : ligne nrow / NB_VARIANTES / volume", any(grepl("mode catalogue_complet : nrow catalogue", readLines(FICHIER_RAPPORT()))))
+# ---- trois niveaux de paramètres : écriture des surcharges depuis le notebook, exclusivité palier / campagne (fichiers en tempdir)
+surch_test <- Sys.getenv("SCENARIOS_PMSI_SURCHARGE"); d_s <- file.path(tempdir(), "surcharges"); dir.create(d_s, showWarnings = FALSE)
+ok("ecrire_surcharge_campagne : campagne.R écrit (contenu attendu), SCENARIOS_PMSI_SURCHARGE posée, message « Restart R puis chunk session »",
+   { Sys.setenv(SCENARIOS_PMSI_SURCHARGE = ""); o <- sortie(f <- ecrire_surcharge_campagne("C7", 1234L, 2L, TRUE, fichier = file.path(d_s, "campagne.R")))
+     identical(readLines(f), contenu_surcharge_campagne("C7", 1234L, 2L, TRUE)) && Sys.getenv("SCENARIOS_PMSI_SURCHARGE") == normalizePath(f) && any(grepl("Restart R puis chunk `session`", o)) })
+ok("exclusivité : palier refusé tant que campagne.R est active (message : Sys.setenv + Restart R) ; campagne réécrite sur elle-même acceptée",
+   { err <- tryCatch({ ecrire_surcharge_palier(100L, fichier = file.path(d_s, "palier.R")); NULL }, error = function(e) conditionMessage(e))
+     !is.null(err) && grepl("surcharge palier refusée : la CAMPAGNE", err) && grepl("Sys.setenv", err) && !file.exists(file.path(d_s, "palier.R")) &&
+       { invisible(sortie(ecrire_surcharge_campagne("C8", 99L, 1L, FALSE, fichier = file.path(d_s, "campagne.R")))); any(grepl('CAMPAGNE <- "C8"', readLines(file.path(d_s, "campagne.R")))) } })
+ok("exclusivité : surcharge retirée -> palier accepté ; puis campagne refusée sous palier (message : chunk vider_palier) ; palier retiré -> campagne acceptée",
+   { Sys.setenv(SCENARIOS_PMSI_SURCHARGE = ""); invisible(sortie(ecrire_surcharge_palier(100L, fichier = file.path(d_s, "palier.R"))))
+     err <- tryCatch({ ecrire_surcharge_campagne("C9", 10L, fichier = file.path(d_s, "campagne.R")); NULL }, error = function(e) conditionMessage(e))
+     Sys.setenv(SCENARIOS_PMSI_SURCHARGE = ""); unlink(file.path(d_s, "palier.R")); invisible(sortie(ecrire_surcharge_campagne("C9", 10L, fichier = file.path(d_s, "campagne.R"))))
+     file.exists(file.path(d_s, "palier.R")) == FALSE && !is.null(err) && grepl("surcharge campagne refusée : le PALIER", err) && grepl("vider_palier", err) && any(grepl('CAMPAGNE <- "C9"', readLines(file.path(d_s, "campagne.R")))) })
+ok("source des paramètres en session : campagne.R active -> CAMPAGNE et NB_CRH_CIBLE « surcharge campagne », PLAFONDS_DPEC « défaut config » ; sans surcharge -> défaut config",
+   { Sys.setenv(SCENARIOS_PMSI_SURCHARGE = file.path(d_s, "campagne.R")); source(file.path(proj, "config.R")); o1 <- sortie(s1 <- afficher_sources_campagne())
+     Sys.setenv(SCENARIOS_PMSI_SURCHARGE = ""); source(file.path(proj, "config.R")); s0 <- afficher_sources_campagne()
+     CAMPAGNE == "C1" && s1[["CAMPAGNE"]] == "surcharge campagne (campagne.R)" && s1[["NB_CRH_CIBLE"]] == "surcharge campagne (campagne.R)" && s1[["PLAFONDS_DPEC"]] == "défaut config" && any(grepl("C9", o1)) && all(s0 == "défaut config") })
+Sys.setenv(SCENARIOS_PMSI_SURCHARGE = surch_test); source(file.path(proj, "config.R"))   # rétablit la surcharge de test
 ok("la phase tirage n'a jamais touché la base (mock interdit resté silencieux)", isTRUE(getOption("pmsi_mock_interdit")))
 options(pmsi_mock_interdit = FALSE)
 

@@ -45,21 +45,25 @@ objets par taille.
 # 0. Session (à ré-exécuter après chaque Restart R)
 
 Charge config (profil **production**), sources et fonctions d'étape sans rien exécuter ; aucune
-connexion base (script de tirage). Racine du projet : variable d'environnement `SCENARIOS_PMSI_PATH`,
-sinon `config_locale.R` à la racine du dépôt (copier `config_locale.exemple.R` ; jamais versionné).
-Affiche la campagne courante, son statut au registre et la surcharge active.
+connexion base (script de tirage). Trois niveaux de paramètres : `config.R` (doctrine et défauts,
+versionné) → `config_locale.R` (le poste : racine, `PATH_RESULTS`, `pschema` ; copier
+`config_locale.exemple.R`, jamais versionné) → `SCENARIOS_PMSI_SURCHARGE` (la décision d'exploitation :
+`campagne.R` écrit par le chunk `ouvrir_campagne`, OU `palier.R` ; exclusifs). La session affiche la
+campagne courante, son statut au registre, la surcharge active et la **source** de chaque paramètre.
 
 ```{r session}
 rm(list = ls())
 if (nzchar(Sys.getenv("SCENARIOS_PMSI_DEMO"))) {
   cat("################  MODE DÉMO : base fictive, sorties sous demo/resultats/ — AUCUNE validité épidémiologique  ################\n")
 } else {
-  Sys.setenv(SCENARIOS_PMSI_PROFIL = "production",
-             SCENARIOS_PMSI_SURCHARGE = "")            # ou normalizePath("palier.R") : §5 (palier de mesure, optionnel)
+  Sys.setenv(SCENARIOS_PMSI_PROFIL = "production")
+  # SCENARIOS_PMSI_SURCHARGE : posée par le chunk `ouvrir_campagne` (campagne.R) ou `palier_surcharge` (palier.R), conservée par Restart R ;
+  # Sys.setenv(SCENARIOS_PMSI_SURCHARGE = "") pour revenir aux défauts de config.R.
 }
 Sys.setenv(SCENARIOS_PMSI_ETAPES_SEULEMENT = "1")
 source("tirage.R")
 cat("CAMPAGNE =", CAMPAGNE, "|", statut_campagne_registre(CAMPAGNE, lire_registre(DIR_REGISTRE()))$texte, "| surcharge active :", surcharge_active(), "\n")
+afficher_sources_campagne()   # valeur effective et source (défaut config / campagne.R / palier.R) de chaque paramètre de campagne
 etat_pipeline()
 ```
 
@@ -166,22 +170,43 @@ if (!is.null(side)) {
 
 # 3. OUVRIR UNE CAMPAGNE
 
-Le corpus se construit par **campagnes** puisées dans le catalogue permanent ; le registre
+Le corpus se construit par **campagnes** puisées dans le catalogue permanent (identifiants des séjours
+courts : recette `id_courts_v1`, préfixe `k` hors alphabet hexadécimal) ; le registre
 (`registre_tirages/registre_<campagne>.parquet`, append-only, **jamais vidé**) tient la comptabilité
 inter-campagnes : identifiants stables (`id_profil` = hash du contenu de la ligne du catalogue, recette
 `id_v1` figée ; `id_scenario` = `id_profil-variante`), `hash_das` du jeu réellement tiré. Une campagne
 = un identifiant `CAMPAGNE` (`Cn`), un livrable `60_export_final/scenarios_<Cn>.parquet`, une ligne au registre.
 
-**Ordre impératif** : (a) poser `CAMPAGNE <- "Cn"` (config ou surcharge) et `REGISTRE_ACTIF <- TRUE`,
-**Restart R**, rejouer §0 — la session affiche « jamais inscrite au registre » ; sinon changez
-d'identifiant : sur une campagne déjà inscrite, la sélection ne fait que relire l'existant ou s'arrête ; (b) vider les
-sorties de la campagne précédente (chunk ci-dessous, gardé) ; (c) sélectionner.
+**Ordre impératif** : (a) chunk `ouvrir_campagne` ci-dessous — les paramètres EN CLAIR (identifiant,
+budget, k, registre) sont écrits dans `campagne.R` (gitignoré) et activés par `SCENARIOS_PMSI_SURCHARGE` ;
+**Restart R**, rejouer §0 — la session affiche « jamais inscrite au registre » et la source de chaque
+paramètre (`surcharge campagne (campagne.R)`) ; sinon changez d'identifiant : sur une campagne déjà
+inscrite, la sélection ne fait que relire l'existant ou s'arrête ; (b) vider les sorties des campagnes
+précédentes (chunk gardé) ; (c) sélectionner. `config.R` ne s'édite pas pour une campagne : il porte la
+doctrine et les défauts.
+
+```{r ouvrir_campagne, demo=FALSE}
+# Ce que ce chunk touche : écrit campagne.R à la racine (non versionné) et pose SCENARIOS_PMSI_SURCHARGE pour la session.
+# En démo (demo=FALSE) : la campagne démo est pilotée par SCENARIOS_PMSI_DEMO_CAMPAGNE et la surcharge démo (troisième cas, hors exclusivité).
+# Ce qu'il ne touche JAMAIS : config.R (doctrine et défauts), config_locale.R (poste), le registre, les magasins, les livrables.
+# Exclusivité : refuse d'écrire si un palier est actif (le message dit comment le retirer : chunk vider_palier ou
+#   Sys.setenv(SCENARIOS_PMSI_SURCHARGE = "") + Restart R). La surcharge démo n'est pas concernée.
+# Quand : à chaque ouverture de campagne. Quand PAS : campagne en cours (ses paramètres sont figés dans selection/_meta.yaml).
+CAMPAGNE_A_OUVRIR   <- "C2"        # identifiant court ([A-Za-z0-9_-]) : nouveau, jamais inscrit au registre
+NB_CRH_CIBLE_CAMP   <- 500000L     # volume visé (ordre de grandeur, pas un engagement)
+NB_LIGNES_PAR_DP_CAMP <- 1L        # k lignes distinctes par DP, variantes déduites
+REGISTRE_ACTIF_CAMP <- TRUE        # TRUE en production (registre append-only)
+# PLAFONDS_DPEC_CAMP <- list("Accouchement normal mère" = 100L, "Bébé normal" = 100L)   # seulement si ajustés pour cette campagne
+ecrire_surcharge_campagne(CAMPAGNE_A_OUVRIR, NB_CRH_CIBLE_CAMP, NB_LIGNES_PAR_DP_CAMP, REGISTRE_ACTIF_CAMP,
+                          plafonds_dpec = if (exists("PLAFONDS_DPEC_CAMP")) PLAFONDS_DPEC_CAMP else NULL)
+# -> « surcharge campagne écrite — Restart R puis chunk session » : la session affichera la source de chaque paramètre.
+```
 
 ```{r nouvelle_campagne}
 # Ce que ce chunk touche (SUPPRIME) : les dossiers 40_campagnes/<Cn>/ des campagnes PRÉCÉDENTES (sélection, chunks, habillé).
 # Ce qu'il ne touche JAMAIS : 50_registre/ (append-only), les livrables 60_export_final/ des campagnes passées, les magasins
 #   partagés (partiels, refs, catalogue, courts). Le dossier de la campagne courante est neuf : rien à vider pour elle.
-# Quand : après avoir posé CAMPAGNE <- "Cn" + Restart R + §0 (statut « jamais inscrite »), AVANT la sélection.
+# Quand : après le chunk ouvrir_campagne + Restart R + §0 (statut « jamais inscrite »), AVANT la sélection.
 # Quand PAS : reprise d'une campagne en cours (les chunks présents sont la reprise) ; campagne déjà finalisée
 #   que l'on veut conserver (son corpus est ailleurs, mais sa sélection/chunks seraient perdus : sans conséquence
 #   si le registre est écrit — vérifier au §0).
@@ -264,8 +289,8 @@ par chunk. Le chunk de tirage du palier **refuse de tirer** si la surcharge pali
 #   etape_registre_campagne() refuse de s'exécuter sous PALIER_ACTIF : une mesure n'écrit jamais dans la mémoire
 #   permanente), le catalogue, les corpus.
 # Quand : avant une campagne de production, pour mesurer. Quand PAS : en démo (demo=FALSE) ; en campagne réelle.
-writeLines(c("NB_CRH_CIBLE <- 100000L", "PALIER_ACTIF <- TRUE", "REGISTRE_ACTIF <- FALSE   # imposé : un palier n'écrit jamais au registre"), "palier.R")
-Sys.setenv(SCENARIOS_PMSI_SURCHARGE = normalizePath("palier.R"))
+# Exclusivité : refuse d'écrire si campagne.R est actif (Sys.setenv(SCENARIOS_PMSI_SURCHARGE = "") + Restart R d'abord).
+ecrire_surcharge_palier(100000L)   # écrit palier.R (NB_CRH_CIBLE, PALIER_ACTIF, REGISTRE_ACTIF <- FALSE imposé) et pose SCENARIOS_PMSI_SURCHARGE
 # -> Restart R, rejouer le chunk `session` (qui conserve cette variable) : la bannière doit afficher la surcharge, puis :
 ```
 

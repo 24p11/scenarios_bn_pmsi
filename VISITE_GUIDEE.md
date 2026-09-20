@@ -335,7 +335,17 @@ relue (relancer la même commande reste sûr), toute autre situation s'arrête a
 calcul, et jamais de re-tirage. Enfin les chemins personnels ont
 quitté le code versionné : `config_locale.R` (ignoré par git) ou la variable
 d'environnement, sinon arrêt explicite. Les séjours courts reçoivent leurs
-identifiants (recette `id_courts_v1`, préfixe `c`), sans registre.
+identifiants (recette `id_courts_v1`, préfixe `k`, hors alphabet hexadécimal :
+aucun identifiant long ne peut commencer ainsi), sans registre.
+
+Trois niveaux de paramètres, strictement séparés : `config.R` porte la doctrine
+et les défauts (versionné, sans chemin personnel ni valeur « courante ») ;
+`config_locale.R` porte le poste (racine, `PATH_RESULTS`, `pschema` ; une ligne
+par clé dans `config_locale.exemple.R`) ; la décision d'exploitation d'une
+campagne (identifiant, budget, k, registre) s'écrit dans `campagne.R` depuis le
+chunk `ouvrir_campagne` de `RUN_aval.Rmd`, activé par `SCENARIOS_PMSI_SURCHARGE`,
+exactement comme `palier.R` — les deux sont exclusifs, et le chunk `session`
+affiche la source de chaque paramètre à côté de sa valeur effective.
 
 Correctifs post-contrôle : un notebook appelait directement un dataset arrow,
 ce qui échoue sous le repli mock (arrow partiel) — d'où `lire_corpus_final`,
@@ -440,7 +450,15 @@ avant/après au journal. Tout le code **neuf** vit dans les helpers, testés.
 - **Changer de répertoire de travail** → `config_locale.R` (`PATH_RESULTS`), copie
   manuelle des trois anciens dossiers dans `_a_reorganiser/`, `etape_reorganiser()`
   (plan puis executer) — procédure complète dans RUN.md.
-- **Qui définit ce paramètre ?** → `grep -n "NOM_PARAM" config.R`
+- **Qui définit ce paramètre ?** → le chunk `session` affiche la source de chaque
+  paramètre de campagne (`défaut config` / `surcharge campagne (campagne.R)` /
+  `surcharge palier (palier.R)`) ; pour le reste, `grep -n "NOM_PARAM" config.R`
+  (doctrine et défauts), `config_locale.R` (poste).
+- **Ouvrir une campagne** → chunk `ouvrir_campagne` de `RUN_aval.Rmd` (paramètres en
+  clair, écrit `campagne.R`), Restart R, session ; jamais en éditant `config.R`.
+- **« surcharge … refusée »** → un palier et une campagne ne cohabitent pas : le
+  message dit lequel retirer (`vider_palier`, ou `Sys.setenv(SCENARIOS_PMSI_SURCHARGE = "")`
+  puis Restart R).
 - **Que contient ce fichier de sortie ?** → chaque parquet a son fichier
   compagnon yaml à côté ; commencer par le lire.
 - **Ça a cassé** → le message des garde-fous dit quoi faire ; sinon la

@@ -702,7 +702,28 @@ ecrire_diagnostic_memoire <- function(){
 charger_typo <- function(){ if(!exists("typo", envir = ETAPES_ENV, inherits = FALSE)) assign("typo", charger_typologie(PATH_TYPOLOGIE), envir = ETAPES_ENV); get("typo", envir = ETAPES_ENV, inherits = FALSE) }
 # Surcharge de configuration active (SCENARIOS_PMSI_SURCHARGE) et marqueur de palier (PALIER_ACTIF posé par palier.R)
 palier_actif <- function() nzchar(SURCHARGE_CONFIG) && isTRUE(get0("PALIER_ACTIF", envir = globalenv(), inherits = FALSE))
-surcharge_active <- function() if(!nzchar(SURCHARGE_CONFIG)) "aucune" else SURCHARGE_CONFIG %+% (if(palier_actif()) " (PALIER de mesure : budget de palier, PAS la campagne)" else "")
+campagne_active <- function() nzchar(SURCHARGE_CONFIG) && isTRUE(get0("SURCHARGE_CAMPAGNE_ACTIVE", envir = globalenv(), inherits = FALSE))
+surcharge_active <- function() if(!nzchar(SURCHARGE_CONFIG)) "aucune" else SURCHARGE_CONFIG %+% (if(palier_actif()) " (PALIER de mesure : budget de palier, PAS la campagne)" else if(campagne_active()) " (CAMPAGNE : décision d'exploitation de campagne.R)" else "")
+# Trois niveaux de paramètres (helpers J) : écriture des surcharges campagne.R / palier.R depuis les notebooks, avec exclusivité.
+lignes_surcharge_env <- function(){ f <- Sys.getenv("SCENARIOS_PMSI_SURCHARGE", ""); if(nzchar(f) && file.exists(f)) readLines(f, warn = FALSE) else character(0) }
+ecrire_surcharge <- function(type, lignes, fichier){
+  actif <- Sys.getenv("SCENARIOS_PMSI_SURCHARGE", "")
+  meme_fichier <- nzchar(actif) && file.exists(fichier) && normalizePath(actif, mustWork = FALSE) == normalizePath(fichier, mustWork = FALSE)
+  if(!meme_fichier){ v <- verifier_exclusivite_surcharges(type, actif, lignes_surcharge_env()); if(!v$ok) stop(v$message, call. = FALSE) }
+  writeLines(lignes, fichier); Sys.setenv(SCENARIOS_PMSI_SURCHARGE = normalizePath(fichier))
+  cat("surcharge ", type, " écrite : ", normalizePath(fichier), " — Restart R puis chunk `session` (la session affiche la source de chaque paramètre).\n", sep = "")
+  invisible(normalizePath(fichier))
+}
+ecrire_surcharge_campagne <- function(campagne, nb_crh_cible, nb_lignes_par_dp = 1L, registre_actif = TRUE, plafonds_dpec = NULL, fichier = "campagne.R")
+  ecrire_surcharge("campagne", contenu_surcharge_campagne(campagne, nb_crh_cible, nb_lignes_par_dp, registre_actif, plafonds_dpec), fichier)
+ecrire_surcharge_palier <- function(nb_crh_cible = 100000L, fichier = "palier.R") ecrire_surcharge("palier", contenu_surcharge_palier(nb_crh_cible), fichier)
+# Affichage session : valeur effective et SOURCE de chaque paramètre de campagne (défaut config / campagne.R / palier.R)
+afficher_sources_campagne <- function(){
+  src <- sources_parametres(PARAMETRES_CAMPAGNE, if(nzchar(SURCHARGE_CONFIG) && file.exists(SURCHARGE_CONFIG)) readLines(SURCHARGE_CONFIG, warn = FALSE) else NULL, SURCHARGE_CONFIG)
+  cat("Paramètres de campagne (valeur effective [source]) :\n")
+  for(n in PARAMETRES_CAMPAGNE){ v <- get0(n, envir = globalenv(), inherits = FALSE); cat(sprintf("  %-18s = %-40s [%s]\n", n, if(is.list(v)) paste(names(v), unlist(v), sep = " = ", collapse = " ; ") else paste(v, collapse = ","), src[[n]])) }
+  invisible(src)
+}
 # Garde d'un magasin partagé au chargement : méta absent -> ok ; écart -> stop (verifier_magasin, helpers I1)
 lire_meta_si_present <- function(f) if(file.exists(f)) yaml::read_yaml(f) else NULL
 garder_magasin <- function(magasin, f_meta, etape){
