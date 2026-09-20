@@ -22,11 +22,10 @@ Tout le pipeline repose sur une frontière posée très tôt et jamais franchie 
   produits par l'extraction. C'est vérifié par un test qui coupe la connexion
   avant la phase de tirage pour prouver qu'elle ne sert plus.
 
-Le « contrat » entre les deux mondes, c'est le contenu du dossier
-`exports/` : le catalogue, les dix tables de référence, les variantes
-administratives. Tous ces fichiers sont des comptes agrégés, seuillés ou
-massifs — c'est aussi ce qui permettrait un jour de faire tourner l'aval en
-dehors de la plateforme.
+Le « contrat » entre les deux mondes, c'est le contenu des magasins partagés
+`10_references/` et `20_catalogue/` : les dix tables de référence, le catalogue.
+Tous ces fichiers sont des comptes agrégés, seuillés ou massifs — c'est aussi ce
+qui permettrait un jour de faire tourner l'aval en dehors de la plateforme.
 
 ## 2. Les fichiers et leur rôle (une phrase chacun)
 
@@ -57,58 +56,62 @@ prep_data_<an>   table TEMPORAIRE en base — UNE ligne par séjour,
    │             unité la plus « prioritaire » retenue (réa d'abord),
    │             indicateurs diabète / HTA
    │
-   ├── etape_refs() ───────────► exports/*.parquet   (les 10 références, §5b)
+   ├── etape_refs() ───────────► 10_references/ref_*.parquet + _meta.yaml   [partagé] (§5b)
    │
    │  etape_partiels_longs()     [prep_scenarios2 : pour chaque séjour long,
    ▼                              les 2 DAS les plus sévères = la « graine »]
-partiels/catalogue_partiel_<etbs>_<an>.parquet
+00_partiels/catalogue_partiel_<etbs>_<an>.parquet + _meta.yaml            [partagé]
    │             un fichier de comptes par (établissements × année) :
    │             c'est à la fois une sauvegarde de reprise et un cache
    │
    │  etape_catalogue(ans, etbs) [agrégation en 2 temps + conversion E669
-   ▼                              + seuil de confidentialité > 10]
-catalogue_longs_seuil.parquet    21,6 M de lignes : 12 pivots × graine × poids
+   ▼                              + seuil de confidentialité > 10 ; sauté si le magasin est à jour]
+20_catalogue/catalogue_longs_seuil.parquet   21,6 M de lignes : 12 pivots × graine × poids
    │  etape_repartitionner_catalogue()  [+ lettre du DP, DPEC/TPEC, id_profil]
    ▼
-catalogue_longs_seuil/part_<lettre>.parquet     LE RÉFÉRENTIEL PERMANENT
+20_catalogue/catalogue_longs_seuil/part_<lettre>.parquet + _meta.yaml    LE RÉFÉRENTIEL PERMANENT [partagé]
    │  etape_selection_longs()    [quota par DP, k lignes, variantes ;
    ▼                              plafonds de classe ; registre]
-selection_longs/<population>/  (+ meta_tirage.yaml : le contrat du tirage)
+<profil>/40_campagnes/<C>/selection/<population>/  (+ _meta.yaml : le contrat du tirage)
    │  etape_tirage_das_longs()   [ajout des DAS de complétion, par paquets]
    ▼
-chunks/<population>/longs_chunk_XXXX.parquet    (reprise fichier par fichier)
+<profil>/40_campagnes/<C>/chunks/<population>/longs_chunk_XXXX.parquet  (reprise fichier par fichier)
    │  etape_habillage_longs()    [modes d'entrée/sortie, depuis le parquet
-   ▼                              v_admin_longs — jamais depuis la base]
-   │  etape_finalisation()       [contrôles, rapport, échantillon de revue]
-   ▼
-scenarios_longs_tirage_v8_<campagne>/<population>/part_*.parquet  (+ _meta.yaml)
-   +  registre_tirages/registre_<campagne>.parquet
+   ▼                              ref_v_admin_longs — jamais depuis la base]
+   │  etape_finalisation()       [contrôles, rapport, échantillon de revue ;
+   ▼                              courts relus depuis 30_courts/ et embarqués]
+<profil>/60_export_final/scenarios_<C>.parquet + scenarios_<C>_meta.yaml   UN LIVRABLE PAR CAMPAGNE
+   +  <profil>/50_registre/registre_tirages/registre_<C>.parquet
 ```
 
-La branche **séjours courts** est parallèle et plus simple : `pivots_courts`
+La branche **séjours courts** est parallèle et plus simple : `ref_pivots_courts`
 (seuil appliqué en base) → `etape_tirage_courts()` (nombre de pathologies
 chroniques tiré dans la distribution observée chez les séjours longs — voir
-§5b) → habillage → finalisation.
+§5b) → habillage → `30_courts/scenarios_courts.parquet` + `_meta.yaml`, magasin
+partagé embarqué dans chaque livrable.
 
-### Où vit quoi : la carte des dossiers d'une campagne
+### Où vit quoi : la carte des dossiers
 
-Deux familles sous le dossier d'exports du profil (`exports/` ou `exports_diagnostic/`,
-un par profil, jamais mélangés) :
+L'arborescence est calquée sur les étapes, avec une doctrine simple : **est
+partagé tout objet qui ne dépend que de paramètres, pas du profil** ; chaque
+magasin partagé porte un `_meta.yaml` avec les paramètres qui le définissent,
+vérifié à chaque chargement (écart ⇒ arrêt qui nomme les clés et les issues :
+régénérer avec un drapeau `FORCER_*` — le magasin sert tous les profils — ou
+détourner son chemin pour ce profil, soupape prévue mais non utilisée).
 
-- **Permanent** — le catalogue en parts (`catalogue_longs_seuil/`), les dix tables
-  de référence, le registre (`registre_tirages/`, qui ne se vide jamais), les
-  corpus des campagnes passées (`scenarios_longs_tirage_v8_<Cn>/`, un dossier par
-  campagne avec son `_meta.yaml`, jamais écrasé par une autre campagne), les
-  scénarios courts datés. Écrits par le repartitionnement, les refs, la
-  finalisation ; lus par la sélection et la livraison.
-- **Par campagne** — la sélection (`selection_longs/`, `meta_tirage.yaml`), les
-  paquets de tirage (`chunks/`), l'habillé (`habille/`), le rapport et la revue.
-  Écrits par les étapes de la campagne, vidés (chunk gardé) à l'ouverture de la
-  suivante.
+- **Partagé** — `00_partiels/` (cache d'extraction), `10_references/` (les dix
+  `ref_*`), `20_catalogue/` (le catalogue en parts, avec son méta : périmètre,
+  seuil, conversion, versions de typologie et de recette d'identifiant),
+  `30_courts/` (les scénarios courts et leurs paquets), `90_diagnostics/`
+  (apports, recouvrement ; mémoire par profil).
+- **Par profil** (`production/`, `diagnostic/`) — `40_campagnes/<C>/` (sélection,
+  paquets, habillé : transitoires, un dossier par campagne), `50_registre/` (le
+  registre, jamais vidé ; en pratique production seule), `60_export_final/` (un
+  livrable par campagne : `scenarios_<C>.parquet` + méta, rapport, revue, top 30).
 
-Ce qui se migre d'un profil à l'autre : le catalogue et ses refs (condition Q13).
-Ce qui ne se migre pas : les sorties de tirage, qui se refont sous le profil cible
-(rapide, sans base) — le message « courts absent » le dit en trois branches.
+Règle de nommage : nom stable, date dans le méta. Aucun fichier daté, aucune
+migration entre profils : deux profils travaillent sur le même répertoire et se
+partagent les magasins.
 
 ## 4. `helpers.R` : les sections A→G racontent l'histoire du projet
 
@@ -263,16 +266,14 @@ cette section contient les remèdes.
 
 ### F. Finitions exploitation (leçons des premières exécutions réelles)
 
-- La migration entre profils : le catalogue avait été produit en profil
-  « diagnostic » (dossier `exports_diagnostic/`) et la session de production
-  le cherchait dans `exports/`. D'où deux aides : `localiser_catalogue`
-  cherche le catalogue dans les autres dossiers d'exports du même projet
-  (sous ses deux formes, fichier unique ou dossier de parts), et
-  `condition_q13` vérifie si les tables de référence peuvent être copiées
-  d'un profil à l'autre — c'est le cas si et seulement si six paramètres
-  sont identiques (l'année de référence, les trois seuils des tables de
-  référence, les deux paramètres de la conversion E669). Si l'un diffère, on
-  copie le catalogue seul et on recalcule les références.
+- La migration entre profils (historique) : le catalogue avait été produit en
+  profil « diagnostic » et la session de production le cherchait ailleurs.
+  D'où, à l'époque, une aide de localisation et la « condition Q13 » (six
+  paramètres identiques pour copier les références : l'année de référence, les
+  trois seuils, les deux paramètres de la conversion E669). Depuis le chantier
+  « arborescence par étapes », la migration est retirée : les magasins sont
+  partagés entre profils et la condition Q13 est devenue `verifier_magasin`,
+  la garde générale des magasins (§3, carte des dossiers).
 - Les messages « actionnables » : une erreur du type « catalogue absent »
   indique désormais le dossier exactement cherché, les endroits où un
   catalogue a été trouvé, et les options dans l'ordre du moins coûteux
@@ -325,9 +326,8 @@ servi.
 Quatre défauts d'exploitation et leurs remèdes : le corpus final était nommé par
 date (deux campagnes le même jour s'écrasaient) → nommé par campagne, avec un
 `_meta.yaml` et un garde-fou (`verifier_dossier_final`) ; les fichiers datés
-(`scenarios_courts_v8_<date>`) cassaient la relecture un autre jour →
-`resoudre_export_date` relit le fichier du jour, sinon le plus récent, en
-l'annonçant ; le chunk de palier pouvait tirer par inadvertance → `palier_actif()`
+cassaient la relecture un autre jour → une résolution du plus récent, elle-même
+retirée ensuite au profit de la règle « nom stable, date dans le méta » (§3) ; le chunk de palier pouvait tirer par inadvertance → `palier_actif()`
 et une bannière qui affiche campagne, budget effectif et surcharge active ; une
 campagne déjà inscrite pouvait être resélectionnée → `statut_campagne_registre`,
 affiché en session ; une campagne inscrite est close : sa sélection présente est
@@ -436,7 +436,10 @@ avant/après au journal. Tout le code **neuf** vit dans les helpers, testés.
 ## 8. Se repérer en pratique
 
 - **Où en suis-je ?** → `etat_pipeline()` (l'état de chaque étape, fichiers
-  présents / attendus, sans connexion).
+  présents / attendus, mention [partagé] / [profil], gardes en écart, sans connexion).
+- **Changer de répertoire de travail** → `config_locale.R` (`PATH_RESULTS`), copie
+  manuelle des trois anciens dossiers dans `_a_reorganiser/`, `etape_reorganiser()`
+  (plan puis executer) — procédure complète dans RUN.md.
 - **Qui définit ce paramètre ?** → `grep -n "NOM_PARAM" config.R`
 - **Que contient ce fichier de sortie ?** → chaque parquet a son fichier
   compagnon yaml à côté ; commencer par le lire.
@@ -465,4 +468,20 @@ paquets → 5. taille de paquets dynamique → 6. conversion E669 → 7. mémoir
 catalogue en parts, quota par DP, index de tirage) → 10. finitions
 exploitation → 11. campagnes (identifiants, registre, plafonds de classe,
 recyclage) → 12. packaging GitHub + mode démo → 13. notebook campagnes, config
-locale, démo dans les notebooks. Chaque chantier = une section du journal, avec ses questions.
+locale, démo dans les notebooks → 14. correctifs post-contrôle (lecture robuste,
+parité courts) → 15. livrable unique, nommage, arborescence par étapes. Chaque
+chantier = une section du journal, avec ses questions.
+
+### I. Livrable unique, nommage, arborescence par étapes
+
+Décisions actées : un seul fichier livrable par campagne (longs de toutes les
+populations et courts embarqués, colonne `branche` en tête, union de schémas
+typée, familles de colonnes documentées au méta, parts au-delà d'un seuil) ;
+la règle « nom stable, date dans le méta » (fin des noms datés, de la
+résolution inter-sessions et du `DATE_TAG`) ; les fichiers de code renommés
+(`config.R`, `helpers.R`, `etapes.R`, `extraction.R`, `tirage.R`) ; un nouveau
+répertoire de travail à l'arborescence calquée sur les étapes, avec partage
+maximal entre profils gardé par `verifier_magasin` ; et `etape_reorganiser`,
+qui range un ancien `results/` copié à la main dans `_a_reorganiser/` — d'abord
+un plan (trois tables : reconnus, ignorés, non reconnus), puis l'exécution
+derrière confirmation, jamais un fichier déplacé en silence.

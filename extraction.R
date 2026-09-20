@@ -23,7 +23,6 @@ source(file.path(PATH_PROJET, "config.R"))
 
 source(file.path(PATH_PROJET, "utils.R"))
 path_projet <- PATH_PROJET     # alias attendu par referentiels.R (et write_xlsx de utils.R)
-outfile     <- PATH_RESULTS    # alias historique
 
 conn <- pRatihque::connection_database()
 
@@ -32,11 +31,11 @@ source(file.path(PATH_PROJET, "referentiels.R"))   # définit neo_codes_diabete,
 source(file.path(PATH_PROJET, "helpers.R"))
 source(file.path(PATH_PROJET, "etapes.R"))
 
-for(d in c(PATH_RESULTS, EXPORTS_DIR, PARTIELS_DIR)) if(!dir.exists(d)) dir.create(d, recursive = TRUE)
+creer_dossiers(PATH_RESULTS, DIR_PARTIELS, DIR_REFERENCES, DIR_CATALOGUE_M, DIR_COURTS, DIR_DIAGNOSTICS)
 
 cat("PROFIL = ", PROFIL, " ; AN_REF = ", AN_REF, " ; ANS_HISTORIQUE = ", paste(ANS_HISTORIQUE, collapse = ","),
     " ; TYPES_ETBS_LONGS = ", paste(TYPES_ETBS_LONGS, collapse = ","), "\n", sep = "")
-cat("EXPORTS_DIR = ", EXPORTS_DIR, "\nPARTIELS_DIR = ", PARTIELS_DIR, "\n", sep = "")
+cat("PATH_RESULTS = ", PATH_RESULTS, " (magasins partagés 00_partiels, 10_references, 20_catalogue, 30_courts, 90_diagnostics ; profil : ", PROFIL, "/)\n", sep = "")
 
 ## ---- 1. Étapes ----
 if(!nzchar(Sys.getenv("SCENARIOS_PMSI_ETAPES_SEULEMENT"))){

@@ -640,14 +640,10 @@ verifier_partiels_meta <- function(existant, courant){
   meme <- function(ch) identical(as.character(unlist(existant[[ch]])), as.character(unlist(courant[[ch]])))
   detail <- function(ch) sprintf("%s (partiels : %s ; courant : %s)", ch,
                                  paste(unlist(existant[[ch]]), collapse = ","), paste(unlist(courant[[ch]]), collapse = ","))
-  bloquantes <- CLES_PARTIELS_BLOQUANTES[!vapply(CLES_PARTIELS_BLOQUANTES, meme, logical(1))]
-  erreur <- NULL
-  if(length(bloquantes) > 0){
-    erreur <- sprintf("partiels_meta.yaml : %s. Les partiels ont été construits avec d'autres paramètres amont : vider PARTIELS_DIR avant de relancer.",
-                      paste(vapply(bloquantes, detail, character(1)), collapse = " ; "))
-  }
+  v <- verifier_magasin("partiels", existant, courant)
+  erreur <- if(v$ok) NULL else v$message
   av <- character(0)
-  for(ch in CLES_PARTIELS_AVERTISSEMENT) if(!meme(ch)) av <- c(av, "partiels_meta.yaml : " %+% detail(ch))
+  for(ch in CLES_PARTIELS_AVERTISSEMENT) if(!meme(ch)) av <- c(av, "00_partiels/_meta.yaml : " %+% detail(ch))
   list(erreur = erreur, avertissements = av)
 }
 
@@ -675,12 +671,12 @@ penaliser_comp_diabete <- function(df, cage_ped, cage_ages, penalite_ages, penal
 # Fichiers manquants dans un dossier (noms de base) ; character(0) si tout est là.
 fichiers_manquants <- function(dossier, noms) noms[!file.exists(file.path(dossier, noms))]
 
-# meta_tirage.yaml : la sélection/les chunks ne sont valides que pour ces paramètres.
+# selection/_meta.yaml : la sélection/les chunks ne sont valides que pour ces paramètres.
 verifier_meta_tirage <- function(existant, courant, cles){
   if(is.null(existant)) return(NULL)
   diff <- cles[vapply(cles, function(ch) !identical(as.character(unlist(existant[[ch]])), as.character(unlist(courant[[ch]]))), logical(1))]
   if(length(diff) == 0) return(NULL)
-  sprintf("meta_tirage.yaml : paramètres différents de la sélection figée (%s). Vider CHUNKS_DIR, selection_longs.parquet et meta_tirage.yaml avant de relancer.",
+  sprintf("selection/_meta.yaml : paramètres différents de la sélection figée (%s). Ouvrez une nouvelle campagne (CAMPAGNE <- \"Cn\") ou videz 40_campagnes/<CAMPAGNE>/ (sélection, chunks, habillé) avant de relancer.",
           paste(diff, collapse = ", "))
 }
 
@@ -1162,7 +1158,7 @@ typologie_sejour <- function(df, typo, col_age = "age", col_duree = "duree", col
 
 # --- E2. Catalogue partitionné par lettre ---------------------------------------------------
 # Disposition : <dir>/part_<L>.parquet (colonne `lettre` = substr(diag2, 1, 1) dans chaque part),
-# sidecar <dir>/_sidecar.yaml (ignoré par arrow::open_dataset : préfixe "_").
+# méta <dir>/_meta.yaml (ignoré par arrow::open_dataset : préfixe "_").
 lettre_de <- function(diag2) substr(as.character(diag2), 1, 1)
 nom_part_lettre <- function(lettre) sprintf("part_%s.parquet", lettre)
 
@@ -1190,7 +1186,7 @@ lire_catalogue <- function(dir_dataset, monofichier = NULL, lettres = NULL, colo
     if(!is.null(colonnes)) d <- d[, unique(colonnes), drop = FALSE]
     return(d)   # schéma du monofichier inchangé (pas de colonne lettre ajoutée d'office)
   }
-  stop(message_catalogue_absent("lire_catalogue", dirname(dir_dataset), dirname(dirname(dir_dataset))), call. = FALSE)
+  stop(message_catalogue_absent("lire_catalogue", dirname(dir_dataset)), call. = FALSE)
 }
 lettres_catalogue <- function(dir_dataset, monofichier = NULL){
   if(dir.exists(dir_dataset)){
@@ -1338,51 +1334,13 @@ acc_stats_final <- function(acc, n_top = 30){
        controles = as.list(acc$controles), e669_residuels = acc$e669_residuels, e660 = acc$e660 |> dplyr::arrange(code))
 }
 
-## ---- F. Finitions exploitation : migration inter-profils, message catalogue absent ----
-CLES_Q13 <- c("AN_REF", "SEUIL_REF_DAS", "SEUIL_REF_IMPRECIS", "SEUIL_REF_PAIRES", "CONVERSION_E669", "BARE_E669_DEFAUT")
-
-# Produits copiables d'un profil à l'autre (catalogue + méta + refs) ; noms de base relatifs à EXPORTS_DIR.
-fichiers_migration_catalogue <- function(noms_refs = NOMS_REFS){
-  c("catalogue_longs_seuil.parquet", "catalogue_longs_seuil_meta.yaml", nom_ref(noms_refs))
-}
-
-# Localise un catalogue dans les dossiers d'exports (exports*/) d'un PATH_RESULTS, hors dossier courant.
-# Retourne un data.frame (dossier, monofichier, dataset, meta) — 0 ligne si rien.
-localiser_catalogue <- function(path_results, exports_dir_courant = NULL){
-  dirs <- list.dirs(path_results, recursive = FALSE, full.names = TRUE)
-  dirs <- dirs[grepl("^exports", basename(dirs))]
-  if(!is.null(exports_dir_courant)) dirs <- dirs[normalizePath(dirs, mustWork = FALSE) != normalizePath(sub("/$", "", exports_dir_courant), mustWork = FALSE)]
-  rows <- lapply(dirs, function(d){
-    mono <- file.exists(file.path(d, "catalogue_longs_seuil.parquet"))
-    ds <- dir.exists(file.path(d, "catalogue_longs_seuil")) && length(list.files(file.path(d, "catalogue_longs_seuil"), pattern = "^part_")) > 0
-    if(!mono && !ds) return(NULL)
-    data.frame(dossier = d, monofichier = mono, dataset = ds, meta = file.exists(file.path(d, "catalogue_longs_seuil_meta.yaml")), stringsAsFactors = FALSE)
-  })
-  rows <- rows[!vapply(rows, is.null, logical(1))]
-  if(length(rows) == 0) return(data.frame(dossier = character(0), monofichier = logical(0), dataset = logical(0), meta = logical(0)))
-  do.call(rbind, rows)
-}
-
-# Condition de validité Q13 d'une copie inter-profils : mêmes AN_REF, SEUIL_REF_*, CONVERSION_E669,
-# BARE_E669_DEFAUT entre la config source (ex. méta du catalogue) et la config courante.
-condition_q13 <- function(config_source, config_courante, cles = CLES_Q13){
-  diff <- cles[vapply(cles, function(k) !identical(as.character(unlist(config_source[[k]])), as.character(unlist(config_courante[[k]]))), logical(1))]
-  list(ok = length(diff) == 0, differences = diff,
-       message = if(length(diff) == 0) "condition Q13 satisfaite : copie sûre" else
-         "condition Q13 NON satisfaite (" %+% paste(sprintf("%s : source = %s, courant = %s", diff,
-           vapply(diff, function(k) paste(unlist(config_source[[k]]), collapse = ","), character(1)),
-           vapply(diff, function(k) paste(unlist(config_courante[[k]]), collapse = ","), character(1))), collapse = " ; ") %+%
-         ") : ne pas copier les refs, lancez etape_refs(forcer = TRUE) après copie du seul catalogue, ou recalculez.")
-}
-
-# Message à trois branches quand le catalogue longs est absent du dossier d'exports effectif.
-message_catalogue_absent <- function(etape, exports_dir, path_results){
-  autres <- tryCatch(localiser_catalogue(path_results, exports_dir), error = function(e) NULL)
-  ou <- if(!is.null(autres) && nrow(autres) > 0) " (trouvé dans : " %+% paste(autres$dossier, collapse = ", ") %+% ")" else ""
-  sprintf(paste0("%s : catalogue_longs_seuil.parquet absent de %s (ni catalogue_longs_seuil/ partitionné). ",
-                 "S'il existe sous un autre profil (exports_diagnostic/ <-> exports/)%s, copiez-le — chunk de migration de RUN_aval.Rmd ou RUN.md, règles de cache, ",
-                 "condition Q13 (mêmes AN_REF, SEUIL_REF_DAS, SEUIL_REF_IMPRECIS, SEUIL_REF_PAIRES, CONVERSION_E669, BARE_E669_DEFAUT) — ; ",
-                 "sinon lancez etape_catalogue() (extraction, coûteux)."), etape, sub("/$", "", exports_dir), ou)
+## ---- F. Finitions exploitation ----
+# (La migration inter-profils — localiser_catalogue, condition_q13, fichiers_migration_catalogue — est RETIRÉE au
+#  chantier « livrable unique + arborescence » : les magasins sont partagés entre profils et gardés par verifier_magasin.)
+# Message quand le catalogue longs est absent du magasin partagé 20_catalogue/.
+message_catalogue_absent <- function(etape, dir_catalogue){
+  sprintf(paste0("%s : catalogue absent du magasin partagé %s (ni catalogue_longs_seuil.parquet, ni catalogue_longs_seuil/ partitionné). ",
+                 "Lancez etape_catalogue() (extraction, coûteux ; partiels réutilisés s'ils existent) puis etape_repartitionner_catalogue()."), etape, sub("/$", "", dir_catalogue))
 }
 
 ## ---- G. Campagnes : identifiants stables, registre des tirages, plafonds de classe, sélection sous registre ----
@@ -1552,23 +1510,12 @@ registre_depuis_chunks <- function(df_chunks, campagne, population = NA_characte
 ## ---- H. Lot « notebook campagnes + config locale » : nommage par campagne, fichiers datés, garde-fous ----
 if(!exists("%||%")) `%||%` <- function(a, b) if(is.null(a)) b else a
 
-# --- H1. Fichiers datés inter-sessions : résolution en LECTURE (l'écriture garde le jour) --------
-# `fichiers` = list.files(EXPORTS_DIR) ; `nom` = préfixe (ex. "scenarios_courts") ; `date_tag` = jour de
-# la session. Retourne list(fichier, du_jour) : le fichier du jour s'il existe, sinon le plus récent au
-# motif ^<nom>_v8_[0-9]{8}\.parquet$ (tri lexical = chronologique sur AAAAMMJJ) ; NULL si aucun.
-resoudre_export_date <- function(fichiers, nom, date_tag){
-  motif <- "^" %+% nom %+% "_v8_[0-9]{8}\\.parquet$"
-  cand <- sort(fichiers[grepl(motif, fichiers)])
-  if(length(cand) == 0) return(NULL)
-  du_jour <- nom %+% "_v8_" %+% date_tag %+% ".parquet"
-  if(du_jour %in% cand) list(fichier = du_jour, du_jour = TRUE) else list(fichier = cand[length(cand)], du_jour = FALSE)
-}
-# Message à trois branches quand scenarios_courts est introuvable (aucun fichier daté, aucun jour).
-message_courts_absent <- function(exports_dir, nom = "scenarios_courts"){
-  paste0("etape_finalisation : aucun ", nom, "_v8_<date>.parquet dans ", sub("/$", "", exports_dir), " (ni du jour, ni d'une session antérieure). ",
-         "(1) Lancez etape_tirage_courts() — rapide, sans base : pivots_courts + refs du profil courant ; ",
-         "(2) NE copiez PAS ce fichier depuis l'autre profil (exports_diagnostic/ <-> exports/) : les sorties de tirage ne se migrent pas, elles se REFONT sous le profil cible ; ",
-         "(3) si pivots_courts / refs manquent aussi : etape_refs() (extraction, RUN.Rmd).")
+# --- H1. (résolution des fichiers datés RETIRÉE : règle « nom stable, date dans le méta », section 22) ----
+# Message quand scenarios_courts.parquet est introuvable dans le magasin partagé 30_courts/.
+message_courts_absent <- function(dir_courts){
+  paste0("etape_finalisation : scenarios_courts.parquet absent du magasin partagé ", sub("/$", "", dir_courts), ". ",
+         "Lancez etape_tirage_courts() — rapide, sans base : ref_pivots_courts + refs du magasin 10_references/ (le magasin est partagé entre profils : ",
+         "il ne se copie pas, il se produit une fois) ; si les refs manquent aussi : etape_refs() (extraction, RUN.Rmd).")
 }
 
 # --- H2. Corpus final nommé par CAMPAGNE : garde-fou sur le dossier existant --------------------
@@ -1591,22 +1538,27 @@ statut_campagne_registre <- function(campagne, registre){
   list(inscrite = TRUE, nb = nrow(l), date = max(as.character(l$date)), texte = sprintf("déjà inscrite au registre : %d scénarios le %s — changez d'identifiant", nrow(l), max(as.character(l$date))))
 }
 
-# --- H4. Lecteurs à repli pour les notebooks (lot « correctifs post-contrôle ») --------------
-# Lecteur UNIQUE du corpus final d'une campagne (scenarios_longs_tirage_v8_<campagne>/<population>/part_*.parquet) :
-# dataset arrow si arrow réel (arrow_dataset_disponible), sinon rbind des parts (mock arrow = RDS, arrow partiel).
-# NULL si le dossier ou les parts manquent. `dir_corpus` explicite pour les tests ; par défaut sous EXPORTS_DIR.
-lire_corpus_final <- function(campagne = CAMPAGNE, populations = NULL, colonnes = NULL,
-                              dir_corpus = file.path(EXPORTS_DIR, "scenarios_longs_tirage_v8_" %+% campagne)){
-  if(!dir.exists(dir_corpus)) return(NULL)
-  pops <- if(is.null(populations)) list.dirs(dir_corpus, full.names = FALSE, recursive = FALSE) else populations
-  parts <- unlist(lapply(pops, function(p) list.files(file.path(dir_corpus, p), pattern = "^part_.*\\.parquet$", full.names = TRUE)))
-  if(length(parts) == 0) return(NULL)
-  if(arrow_dataset_disponible()){
-    ds <- arrow::open_dataset(parts)
-    if(!is.null(colonnes)) ds <- dplyr::select(ds, dplyr::all_of(unique(colonnes)))
-    return(tibble::as_tibble(dplyr::collect(ds)))
+# --- H4. Lecteurs à repli ------------------------------------------------------------------
+# Lecteur UNIQUE du livrable d'une campagne (<profil>/60_export_final/scenarios_<campagne>.parquet, ou le repli en parts
+# scenarios_<campagne>/part_*.parquet au-delà de SEUIL_MONOFICHIER) : dataset arrow si arrow réel, sinon rbind des parts.
+# Filtres optionnels : populations (colonne population des longs), branche ("long" / "court"), colonnes. NULL si absent.
+lire_corpus_final <- function(campagne = CAMPAGNE, populations = NULL, colonnes = NULL, branche = NULL, dir_export = DIR_EXPORT_FINAL){
+  dir_export <- sub("/+$", "", dir_export)
+  f_mono <- file.path(dir_export, "scenarios_" %+% campagne %+% ".parquet"); d_parts <- file.path(dir_export, "scenarios_" %+% campagne)
+  cols <- if(is.null(colonnes)) NULL else unique(c(colonnes, if(!is.null(populations)) "population", if(!is.null(branche)) "branche"))
+  if(file.exists(f_mono)){
+    d <- tibble::as_tibble(arrow::read_parquet(f_mono)); if(!is.null(cols)) d <- d[, intersect(cols, names(d)), drop = FALSE]
+  } else {
+    parts <- if(dir.exists(d_parts)) list.files(d_parts, pattern = "^part_[0-9]{4}\\.parquet$", full.names = TRUE) else character(0)
+    if(length(parts) == 0) return(NULL)
+    d <- if(arrow_dataset_disponible()){
+      ds <- arrow::open_dataset(parts); if(!is.null(cols)) ds <- dplyr::select(ds, dplyr::all_of(cols)); tibble::as_tibble(dplyr::collect(ds))
+    } else purrr::map(parts, function(p){ x <- tibble::as_tibble(arrow::read_parquet(p)); if(!is.null(cols)) x[, intersect(cols, names(x)), drop = FALSE] else x }) |> purrr::list_rbind()
   }
-  purrr::map(parts, function(p){ d <- tibble::as_tibble(arrow::read_parquet(p)); if(!is.null(colonnes)) d[, unique(colonnes), drop = FALSE] else d }) |> purrr::list_rbind()
+  if(!is.null(branche) && "branche" %in% names(d)) d <- d[d$branche %in% branche, , drop = FALSE]
+  if(!is.null(populations) && "population" %in% names(d)) d <- d[is.na(d$population) & is.null(branche) | d$population %in% populations, , drop = FALSE]
+  if(!is.null(colonnes)) d <- d[, intersect(unique(colonnes), names(d)), drop = FALSE]
+  d
 }
 # Dernier fichier (tri lexical = chronologique sur AAAAMMJJ) d'un dossier au motif ; NA si aucun.
 dernier_fichier <- function(dossier, motif){
@@ -1631,4 +1583,150 @@ lire_si_present <- function(chemin, produit_par = "l'étape amont", mode = "auto
   switch(mode, lignes = readLines(chemin, warn = FALSE), csv = utils::read.csv(chemin), csv2 = utils::read.csv2(chemin),
          parquet = tibble::as_tibble(arrow::read_parquet(chemin)), yaml = yaml::read_yaml(chemin),
          stop("lire_si_present : mode inconnu : " %+% mode, call. = FALSE))
+}
+
+## ---- I. Chantier « livrable unique + nommage + arborescence » : magasins partagés, livrable, réorganisation ----
+
+# --- I1. Gardes des magasins partagés (généralisation de l'ancienne condition Q13) ------------
+# Chaque magasin partagé porte un _meta.yaml avec LES PARAMÈTRES QUI LE DÉFINISSENT ; à chaque chargement la config
+# courante lui est comparée : divergence -> stop nommant les clés en écart et les issues. Les partiels gardent leurs
+# clés bloquantes historiques ; les références les 6 clés de l'ancienne condition Q13.
+CLES_MAGASINS <- list(
+  partiels   = c("K_GRAINE_LONGS", "NBDA_MAX", "DUREE_LONGS", "PIVOTS_LONGS"),
+  references = c("AN_REF", "SEUIL_REF_DAS", "SEUIL_REF_IMPRECIS", "SEUIL_REF_PAIRES", "CONVERSION_E669", "BARE_E669_DEFAUT"),
+  catalogue  = c("ANS_HISTORIQUE", "TYPES_ETBS_LONGS", "SEUIL_PIVOT", "CONVERSION_E669", "BARE_E669_DEFAUT", "K_GRAINE_LONGS", "NBDA_MAX", "DUREE_LONGS", "PIVOTS_LONGS"),
+  courts     = c("AN_REF", "SEUIL_PIVOT", "SEUIL_REF_DAS", "NB_TIRAGES_COURTS", "NB_VARIANTES_ADMIN_COURTS", "CONVERSION_E669", "BARE_E669_DEFAUT", "SEED", "NB_CHUNKS_MAX", "CHUNK_SIZE_MIN", "CHUNK_SIZE_FIXE"))
+DRAPEAUX_MAGASINS <- c(partiels = "FORCER_PARTIELS", references = "FORCER_REFS", catalogue = "FORCER_CATALOGUE", courts = "FORCER_COURTS")
+DOSSIERS_MAGASINS <- c(partiels = "00_partiels", references = "10_references", catalogue = "20_catalogue", courts = "30_courts")
+# Méta d'un magasin : les clés qui le définissent, prises dans `config` (valeurs effectives), + date (+ champs libres).
+meta_magasin <- function(magasin, config, ...){
+  cles <- CLES_MAGASINS[[magasin]]
+  m <- lapply(cles, function(k){ v <- config[[k]]; if(is.numeric(v) && length(v) > 1) as.integer(v) else v }); names(m) <- cles
+  c(list(magasin = magasin), m, list(date = as.character(Sys.Date())), list(...))
+}
+# verifier_magasin(magasin, meta_existant, config_courante) -> list(ok, differences, message). NULL existant -> ok.
+verifier_magasin <- function(magasin, meta_existant, config_courante, cles = CLES_MAGASINS[[magasin]], dossier = DOSSIERS_MAGASINS[[magasin]]){
+  if(is.null(meta_existant)) return(list(ok = TRUE, differences = character(0), message = NULL))
+  norm <- function(v){ v <- as.character(unlist(v)); if(length(v) > 1 && !is.null(v)) v else v }
+  diff <- cles[vapply(cles, function(k) !identical(norm(meta_existant[[k]]), norm(config_courante[[k]])), logical(1))]
+  if(length(diff) == 0) return(list(ok = TRUE, differences = character(0), message = NULL))
+  det <- vapply(diff, function(k) sprintf("%s : magasin = %s ; courant = %s", k, paste(unlist(meta_existant[[k]]), collapse = ","), paste(unlist(config_courante[[k]]), collapse = ",")), character(1))
+  list(ok = FALSE, differences = diff,
+       message = sprintf("magasin partagé %s (%s/_meta.yaml) : paramètres en écart avec la config courante — %s. Issues : (1) régénérer le magasin avec %s <- TRUE — ATTENTION, il sert TOUS les profils ; (2) surcharger son chemin pour ce seul profil (CHEMINS_SURCHARGES$%s en config)%s.",
+                         magasin, dossier, paste(det, collapse = " ; "), DRAPEAUX_MAGASINS[[magasin]], magasin,
+                         if(magasin == "catalogue" && any(diff %in% c("ANS_HISTORIQUE", "TYPES_ETBS_LONGS"))) " ; (3) aligner ANS_HISTORIQUE / TYPES_ETBS_LONGS de la config sur la décision de périmètre du catalogue" else ""))
+}
+
+# --- I2. Livrable unique par campagne : union de schémas, familles de colonnes, revue ----------
+# Modèle de schéma = union (bind_rows) des tibbles vides ; harmoniser() aligne un tibble sur le modèle (colonnes
+# manquantes = NA typés, ordre du modèle, colonne branche en tête).
+# Type commun d'une colonne présente dans plusieurs branches : identique -> conservé ; integer/numeric -> numeric ;
+# sinon character (ex. `age` : entier chez les courts, classe lt_18/ge_18 chez les longs -> texte, documenté au méta).
+type_commun <- function(classes){
+  cl <- unique(classes)
+  if(length(cl) == 1) return(cl)
+  if(all(cl %in% c("integer", "numeric"))) return("numeric")
+  "character"
+}
+coercer <- function(x, type) switch(type, character = as.character(x), numeric = as.numeric(x), integer = as.integer(x), logical = as.logical(x), x)
+modele_schema <- function(...){
+  frames <- list(...); noms <- unique(unlist(lapply(frames, names)))
+  types <- vapply(noms, function(n) type_commun(unlist(lapply(frames, function(d) if(n %in% names(d)) class(d[[n]])[1]))), character(1))
+  m <- tibble::as_tibble(stats::setNames(lapply(noms, function(n){ d <- frames[[which(vapply(frames, function(x) n %in% names(x), logical(1)))[1]]]; coercer(d[[n]][0], types[[n]]) }), noms))
+  m[, c("branche", setdiff(names(m), "branche")), drop = FALSE]
+}
+harmoniser <- function(d, modele){
+  for(n in intersect(names(d), names(modele))){ t_m <- class(modele[[n]])[1]; if(class(d[[n]])[1] != t_m) d[[n]] <- coercer(d[[n]], t_m) }
+  h <- dplyr::bind_rows(modele, d); h[, names(modele), drop = FALSE]
+}
+FAMILLES_COLONNES <- list(
+  identite_livrable = c("branche", "population", "campagne"),
+  profil_clinique   = c("sexe", "age", "cage", "cage2"),
+  contexte_sejour   = c("mode_hospit", "ghm2", "racine", "duree", "nbda", "type_unite", "prep_sc"),
+  diagnostics       = c("diag2", "graine", "diagnostic_associes", "nb_das", "diabete", "diabete_scenario", "hta", "hta_scenario"),
+  habillage_admin   = c("mode_entree", "mode_sortie", "mdp"),
+  typologie         = c("lettre", "DPEC", "TPEC"),
+  tracabilite       = c("id_profil", "id_scenario", "hash_das", "variante", "origine_profil", "id_selection", "variante_debut"),
+  audit             = c("poids", "source_ref", "nb_cible", "nb_variantes_demandees", "hash_exclus"))
+familles_colonnes <- function(noms){
+  f <- lapply(FAMILLES_COLONNES, function(cols) cols[cols %in% noms]); f <- f[lengths(f) > 0]
+  reste <- setdiff(noms, unlist(FAMILLES_COLONNES)); if(length(reste)) f$autres <- reste
+  f
+}
+# Échantillon de revue tiré du livrable unifié : n_courts = round(n × part_courts) lignes de branche "court",
+# le reste de branche "long" ; round-robin par CMD dans chaque branche (echantillonner_revue).
+echantillonner_livrable <- function(df, n, part_courts, seed){
+  n_c <- as.integer(round(n * part_courts)); n_l <- as.integer(n) - n_c
+  set.seed(seed);     ec <- echantillonner_revue(df[df$branche == "court", , drop = FALSE] |> dplyr::mutate(cmd = substr(ghm2, 1, 2)), n_c)
+  set.seed(seed + 1); el <- echantillonner_revue(df[df$branche == "long",  , drop = FALSE] |> dplyr::mutate(cmd = substr(ghm2, 1, 2)), n_l)
+  dplyr::bind_rows(ec, el)
+}
+
+# --- I3. Réorganisation SUR PLACE de l'ancien results/ (plan pur) ----------------------------------
+# inventaire : data.frame(chemin = chemin relatif à _a_reorganiser/, mtime, taille). Retourne un data.frame
+# (source, categorie ∈ reconnu / ignore / inconnu, destination (relative à PATH_RESULTS), action, motif) ; RIEN n'est
+# déplacé ici. Anciens noms de refs -> ref_* ; doublons (datés, ou inter-profils exports/exports_diagnostic) : le plus
+# récent retenu, les autres « ignoré (doublon) » ; registre -> production/50_registre/ seulement si migrer_registre.
+ANCIENS_NOMS_REFS <- c(ref_das_chronique = "ref_das_chronique", distribution_e660 = "ref_distribution_e660", ref_das_aigu = "ref_das_aigu",
+                       ref_nb_chroniques = "ref_nb_chroniques", ref_comp_diabete = "ref_comp_diabete", pivots_courts = "ref_pivots_courts",
+                       v_admin_courts = "ref_v_admin_courts", v_admin_longs = "ref_v_admin_longs",
+                       referentiel_substitution_imprecis = "ref_substitution_imprecis", referentiel_paires_chroniques = "ref_paires_chroniques")
+planifier_reorganisation <- function(inventaire, migrer_registre = FALSE){
+  stopifnot(all(c("chemin", "mtime") %in% names(inventaire)))
+  inv <- inventaire[order(inventaire$chemin, method = "radix"), , drop = FALSE]   # ordre C (déterministe, indépendant de la locale)
+  n <- nrow(inv); cat_ <- rep("inconnu", n); dest <- rep(NA_character_, n); action <- rep("arbitrage humain", n); motif <- rep("non reconnu : à arbitrer, jamais déplacé", n)
+  ch <- inv$chemin; base <- basename(ch); dir1 <- sub("/.*$", "", ch)
+  profil_de <- function(d) ifelse(d == "exports", "production", ifelse(d == "exports_diagnostic", "diagnostic", NA_character_))
+  est_export <- grepl("^exports(_diagnostic)?/", ch)
+  reste <- ifelse(est_export, sub("^exports(_diagnostic)?/", "", ch), NA_character_)
+  poser <- function(i, categorie, destination, act, mot){ cat_[i] <<- categorie; dest[i] <<- destination; action[i] <<- act; motif[i] <<- mot }
+  for(i in seq_len(n)){
+    if(grepl("^partiels/catalogue_partiel_.*\\.parquet$", ch[i])){ poser(i, "reconnu", "00_partiels/" %+% base[i], "copier", "partiel"); next }
+    if(ch[i] == "partiels/partiels_meta.yaml"){ poser(i, "reconnu", "00_partiels/_meta.yaml", "convertir méta", "méta des partiels (clés bloquantes reprises)"); next }
+    if(grepl("\\.tmp$", ch[i])){ poser(i, "ignore", NA, "ignorer", "fichier temporaire"); next }
+    if(!est_export[i]) next
+    r <- reste[i]; b <- base[i]; nom_sans_ext <- sub("\\.parquet$", "", b)
+    if(!grepl("/", r) && grepl("\\.parquet$", b) && nom_sans_ext %in% names(ANCIENS_NOMS_REFS)){ poser(i, "reconnu", "10_references/" %+% ANCIENS_NOMS_REFS[[nom_sans_ext]] %+% ".parquet", "copier + renommer", "référence (ancien nom -> ref_*)"); next }
+    if(grepl("^catalogue_longs_seuil/part_[A-Z]\\.parquet$", r)){ poser(i, "reconnu", "20_catalogue/catalogue_longs_seuil/" %+% b, "copier", "part du catalogue"); next }
+    if(r == "catalogue_longs_seuil/_sidecar.yaml"){ poser(i, "reconnu", "20_catalogue/catalogue_longs_seuil/_meta.yaml", "convertir méta", "sidecar du catalogue -> _meta.yaml (+ clés du magasin depuis catalogue_longs_seuil_meta.yaml)"); next }
+    if(r == "catalogue_longs_seuil_meta.yaml"){ poser(i, "reconnu", "20_catalogue/catalogue_longs_seuil_meta.yaml", "copier", "méta du catalogue"); next }
+    if(r == "catalogue_longs_seuil.parquet"){ poser(i, "reconnu", "20_catalogue/catalogue_longs_seuil.parquet", "copier", "catalogue monofichier (non partitionné)"); next }
+    if(r == "catalogue_longs_seuil.parquet.ancien"){ poser(i, "ignore", NA, "ignorer", "monofichier .ancien (les parts font foi)"); next }
+    if(grepl("^chunks/courts_chunk_[0-9]{4}\\.parquet$", r)){ poser(i, "reconnu", "30_courts/chunks/" %+% b, "copier", "chunk courts"); next }
+    if(r == "chunks/courts_chunks_meta.yaml"){ poser(i, "reconnu", "30_courts/chunks/courts_chunks_meta.yaml", "copier", "sidecar des chunks courts"); next }
+    if(grepl("^scenarios_courts_v8_[0-9]{8}\\.parquet$", r)){ poser(i, "reconnu", "30_courts/scenarios_courts.parquet", "copier + dé-dater", "cache courts (méta reconstruit avec la date d'origine)"); next }
+    if(r %in% c("diagnostic_apports.csv", "recouvrement.csv")){ poser(i, "reconnu", "90_diagnostics/" %+% b, "copier", "diagnostic partagé"); next }
+    if(r == "diagnostic_memoire.csv"){ poser(i, "reconnu", "90_diagnostics/diagnostic_memoire_" %+% profil_de(dir1[i]) %+% ".csv", "copier + renommer", "diagnostic mémoire par profil"); next }
+    if(grepl("^registre_tirages/registre_.*\\.parquet$", r)){
+      if(dir1[i] != "exports") poser(i, "ignore", NA, "ignorer", "registre hors production (exports_diagnostic)")
+      else if(migrer_registre) poser(i, "reconnu", "production/50_registre/registre_tirages/" %+% b, "copier", "registre (migrer_registre = TRUE : les campagnes passées comptent)")
+      else poser(i, "ignore", NA, "ignorer", "registre non migré (migrer_registre = FALSE : registre vierge)")
+      next
+    }
+    if(grepl("^(selection_longs|chunks/longs_chunk_|chunks/[^/]+/|habille/|scenarios_longs_tirage_v8_|rapport_v8_|rapport_extraction_v8_|echantillon_revue|top30_das_par_cmd|meta_tirage\\.yaml|selection_longs_effectifs|chunks/longs_chunks_meta)", r)){
+      poser(i, "ignore", NA, "ignorer", "transitoire ou ancienne génération (sélection, chunks longs, habillé, corpus, rapports, annexes)"); next
+    }
+  }
+  plan <- data.frame(source = ch, categorie = cat_, destination = dest, action = action, motif = motif, mtime = inv$mtime, stringsAsFactors = FALSE)
+  # doublons de destination (datés ou inter-profils) : le plus récent retenu, les autres ignorés
+  rec <- which(plan$categorie == "reconnu")
+  for(d in unique(plan$destination[rec])){
+    idx <- rec[plan$destination[rec] == d]
+    if(length(idx) > 1){
+      # le plus récent retenu ; à égalité de date, exports/ (production) prime sur exports_diagnostic/, puis l'ordre des noms
+      prio <- order(-as.numeric(plan$mtime[idx]), !grepl("^exports/", plan$source[idx]), plan$source[idx], method = "radix")
+      garde <- idx[prio[1]]
+      for(k in setdiff(idx, garde)){ plan$categorie[k] <- "ignore"; plan$action[k] <- "ignorer"; plan$motif[k] <- "doublon : plus ancien que " %+% plan$source[garde] %+% " (le plus récent est retenu)"; plan$destination[k] <- NA }
+    }
+  }
+  plan
+}
+imprimer_plan_reorganisation <- function(plan){
+  for(cat_ in c("reconnu", "ignore", "inconnu")){
+    p <- plan[plan$categorie == cat_, , drop = FALSE]
+    cat(sprintf("\n== %s (%d) ==\n", c(reconnu = "1. RECONNUS -> destination", ignore = "2. IGNORÉS volontairement", inconnu = "3. NON RECONNUS (arbitrage humain)")[[cat_]], nrow(p)))
+    if(nrow(p) == 0){ cat("   (aucun)\n"); next }
+    for(i in seq_len(nrow(p))) cat(sprintf("   %-60s %s%s\n", p$source[i], if(cat_ == "reconnu") "-> " %+% p$destination[i] %+% "  [" %+% p$action[i] %+% "]" else p$motif[i], if(cat_ == "reconnu") "" else ""))
+  }
+  invisible(plan)
 }

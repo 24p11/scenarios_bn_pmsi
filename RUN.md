@@ -23,16 +23,17 @@ actionnable (« lancez etape_X d'abord », « fichier Y manquant ») si elle est
 
 | Étape | Famille | Produit | Relancer quand | Cache |
 |---|---|---|---|---|
-| `etape_prep_data(ans = NULL)` | extraction (base) | tables temporaires `prep_data_<an>` (et `prep_das_chro_<AN_REF>` si une ref chronique manque) ; `partiels_meta.yaml` | à chaque nouvelle session avant refs / partiels (les tables temporaires disparaissent à la déconnexion) ; `ans` force des années | plan = partiels et refs manquants ; garde-fou `partiels_meta.yaml` (K, NBDA_MAX, DUREE_LONGS, PIVOTS_LONGS) |
-| `etape_refs(forcer = FORCER_REFS)` | extraction (base) | 10 refs parquet dans `EXPORTS_DIR` (dont `distribution_e660`, `pivots_courts`, `v_admin_*`) | après changement d'`AN_REF`, des seuils de refs, de `CONVERSION_E669` (`forcer = TRUE`) | ref sautée si son parquet existe |
-| `etape_partiels_longs(iterations = NULL)` | extraction (base) | `PARTIELS_DIR/catalogue_partiel_<etbs>_<an>.parquet` manquants ; `diagnostic_apports.csv` ; `recouvrement.csv` | ajout d'années / de catégories au plan ; `iterations = data.frame(etbs, an)` pour une itération isolée (supprimer son partiel pour le recalculer) | partiel sauté s'il existe ; partiels en codes bruts, partagés entre profils |
-| `etape_catalogue(ans = ANS_HISTORIQUE, etbs = TYPES_ETBS_LONGS)` | extraction (**sans base**) | `catalogue_longs_seuil.parquet` + `_meta.yaml` (trace du périmètre passé), `rapport_extraction_v8_<date>.txt`, `diagnostic_memoire.csv` | **décision de périmètre** : relancer avec les `ans`/`etbs` retenus. **Le catalogue de production (21,6 M lignes) existe : ne JAMAIS le reconstruire sur ce périmètre** | agrégation deux étages hors RAM depuis les partiels du périmètre ; conversion E669 puis seuil |
-| `etape_repartitionner_catalogue()` | aval (**sans base**) | `catalogue_longs_seuil/part_<L>.parquet` (par lettre de DP, + `lettre`, `DPEC`, `TPEC`) + `_sidecar.yaml` ; monofichier renommé `.ancien` | une fois par catalogue, et après changement de version de `typologie_sejours.yaml` (le garde-fou l'impose) | idempotente ; lecture par morceaux de lettres |
-| `etape_tirage_courts(chunk_range = NULL)` | tirage | `chunks/courts_chunk_*.parquet` (+ sidecar `courts_chunks_meta.yaml`), `scenarios_courts_v8_<date>.parquet` | une fois par jeu de refs (AN_REF uniquement) | chunks présents sautés (reprise bit à bit, mêmes paramètres de découpage exigés) |
-| `etape_selection_longs(budget = NB_CRH_CIBLE, mode = MODE_SELECTION, k = NB_LIGNES_PAR_DP)` | tirage | **quota_dp_fixe** (production) : `selection_longs/<population>/part_<L>.parquet`, `selection_longs_effectifs.csv`, `selection_longs_stats_dp.csv`, `meta_tirage.yaml` par population + global ; quota_dp (diagnostic) : `selection_longs.parquet` | changement de budget / mode / k : vider d'abord chunks + sélection + méta (garde-fou `meta_tirage.yaml`) | sélection relue si présente, jamais re-tirée ; `catalogue_complet` retiré (stop si budget < catalogue) |
-| `etape_tirage_das_longs(chunk_range = NULL, populations = …)` | tirage | `chunks/<population>/longs_chunk_*.parquet` (+ sidecar) ; rien en RAM (fixe) | reprise : relancer telle quelle ; **parallélisme** : une session par plage `chunk_range = c(i, j)` disjointe, même dossier | chunks présents sautés ; écriture atomique (.tmp) ; `ref_das_aigu` indexé une fois ; débit imprimé par chunk |
-| `etape_habillage_longs(populations = …)` | tirage | `habille/<population>/lot_*.parquet` (jointure `v_admin_longs.parquet` relu par lots de `LOT_CHUNKS_FINALISATION` chunks, DPEC/TPEC recalculés) | après un jeu de chunks complet (stop sinon) | réécrit les lots |
-| `etape_finalisation(fusionner = NULL, populations = …)` | tirage | `scenarios_longs_tirage_v8_<CAMPAGNE>/<population>/part_*.parquet` + `_meta.yaml` (un dossier par campagne ; garde-fou : dossier d'une autre campagne ⇒ stop, même campagne ⇒ reprise) (+ monofichier fusionné si volume ≤ `SEUIL_EXPORT_MONOFICHIER` ou `fusionner = TRUE`), `rapport_v8_<date>.txt` (réalisé vs cible, doublons éliminés, manque à gagner), `echantillon_revue.csv`, `top30_das_par_cmd.csv` | après habillage ; relecture des lots en flux, contrôles agrégés par lot | — |
+| `etape_prep_data(ans = NULL)` | extraction (base) | tables temporaires `prep_data_<an>` (et `prep_das_chro_<AN_REF>` si une ref chronique manque) ; `00_partiels/_meta.yaml` | à chaque nouvelle session avant refs / partiels (les tables temporaires disparaissent à la déconnexion) ; `ans` force des années | plan = partiels et refs manquants ; garde du magasin `00_partiels` (K, NBDA_MAX, DUREE_LONGS, PIVOTS_LONGS ; `FORCER_PARTIELS`) |
+| `etape_refs(forcer = FORCER_REFS)` | extraction (base) | 10 `ref_*.parquet` + `_meta.yaml` dans `10_references/` **[partagé]** | après changement d'`AN_REF`, des seuils de refs, de `CONVERSION_E669` (`forcer = TRUE`, seul moyen de régénérer un magasin en écart) | ref sautée si son parquet existe ; garde du magasin à chaque chargement |
+| `etape_partiels_longs(iterations = NULL)` | extraction (base) | `00_partiels/catalogue_partiel_<etbs>_<an>.parquet` manquants **[partagé]** ; `90_diagnostics/diagnostic_apports.csv`, `recouvrement.csv` | ajout d'années / de catégories au plan ; `iterations = data.frame(etbs, an)` pour une itération isolée (supprimer son partiel pour le recalculer) | partiel sauté s'il existe ; partiels en codes bruts |
+| `etape_catalogue(ans = ANS_HISTORIQUE, etbs = TYPES_ETBS_LONGS)` | extraction (**sans base**) | `20_catalogue/catalogue_longs_seuil.parquet` + `catalogue_longs_seuil_meta.yaml` (trace du périmètre passé), `rapport_extraction.txt`, `90_diagnostics/diagnostic_memoire_<profil>.csv` | **décision de périmètre** : relancer avec les `ans`/`etbs` retenus. Magasin existant avec les mêmes paramètres ⇒ **sauté** ; en écart ⇒ stop sauf `FORCER_CATALOGUE`. **Le catalogue de production (21,6 M lignes) existe : ne JAMAIS le reconstruire sur ce périmètre** | agrégation deux étages hors RAM depuis les partiels du périmètre ; conversion E669 puis seuil |
+| `etape_repartitionner_catalogue()` | aval (**sans base**) | `20_catalogue/catalogue_longs_seuil/part_<L>.parquet` (par lettre de DP, + `lettre`, `DPEC`, `TPEC`, `id_profil`) + `_meta.yaml` (clés du magasin + typologie + recette d'id) **[partagé]** ; monofichier renommé `.ancien` | une fois par catalogue, et après changement de version de `typologie_sejours.yaml` (le garde-fou l'impose) | idempotente ; lecture par morceaux de lettres |
+| `etape_tirage_courts(chunk_range = NULL)` | tirage | `30_courts/chunks/courts_chunk_*.parquet` (+ sidecar), `30_courts/scenarios_courts.parquet` + `_meta.yaml` **[partagé]** | une fois par jeu de refs (AN_REF uniquement) ; magasin en écart ⇒ `FORCER_COURTS` | chunks présents sautés (reprise bit à bit, mêmes paramètres de découpage exigés) |
+| `etape_selection_longs(budget = NB_CRH_CIBLE, mode = MODE_SELECTION, k = NB_LIGNES_PAR_DP)` | tirage | `<profil>/40_campagnes/<C>/selection/` : **quota_dp_fixe** (production) `<population>/part_<L>.parquet`, `selection_longs_effectifs.csv`, `selection_longs_stats_dp.csv`, `_meta.yaml` par population + global ; quota_dp (diagnostic) : `selection_longs.parquet` | changement de budget / mode / k : ouvrir une nouvelle campagne ou vider `40_campagnes/<C>/` (garde-fou `selection/_meta.yaml`) | sélection relue si présente, jamais re-tirée ; `catalogue_complet` retiré (stop si budget < catalogue) |
+| `etape_tirage_das_longs(chunk_range = NULL, populations = …)` | tirage | `40_campagnes/<C>/chunks/<population>/longs_chunk_*.parquet` (+ sidecar) ; rien en RAM (fixe) | reprise : relancer telle quelle ; **parallélisme** : une session par plage `chunk_range = c(i, j)` disjointe, même dossier | chunks présents sautés ; écriture atomique (.tmp) ; `ref_das_aigu` indexé une fois ; débit imprimé par chunk |
+| `etape_habillage_longs(populations = …)` | tirage | `40_campagnes/<C>/habille/<population>/lot_*.parquet` (jointure `ref_v_admin_longs.parquet` relu par lots de `LOT_CHUNKS_FINALISATION` chunks, DPEC/TPEC recalculés) | après un jeu de chunks complet (stop sinon) | réécrit les lots |
+| `etape_finalisation(fusionner = NULL, populations = …)` | tirage | **UN livrable** `<profil>/60_export_final/scenarios_<C>.parquet` + `scenarios_<C>_meta.yaml` (longs de toutes les populations ET courts embarqués, colonne `branche` en tête, union de schémas ; parts `scenarios_<C>/` au-delà de `SEUIL_MONOFICHIER`), `rapport_<C>.txt`, `echantillon_revue_<C>.csv`, `top30_das_par_cmd_<C>.csv` ; garde-fou : méta d'une autre campagne ⇒ stop, même campagne ⇒ réécriture idempotente | après habillage ; relancée sans lots habillés, reconstruit depuis les chunks | — |
+| `etape_reorganiser(dossier, mode = "plan" / "executer", migrer_registre = FALSE)` | outil (**sans base**) | mode plan : trois tables (reconnus → destination, ignorés, non reconnus), rien déplacé ; executer : copie de `_a_reorganiser/` vers l'arborescence par étapes, métas convertis, vérifications | une fois, au changement de répertoire de travail (procédure ci-dessous) | idempotente ; garde-fou : magasin différent déjà présent ⇒ stop |
 
 `memoire_session()` : objets par taille (Mo) dans globalenv, `ETAPES_ENV` et `CACHE_E669`, triés,
 puis `gc()`. Discipline : **Restart R avant chaque étape lourde** (le RSS de R ne redescend pas
@@ -48,30 +49,62 @@ partiels → catalogue ; `Rscript tirage.R` = courts → sélection → DAS long
 habillage → finalisation. Comportement identique à l'ancien flux monolithique (identité bit à
 bit prouvée par `tests/test_chaines_sqlite.R`).
 
-Arborescence : `results/partiels/` (partagé entre profils), `results/exports_diagnostic/` ou
-`results/exports/` (par profil, avec `chunks/`). Aucune table n'est persistée en base.
+Aucune table n'est persistée en base.
 
-## Architecture des fichiers d'une campagne
+## Architecture des fichiers : arborescence par étapes, partage maximal
 
-Sous `EXPORTS_DIR` (= `exports/` en production, `exports_diagnostic/` en diagnostic), deux familles :
+Tout vit sous `PATH_RESULTS` (posé dans `config_locale.R` ; défaut `<racine>/results/`). Doctrine du
+partage : **est partagé tout objet qui ne dépend que de paramètres, pas du profil** ; chaque magasin
+partagé porte un `_meta.yaml` avec les paramètres qui le définissent, comparé à la config **à chaque
+chargement** (`verifier_magasin`) : divergence ⇒ stop nommant les clés en écart et les issues (régénérer
+avec le drapeau `FORCER_*` — ATTENTION, il sert tous les profils — ou détourner le chemin de ce magasin
+pour ce seul profil via `CHEMINS_SURCHARGES`, soupape non utilisée par défaut). Tous les chemins dérivent
+d'un bloc unique de `config.R` (accesseurs `DIR_*()` / `FICHIER_*()` dans `etapes.R`).
 
-| Famille | Fichiers | Écrit par | Lu par | Durée de vie |
-|---|---|---|---|---|
-| **PERMANENT** | `catalogue_longs_seuil/part_<L>.parquet` + `_sidecar.yaml` (+ `.ancien`) | `etape_repartitionner_catalogue()` | sélection, rétro-inscription, rapports | toute la vie du corpus (refait seulement si typologie ou recette d'id change) |
-| PERMANENT | les 10 refs (`ref_*`, `pivots_courts`, `v_admin_*`, `distribution_e660`, `referentiel_*`) | `etape_refs()` | courts, tirage des DAS, habillage | tant que `AN_REF`, `SEUIL_REF_*`, `CONVERSION_E669` ne changent pas |
-| PERMANENT | `registre_tirages/registre_<Cn>.parquet` | `etape_registre_campagne()` (fin de finalisation), `etape_retro_inscrire()` | sélection sous registre, rapports | **append-only, ne se vide JAMAIS** |
-| PERMANENT | `scenarios_longs_tirage_v8_<Cn>/<population>/part_*.parquet` + `_meta.yaml` | `etape_finalisation()` | livraison | un dossier PAR CAMPAGNE, jamais écrasé par une autre (garde-fou) |
-| PERMANENT | `scenarios_courts_v8_<date>.parquet` | `etape_tirage_courts()` | finalisation (fichier du jour, sinon le plus récent, annoncé) | tant que les refs courts ne changent pas |
-| **PAR CAMPAGNE** | `selection_longs/<population>/`, `meta_tirage.yaml` | `etape_selection_longs()` | tirage, habillage, registre | vidés à l'ouverture de la campagne suivante |
-| PAR CAMPAGNE | `chunks/<population>/longs_chunk_*.parquet` + sidecar | `etape_tirage_das_longs()` | habillage, registre | idem |
-| PAR CAMPAGNE | `habille/<population>/lot_*.parquet` | `etape_habillage_longs()` | finalisation | idem (réécrits à chaque habillage) |
-| PAR CAMPAGNE | `rapport_v8_<date>.txt`, `echantillon_revue.csv`, `top30_das_par_cmd.csv` | finalisation | revue | écrasés à chaque finalisation |
+```
+<PATH_RESULTS>/
+  00_partiels/                     cache d'extraction + _meta.yaml (clés bloquantes)           [PARTAGÉ]
+  10_references/                   les 10 ref_*.parquet + _meta.yaml (6 clés ex-Q13)          [PARTAGÉ]
+  20_catalogue/                    catalogue_longs_seuil/ (parts + _meta.yaml : périmètre, seuil,
+                                   conversion, clés amont, typologie, recette id) ; monofichier
+                                   transitoire + méta ; rapport_extraction.txt                  [PARTAGÉ]
+  30_courts/                       chunks/ + scenarios_courts.parquet + _meta.yaml             [PARTAGÉ]
+  90_diagnostics/                  diagnostic_apports.csv, recouvrement.csv [partagés] ;
+                                   diagnostic_memoire_<profil>.csv
+  <profil>/                        production/ ou diagnostic/
+    40_campagnes/<CAMPAGNE>/       selection/ (+ _meta.yaml), chunks/, habille/ (transitoires)
+    50_registre/registre_tirages/  registre_<C>.parquet (permanent, JAMAIS vidé)
+    60_export_final/               scenarios_<C>.parquet + scenarios_<C>_meta.yaml,
+                                   rapport_<C>.txt, echantillon_revue_<C>.csv, top30_das_par_cmd_<C>.csv
+```
 
-**Pourquoi deux répertoires d'exports** : `exports_diagnostic/` et `exports/` = un par profil, jamais
-mélangés. Se migre d'un profil à l'autre : le catalogue et ses refs (condition Q13, chunk de migration
-de `RUN_aval.Rmd`). Ne se migre PAS : les sorties de tirage (courts, sélection, chunks, habillé, corpus),
-qui se **refont** sous le profil cible — étapes rapides et sans base ; le message « courts absent »
-d'`etape_finalisation` le rappelle (trois branches : refaire, ne pas copier, refs).
+Règle de nommage : **nom stable, date dans le méta** (aucun nom daté ; la date vit dans les `_meta.yaml`
+ou en première ligne des `.txt`). Convention : `_meta.yaml` colocalisé dans chaque magasin / dossier,
+`<objet>_meta.yaml` à côté d'un fichier. Deux profils sur le même `PATH_RESULTS` : le second réutilise
+partiels, refs, catalogue et courts sans recalcul. Le registre n'existe en pratique que côté production
+(`REGISTRE_ACTIF <- FALSE` en diagnostic). Migration inter-profils : sans objet (retirée).
+
+## Changement de répertoire de travail (réorganisation SUR PLACE d'un ancien `results/`)
+
+1. `config_locale.R` : poser `PATH_RESULTS <- "<nouveau répertoire>/"` (vide au départ), Restart R.
+2. À la main : `mkdir <PATH_RESULTS>/_a_reorganiser` puis `cp -r` des TROIS dossiers de l'ancien
+   `results/` — `partiels/`, `exports/`, `exports_diagnostic/` — dedans (rien d'autre ; l'ancien
+   répertoire n'est JAMAIS touché par le code).
+3. `etape_reorganiser()` (mode `plan`, défaut) : NE DÉPLACE RIEN ; imprime trois tables — (1) RECONNUS →
+   destination et nouveau nom (partiels → `00_partiels/` ; dix refs, anciens noms → `ref_*` →
+   `10_references/` avec méta reconstruit ; parts + sidecar du catalogue → `20_catalogue/` ; cache
+   courts → `30_courts/` dé-daté ; apports / recouvrement → `90_diagnostics/` ; registre →
+   `production/50_registre/` seulement si `migrer_registre = TRUE`) ; doublons datés ou inter-profils
+   du même export : le plus récent retenu, les autres listés ignorés ; (2) IGNORÉS volontairement
+   (sélections, chunks longs, habillés, corpus, rapports, annexes) ; (3) NON RECONNUS — à arbitrer,
+   jamais déplacés, jamais silencieux.
+4. Lire les trois tables ; décider `migrer_registre` (TRUE = les campagnes passées comptent ; FALSE =
+   registre vierge — décision liée au verdict de la revue clinique).
+5. `etape_reorganiser(mode = "executer", migrer_registre = …)` : copie depuis `_a_reorganiser/`
+   (intact), métas convertis, vérifications imprimées (lignes du catalogue == méta, partiels, dix refs,
+   registre) ; idempotente ; magasin différent déjà présent ⇒ stop.
+6. `etat_pipeline()` de contrôle, puis suppression manuelle de `_a_reorganiser/`.
+Chunks dédiés dans `RUN_aval.Rmd` §1 (plan, puis executer derrière `JE_CONFIRME_REORGANISATION`).
 
 ---
 
@@ -85,7 +118,8 @@ Critère : aucune erreur SQL (`ROW_NUMBER()` / `COUNT() OVER` sont le dialecte d
 
 ## Étape 2 — séjours courts (une année : AN_REF)
 
-`etape_refs()` (si les refs manquent) puis `etape_tirage_courts()`. Produit `scenarios_courts_v8_<date>.parquet`.
+`etape_refs()` (si les refs manquent) puis `etape_tirage_courts()`. Produit `30_courts/scenarios_courts.parquet` + `_meta.yaml`
+(magasin partagé : embarqué dans chaque livrable).
 Critères : chunks courts complets (`etat_pipeline()`), export présent. Les contrôles §8.2 des
 courts sont repris dans le rapport de `etape_finalisation()`.
 
@@ -99,17 +133,18 @@ courts sont repris dans le rapport de `etape_finalisation()`.
    l'étape à réduire ; `COLLECT_PAR_MORCEAUX <- TRUE` par défaut).
 2. **Refs / intermédiaires** : `etape_refs()` (10 refs, dont `distribution_e660.parquet`).
 3. **DÉCISION de périmètre** : `etape_catalogue(ans = 22:26, etbs = "CHR/U")` par exemple. Le
-   méta enregistre les `ans`/`etbs` passés ; `rapport_extraction_v8_<date>.txt` mesure l'impact de
+   méta enregistre les `ans`/`etbs` passés (clé du magasin : la config doit s'y aligner pour le charger) ; `20_catalogue/rapport_extraction.txt` mesure l'impact de
    la conversion E669 (fusions, profils entrés au catalogue : écart de volumétrie assumé par
    doctrine). C'est le « fichier parquet sans les DAS ».
 4. **Sélection** : `etape_selection_longs(budget = 1000, mode = "quota_dp")` (diagnostic) ou
    `etape_selection_longs()` (production : `catalogue_complet`, 10 000 000 ; palier 100 000 conseillé
-   d'abord). Changer de budget/mode impose de vider chunks + sélection + `meta_tirage.yaml`.
+   d'abord). Changer de budget/mode impose d'ouvrir une autre campagne ou de vider `40_campagnes/<C>/`.
 5. **Tirage DAS par chunks** : `etape_tirage_das_longs()` (reprise : relancer telle quelle).
 6. **Habillage admin** : `etape_habillage_longs()`.
-7. **Fichiers définitifs** : `etape_finalisation()` → `scenarios_longs_tirage_v8_<date>.parquet`,
-   rapport (critère : « TOTAL anomalies = 0 », dont ^E669 résiduels), `echantillon_revue.csv`
-   (50 scénarios, revue humaine DIM avant production), `top30_das_par_cmd.csv`.
+7. **Livrable** : `etape_finalisation()` → `<profil>/60_export_final/scenarios_<C>.parquet` (longs + courts,
+   `branche` en tête) + méta, `rapport_<C>.txt` (critère : « TOTAL anomalies = 0 », dont ^E669 résiduels),
+   `echantillon_revue_<C>.csv` (`NB_REVUE` scénarios des deux branches, revue humaine DIM avant production),
+   `top30_das_par_cmd_<C>.csv`.
 
 ## Séquence PRODUCTION (campagnes itératives, mode `quota_dp_fixe`)
 
@@ -124,10 +159,8 @@ inférieur (doublons éliminés, chiffrés au rapport).
 1b. **Contrôle de couverture avant / après seuil** (chunk `couverture_dp` de RUN.Rmd) : DP distincts
    des partiels agrégés (`agreger_partiels` sur `nom_partiel(...)`, chemins absolus, conversion E669
    appliquée avant comparaison) vs DP du catalogue ; liste des DP perdus au seuil triée par effectif.
-1c. **Migration inter-profils** (chunk `migration_catalogue` de RUN_aval.Rmd) : si le catalogue est
-   absent d'`EXPORTS_DIR` mais présent dans un autre `exports*/` du même `PATH_RESULTS`, copie proposée
-   (catalogue + méta + refs) derrière confirmation, condition Q13 affichée (`condition_q13`,
-   `localiser_catalogue`, `fichiers_migration_catalogue` : helpers purs).
+1c. (La migration inter-profils est retirée : les magasins `10_references/` et `20_catalogue/` sont
+   partagés entre profils et gardés par leur `_meta.yaml`.)
 2. **Sélection de campagne** : `etape_selection_longs()` (`NB_CRH_CIBLE`, `NB_LIGNES_PAR_DP = 1`) :
    par population (`POPULATIONS`, budget au prorata des DP), k lignes distinctes par DP au poids
    sans remise, variantes déduites, plafonds `PLAFONDS_DPEC` par (DP × DPEC), planchers d'unités
@@ -168,36 +201,41 @@ inférieur (doublons éliminés, chiffrés au rapport).
    Plafonds DPEC = plafond du TOTAL de la classe par population, 1 représentant par DP prime (dépassement consigné).
 
 Passage diagnostic → production : éditer le bloc `production` de `config.R` (ANS_HISTORIQUE,
-TYPES_ETBS_LONGS) d'après apports + recouvrement, puis `SCENARIOS_PMSI_PROFIL=production` et les
-mêmes étapes ; les partiels sont réutilisés, seules les refs sont recalculées dans `exports/`
-(copie possible depuis `exports_diagnostic/` si `AN_REF`, `SEUIL_REF_*`, `CONVERSION_E669`,
-`BARE_E669_DEFAUT` sont identiques, sinon `etape_refs(forcer = TRUE)`).
+TYPES_ETBS_LONGS) d'après apports + recouvrement — aligné sur le périmètre du catalogue —, puis
+`SCENARIOS_PMSI_PROFIL=production` et les mêmes étapes sur le MÊME `PATH_RESULTS` : partiels, refs,
+catalogue et courts sont relus sans recalcul (magasins partagés) ; seuls `40_campagnes/`, `50_registre/`
+et `60_export_final/` sont propres au profil.
 
 ---
 
 ## Règles de cache
 
-- `results/partiels/` : dépend de `K_GRAINE_LONGS`, `NBDA_MAX`, `DUREE_LONGS`, `PIVOTS_LONGS` et de la
-  logique amont (clés bloquantes de `partiels_meta.yaml` ; `VERSION_SCRIPT` en avertissement) ;
-  **pas** de `SEUIL_PIVOT`, du périmètre d'années ni de `CONVERSION_E669` (partiels en codes bruts,
-  conversion à la ré-agrégation). Vider après tout changement de ces clés ou de `prep_data` /
-  `prep_scenarios2`. Partiels antérieurs au chantier mémoire : valides (équivalence prouvée).
-- Catalogue absent du dossier d'exports effectif : message à trois branches (chemin effectif cherché ;
-  s'il existe sous un autre profil, copiez-le via le chunk de migration de RUN_aval.Rmd — condition Q13 —,
-  sinon `etape_catalogue()`, extraction coûteuse). `diagnostic_memoire.csv` est écrit en fin
+- Magasins partagés (`00_partiels/`, `10_references/`, `20_catalogue/`, `30_courts/`) : `_meta.yaml` vérifié
+  à chaque chargement ; écart ⇒ stop nommant les clés, le drapeau `FORCER_*` (régénération : il sert TOUS
+  les profils) et la soupape `CHEMINS_SURCHARGES`.
+- `00_partiels/` : dépend de `K_GRAINE_LONGS`, `NBDA_MAX`, `DUREE_LONGS`, `PIVOTS_LONGS` et de la
+  logique amont (clés bloquantes ; `VERSION_SCRIPT` en avertissement) ; **pas** de `SEUIL_PIVOT`, du
+  périmètre d'années ni de `CONVERSION_E669` (partiels en codes bruts, conversion à la ré-agrégation).
+  `FORCER_PARTIELS` après tout changement de ces clés ou de `prep_data` / `prep_scenarios2`.
+- Catalogue absent du magasin `20_catalogue/` : message (lancez `etape_catalogue()` puis
+  `etape_repartitionner_catalogue()`). `diagnostic_memoire_<profil>.csv` est écrit en fin
   d'`etape_refs`, d'`etape_partiels_longs` et d'`etape_catalogue` (idempotent).
-- Refs (`exports*/`) : sautées si le parquet existe ; `etape_refs(forcer = TRUE)` après changement
+- `10_references/` : ref sautée si son parquet existe ; `etape_refs(forcer = TRUE)` après changement
   d'`AN_REF`, d'un `SEUIL_REF_*`, de `CONVERSION_E669` / `BARE_E669_DEFAUT` ou correction amont.
-- Chunks / sélection / `meta_tirage.yaml` : reprise après plantage telle quelle (identité bit à bit par
-  seed par chunk) ; à vider après changement de `MODE_SELECTION`, `NB_CRH_CIBLE`, `NB_LIGNES_PAR_DP`,
-  `QUOTA_MIN_PAR_UNITE`, `SEED`, de la version de typologie ou du catalogue (le garde-fou
-  `meta_tirage.yaml` le demande). Chunks par population dans `chunks/<population>/`.
-- Catalogue partitionné (`catalogue_longs_seuil/`) : sidecar avec version de typologie ET recette d'id
+- `20_catalogue/` : mêmes paramètres ⇒ `etape_catalogue()` sautée ; en écart (périmètre, seuil, conversion,
+  clés amont) ⇒ `FORCER_CATALOGUE` (parts, monofichier et `.ancien` supprimés, repartitionnement à relancer).
+  `30_courts/` : `FORCER_COURTS`.
+- `40_campagnes/<C>/` (sélection + `selection/_meta.yaml`, chunks, habillé) : reprise après plantage telle
+  quelle (identité bit à bit par seed par chunk) ; un dossier par campagne ; à vider après changement de
+  `MODE_SELECTION`, `NB_CRH_CIBLE`, `NB_LIGNES_PAR_DP`, `QUOTA_MIN_PAR_UNITE`, `SEED`, de la version de
+  typologie ou du catalogue (le garde-fou `selection/_meta.yaml` le demande).
+- Catalogue partitionné (`20_catalogue/catalogue_longs_seuil/`) : `_meta.yaml` avec version de typologie ET recette d'id
   (`id_v1`) ; changer l'une ou l'autre ⇒ supprimer le dossier, restaurer le `.ancien` en
   `catalogue_longs_seuil.parquet`, relancer `etape_repartitionner_catalogue()`, puis recalculer le registre
   par rétro-inscription de toutes les campagnes. À relancer une fois après le chantier campagnes (id_profil).
-- Registre des tirages (`registre_tirages/`) : append-only, ne se vide JAMAIS (stop si réécriture divergente) ;
-  nouvelle campagne = poser `CAMPAGNE`, Restart R, vider chunks + sélection + `meta_tirage.yaml` + `habille/`.
+- Registre des tirages (`<profil>/50_registre/registre_tirages/`) : append-only, ne se vide JAMAIS (stop si
+  réécriture divergente) ; nouvelle campagne = poser `CAMPAGNE`, Restart R (son dossier `40_campagnes/<C>/`
+  est neuf ; les dossiers des campagnes précédentes se vident par le chunk gardé).
   Campagne déjà inscrite = **close** (Q49 actée) : si la sélection présente sur disque porte la même campagne,
   `etape_selection_longs()` la relit sans rien tirer (relancer `tirage.R` après finalisation reste
   un no-op sûr) ; sinon stop explicite (« campagne close, ouvrez une nouvelle campagne — section 3 »). Aucun
@@ -209,10 +247,12 @@ mêmes étapes ; les partiels sont réutilisés, seules les refs sont recalculé
   direct à un dataset arrow dans les notebooks (le repli mock ne l'exporte pas). Lectures de produits d'étape
   dans les notebooks : `lire_si_present(chemin, produit_par)` / `dernier_fichier(dossier, motif)` — fichier absent
   = message « produit par <étape>, pas encore exécutée », jamais d'erreur R brute.
-- Corpus final : `scenarios_longs_tirage_v8_<CAMPAGNE>/` + `_meta.yaml` (campagne, date, populations, total) ; deux
-  campagnes le même jour = deux dossiers ; un dossier portant le `_meta.yaml` d'une autre campagne ⇒ stop.
-- Fichiers datés (`scenarios_courts_v8_<date>.parquet`, `rapport_v8_<date>.txt`, monofichier) : écrits au jour de la
-  session ; en lecture, le fichier du jour sinon le plus récent (`chemin_export_lecture`, annoncé « relu depuis … »).
+- Livrable : `<profil>/60_export_final/scenarios_<C>.parquet` + `scenarios_<C>_meta.yaml` (longs de toutes les
+  populations ET courts embarqués, `branche` en tête, union de schémas typée, familles de colonnes au méta ;
+  parts `scenarios_<C>/` au-delà de `SEUIL_MONOFICHIER`, lues par `lire_corpus_final`) ; un livrable par campagne,
+  jamais écrasé par une autre (méta d'une autre campagne ⇒ stop) ; même campagne ⇒ réécriture idempotente.
+- Nommage : aucun fichier daté (règle « nom stable, date dans le méta ») ; la résolution de fichiers datés
+  inter-sessions est retirée (sans objet).
 - Identifiants des séjours courts : recette `id_courts_v1` figée (sha256 des `PIVOTS_COURTS`, `id_profil` = `c` + 15 hex,
   `id_scenario` = `id_profil-variante`, `hash_das`) ; pas d'inscription au registre.
 - **Chunking dynamique** : la taille des chunks est calculée par les données,

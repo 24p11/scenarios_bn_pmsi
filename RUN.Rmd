@@ -89,34 +89,38 @@ Lecture des apports, du recouvrement et de la mémoire :
 
 ```{r apports}
 # Lectures robustes (lire_si_present) : fichier absent = message « produit par <étape> », jamais d'erreur R brute.
-apports <- lire_si_present(file.path(EXPORTS_DIR, "diagnostic_apports.csv"), "etape_partiels_longs()"); apports
+apports <- lire_si_present(FICHIER_APPORTS(), "etape_partiels_longs()"); apports   # 90_diagnostics/ [partagé]
 if (!is.null(apports)) plot(seq_len(nrow(apports)), cumsum(apports$nb_diag2_nouveaux), type = "b",
                             xlab = "itération (CHR/U 17..26 puis CH 17..26)", ylab = "diag2 nouveaux cumulés")
-recouvrement <- lire_si_present(file.path(EXPORTS_DIR, "recouvrement.csv"), "etape_partiels_longs()"); recouvrement
-memoire <- lire_si_present(file.path(EXPORTS_DIR, "diagnostic_memoire.csv"), "etape_refs() / etape_partiels_longs() / etape_catalogue()")   # écrit en fin de ces étapes
+recouvrement <- lire_si_present(FICHIER_RECOUVREMENT(), "etape_partiels_longs()"); recouvrement
+memoire <- lire_si_present(FICHIER_DIAG_MEMOIRE(), "etape_refs() / etape_partiels_longs() / etape_catalogue()")   # 90_diagnostics/diagnostic_memoire_<profil>.csv
 if (!is.null(memoire)) memoire[order(-memoire$pic_go), ][1:10, ]
 ```
 
 ## 3.2 DÉCISION de périmètre -> catalogue (sans base)
 
 Éditer `ans` et `etbs` d'après les apports et le recouvrement ; le méta du catalogue en garde
-la trace. Le rapport d'extraction mesure l'impact de la conversion E669.
+la trace. Le rapport d'extraction mesure l'impact de la conversion E669. Le catalogue est un
+**magasin partagé** (`20_catalogue/`) gardé par son `_meta.yaml` : un périmètre différent de la
+config est accepté à l'écriture (avertissement) mais le catalogue ne sera chargeable qu'avec
+`ANS_HISTORIQUE` / `TYPES_ETBS_LONGS` alignés sur cette décision ; un magasin existant avec d'autres
+paramètres exige `FORCER_CATALOGUE <- TRUE` (il sert tous les profils).
 
 ```{r catalogue}
 ANS_CHOISIES  <- ANS_HISTORIQUE        # <- À ÉDITER (ex. 22:26) ; défaut = périmètre du profil (démo : millésimes de la base)
 ETBS_CHOISIS  <- TYPES_ETBS_LONGS      # <- À ÉDITER (ex. "CHR/U")
 etape_catalogue(ans = ANS_CHOISIES, etbs = ETBS_CHOISIS)
-cat(lire_si_present(dernier_fichier(EXPORTS_DIR, "^rapport_extraction_v8_[0-9]{8}\\.txt$"), "etape_catalogue()", nom = "rapport_extraction_v8_<date>.txt"), sep = "\n")   # le plus récent
+cat(lire_si_present(FICHIER_RAPPORT_EXTRACTION(), "etape_catalogue()"), sep = "\n")   # 20_catalogue/rapport_extraction.txt (date en première ligne)
 ```
 
 Contrôle de couverture avant / après seuil : DP distincts des partiels agrégés (conversion E669
 appliquée avant comparaison) vs DP du catalogue ; liste des DP perdus au seuil, triée par effectif.
-Chemins absolus (`PARTIELS_DIR`, `EXPORTS_DIR`).
+Chemins absolus (`DIR_PARTIELS`, `DIR_REFERENCES`, magasins partagés).
 
 ```{r couverture_dp}
-fichiers <- file.path(PARTIELS_DIR, nom_partiel(rep(ETBS_CHOISIS, each = length(ANS_CHOISIES)), rep(ANS_CHOISIES, times = length(ETBS_CHOISIS))))
+fichiers <- file.path(DIR_PARTIELS, nom_partiel(rep(ETBS_CHOISIS, each = length(ANS_CHOISIES)), rep(ANS_CHOISIES, times = length(ETBS_CHOISIS))))
 manquants <- basename(fichiers[!file.exists(fichiers)])
-dist_e660 <- lire_si_present(file.path(EXPORTS_DIR, "distribution_e660.parquet"), "etape_refs()")
+dist_e660 <- lire_si_present(file.path(DIR_REFERENCES, nom_ref("ref_distribution_e660")), "etape_refs()")
 if (length(manquants)) cat("partiels absents :", paste(manquants, collapse = ", "), "— produits par etape_partiels_longs(), pas encore exécutée pour ce périmètre (voir etat_pipeline()).\n") else {
   piv <- agreger_partiels(fichiers, c("diag2", "cage", "sexe"), "n")
   if (CONVERSION_E669 && !is.null(dist_e660)) piv <- convertir_e669_comptes(piv, "diag2", c("cage", "sexe"), "n", dist_e660, BARE_E669_DEFAUT)
@@ -184,22 +188,22 @@ etat_pipeline()
 de DAS par classe d'âge conforme aux cibles ; revue humaine de `echantillon_revue.csv`.
 
 ```{r revue, demo=FALSE}
-revue <- lire_si_present(file.path(EXPORTS_DIR, "echantillon_revue.csv"), "etape_finalisation()"); if (!is.null(revue)) View(revue)   # csv2 détecté (write_excel_csv2)
-top30 <- lire_si_present(file.path(EXPORTS_DIR, "top30_das_par_cmd.csv"), "etape_finalisation()"); if (!is.null(top30)) View(top30)
+revue <- lire_si_present(FICHIER_REVUE(), "etape_finalisation()"); if (!is.null(revue)) View(revue)   # <profil>/60_export_final/echantillon_revue_<C>.csv
+top30 <- lire_si_present(FICHIER_TOP30(), "etape_finalisation()"); if (!is.null(top30)) View(top30)
 ```
 
 ## 3.7 Changement de budget / mode (geste destructeur, gardé)
 
-Changer le budget change `NB_VARIANTES` : le garde-fou `meta_tirage.yaml` refuse de mélanger des
-chunks tirés sous d'autres paramètres. Vider chunks + sélection + méta avant de rejouer 3.3-3.6.
+Changer le budget change `NB_VARIANTES` : le garde-fou `selection/_meta.yaml` refuse de mélanger des
+chunks tirés sous d'autres paramètres. Vider le dossier de campagne `40_campagnes/<CAMPAGNE>/`
+(sélection, chunks, habillé) avant de rejouer 3.3-3.6 — ou ouvrir une autre campagne.
 
 ```{r vider_chunks, demo=FALSE}
-# Ce que ce chunk touche (SUPPRIME) : chunks/ et la sélection (selection_longs.parquet, effectifs, meta_tirage.yaml).
-# Ce qu'il ne touche JAMAIS : registre_tirages/, les corpus scenarios_longs_tirage_v8_<Cn>/, le catalogue, les refs.
+# Ce que ce chunk touche (SUPPRIME) : <profil>/40_campagnes/<CAMPAGNE>/ (sélection, chunks longs, habillé) de la campagne courante.
+# Ce qu'il ne touche JAMAIS : 50_registre/, les livrables 60_export_final/, les magasins partagés (partiels, refs, catalogue, courts).
 JE_CONFIRME <- FALSE   # passer à TRUE en connaissance de cause
 if (JE_CONFIRME) {
-  unlink(CHUNKS_DIR, recursive = TRUE)
-  unlink(file.path(EXPORTS_DIR, c("selection_longs.parquet", "selection_longs_effectifs.csv", "meta_tirage.yaml")))
+  unlink(DIR_CAMPAGNE(), recursive = TRUE); cat("Vidé :", DIR_CAMPAGNE(), "\n")
 } else cat("Rien fait : passer JE_CONFIRME à TRUE d'abord.\n")
 ```
 
@@ -207,15 +211,20 @@ if (JE_CONFIRME) {
 
 # Règles de cache (mémo)
 
-- `results/partiels/` : partagé entre profils ; dépend de `K_GRAINE_LONGS`, `NBDA_MAX`,
-  `DUREE_LONGS`, `PIVOTS_LONGS` et de la logique amont (clés bloquantes de `partiels_meta.yaml`) ;
-  **pas** de `SEUIL_PIVOT`, du périmètre d'années ni de `CONVERSION_E669`. Partiels antérieurs
-  au chantier mémoire : valides.
-- Refs : sautées si le parquet existe ; `etape_refs(forcer = TRUE)` après changement d'`AN_REF`,
-  d'un `SEUIL_REF_*`, de `CONVERSION_E669` ou correction amont.
-- Chunks / sélection / `meta_tirage.yaml` : reprise telle quelle ; à vider après changement de
-  `MODE_SELECTION`, `NB_CRH_CIBLE`, `NB_LIGNES_PAR_DP`, `QUOTA_MIN_PAR_UNITE`, `SEED`, de la
-  version de typologie ou du catalogue. Chunks par population (`chunks/<population>/`).
+- Arborescence par étapes sous `PATH_RESULTS` : magasins **partagés** entre profils (`00_partiels/`,
+  `10_references/`, `20_catalogue/`, `30_courts/`, `90_diagnostics/`) et dossiers **par profil**
+  (`<profil>/40_campagnes/<C>/`, `50_registre/`, `60_export_final/`). Chaque magasin partagé porte un
+  `_meta.yaml` avec les paramètres qui le définissent, vérifié à chaque chargement : écart ⇒ stop
+  nommant les clés et les issues (régénérer avec `FORCER_*` — il sert tous les profils — ou détourner
+  son chemin pour ce profil via `CHEMINS_SURCHARGES`).
+- `00_partiels/` : clés bloquantes `K_GRAINE_LONGS`, `NBDA_MAX`, `DUREE_LONGS`, `PIVOTS_LONGS` ;
+  **pas** de `SEUIL_PIVOT`, du périmètre d'années ni de `CONVERSION_E669` (`FORCER_PARTIELS`).
+- `10_references/` : `AN_REF`, `SEUIL_REF_*`, `CONVERSION_E669`, `BARE_E669_DEFAUT` (`FORCER_REFS`).
+- `20_catalogue/` : périmètre + seuil + conversion + clés amont (+ typologie, recette d'id) ;
+  identique ⇒ sauté, en écart ⇒ `FORCER_CATALOGUE`. `30_courts/` : `AN_REF`, paramètres courts (`FORCER_COURTS`).
+- `40_campagnes/<C>/` (sélection, chunks, habillé, `selection/_meta.yaml`) : reprise telle quelle ; un
+  dossier par campagne, à vider après changement de `MODE_SELECTION`, `NB_CRH_CIBLE`,
+  `NB_LIGNES_PAR_DP`, `QUOTA_MIN_PAR_UNITE`, `SEED`, de la version de typologie ou du catalogue.
 - Hygiène mémoire : `memoire_session()` ; **Restart R avant chaque étape lourde** (le RSS de R
   ne redescend pas après `gc()` ; l'état utile est sur disque, `etat_pipeline()` réoriente).
 - Chunking dynamique : `taille_chunk(n) = max(CHUNK_SIZE_MIN, ceiling(n / NB_CHUNKS_MAX))`

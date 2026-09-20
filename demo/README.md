@@ -11,7 +11,7 @@
 ```sh
 Rscript demo/creer_base_demo.R    # 1. construit demo/base_demo.sqlite (4000 séjours × 3 millésimes, graine fixe)
 Rscript demo/lancer_demo.R        # 2. extraction -> repartitionnement -> tirage -> finalisation, tout sous demo/resultats/
-cat demo/resultats/exports_demo/echantillon_revue.csv   # 3. 50 scénarios de revue (chemin rappelé en fin de démo)
+cat demo/resultats/production/60_export_final/echantillon_revue_DEMO.csv   # 3. 50 scénarios de revue (chemin rappelé en fin de démo)
 ```
 
 Depuis la racine du dépôt. Prérequis : R ≥ 4.x, dplyr, dbplyr, purrr, tidyr, stringr, tibble,
@@ -88,20 +88,19 @@ première erreur (code de sortie non nul).
 Plus deux jeux de fixtures contrôlées sur le dernier millésime (écart B1-10 : `IDENT_B110` ;
 fusion E669 → E660 : `IDENT_FUSION`, GHM `88M991`), utilisés par les tests.
 
-## Sorties (`demo/resultats/`)
+## Sorties (`demo/resultats/`, arborescence par étapes)
 
 | Chemin | Contenu |
 |---|---|
-| `partiels/catalogue_partiel_<etbs>_<an>.parquet` + `partiels_meta.yaml` | comptes par (établissements × millésime) |
-| `exports_demo/ref_*.parquet`, `pivots_courts.parquet`, `v_admin_*.parquet`, `distribution_e660.parquet`, `referentiel_*.parquet` | les 10 références |
-| `exports_demo/catalogue_longs_seuil/part_<L>.parquet` + `_sidecar.yaml` | le catalogue par lettre de DP (+ lettre, DPEC, TPEC, id_profil) |
-| `exports_demo/selection_longs/<population>/` (+ `meta_tirage.yaml`) | la sélection (quota par DP, plafonds de classe) |
-| `exports_demo/chunks/<population>/longs_chunk_XXXX.parquet` | tirage des DAS par paquets (reprise) |
-| `exports_demo/habille/<population>/lot_XXXX.parquet` | habillage admin |
-| `exports_demo/scenarios_longs_tirage_v8_DEMO/<population>/part_*.parquet` + `_meta.yaml` | **les scénarios longs** (pivots, graine, diagnostic_associes, DPEC, TPEC, id_scenario, campagne…) — un dossier par campagne |
-| `exports_demo/scenarios_courts_v8_<date>.parquet` | les scénarios courts (id_profil `c…`, id_scenario, hash_das) |
-| `exports_demo/registre_tirages/registre_DEMO.parquet` | registre append-only de la campagne |
-| `exports_demo/echantillon_revue.csv`, `top30_das_par_cmd.csv`, `rapport_v8_<date>.txt`, `rapport_extraction_v8_<date>.txt`, `diagnostic_apports.csv`, `diagnostic_memoire.csv`, `recouvrement.csv` | livrables de validation et diagnostics |
+| `00_partiels/catalogue_partiel_<etbs>_<an>.parquet` + `_meta.yaml` | comptes par (établissements × millésime) [partagé] |
+| `10_references/ref_*.parquet` + `_meta.yaml` | les 10 références (préfixe unique `ref_`) [partagé] |
+| `20_catalogue/catalogue_longs_seuil/part_<L>.parquet` + `_meta.yaml` ; `catalogue_longs_seuil_meta.yaml` ; `rapport_extraction.txt` | le catalogue par lettre de DP (+ lettre, DPEC, TPEC, id_profil) [partagé] |
+| `30_courts/chunks/`, `30_courts/scenarios_courts.parquet` + `_meta.yaml` | les scénarios courts (id_profil `c…`, id_scenario, hash_das) [partagé] |
+| `90_diagnostics/diagnostic_apports.csv`, `recouvrement.csv`, `diagnostic_memoire_production.csv` | diagnostics |
+| `production/40_campagnes/DEMO/selection/`, `chunks/`, `habille/` | sélection, tirage des DAS par paquets, habillage (transitoires) |
+| `production/50_registre/registre_tirages/registre_DEMO.parquet` | registre append-only de la campagne |
+| `production/60_export_final/scenarios_DEMO.parquet` + `scenarios_DEMO_meta.yaml` | **le livrable unique** : longs (toutes populations) et courts embarqués, colonne `branche` en tête |
+| `production/60_export_final/echantillon_revue_DEMO.csv`, `top30_das_par_cmd_DEMO.csv`, `rapport_DEMO.txt` | livrables de validation |
 
 Chaque parquet a son méta-fichier yaml à côté : commencer par le lire. Voir
 [VISITE_GUIDEE.md](../VISITE_GUIDEE.md) §3 pour le flux, [RUN.md](../RUN.md) pour la

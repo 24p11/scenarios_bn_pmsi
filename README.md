@@ -96,7 +96,7 @@ nationale, faux paquet `pRatihque` installé à la volée) :
 ```sh
 Rscript demo/creer_base_demo.R    # construit demo/base_demo.sqlite (graine fixe)
 Rscript demo/lancer_demo.R        # extraction -> catalogue -> tirage -> finalisation, sous demo/resultats/
-cat demo/resultats/exports_demo/echantillon_revue.csv
+cat demo/resultats/production/60_export_final/echantillon_revue_DEMO.csv
 ```
 
 **Attention : données aléatoires, aucune validité épidémiologique.** La démo sert à voir
@@ -120,9 +120,9 @@ listes de codes) est versionné ici.
 
 | Fichier / dossier | Rôle |
 |---|---|
-| `config.R` | Paramètres, profils diagnostic/production, surcharges ; `config_locale.exemple.R` = modèle de la configuration propre au poste (`config_locale.R`, non versionné) |
-| `helpers.R` | Fonctions pures (sections A→G, une par chantier) |
-| `etapes.R` | Requêtes base + fonctions d'étape + tableau de bord |
+| `config.R` | Paramètres, profils diagnostic/production, surcharges, bloc unique des chemins (arborescence par étapes : magasins partagés `00_partiels`…`30_courts`, dossiers par profil `40_campagnes`, `50_registre`, `60_export_final`) ; `config_locale.exemple.R` = modèle de la configuration propre au poste (`config_locale.R`, non versionné : racine du dépôt, `PATH_RESULTS`) |
+| `helpers.R` | Fonctions pures (sections A→I, une par chantier ; gardes des magasins, livrable, plan de réorganisation) |
+| `etapes.R` | Requêtes base + fonctions d'étape + tableau de bord + `etape_reorganiser` |
 | `extraction.R` | Lanceur extraction (46 lignes) |
 | `tirage.R` | Lanceur aval (32 lignes, sans base) |
 | `referentiels/` | Doctrine versionnée (typologie des séjours, exclusions…) |

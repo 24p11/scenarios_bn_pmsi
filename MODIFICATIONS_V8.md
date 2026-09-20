@@ -1368,3 +1368,148 @@ explicite dans le rapport à la place de la table (les stats restent disponibles
   pour des corpus plus grands ?
 - **Q56** — CI : la matrice double le temps machine (~9 min par job) ; conserver les deux jobs sur chaque
   push, ou le job sans arrow sur `push main` seulement ?
+
+## 22. Chantier « livrable unique + nommage + arborescence par étapes »
+
+Décisions utilisateur actées : livrable unique par campagne ; règle « nom stable, date dans le méta » ;
+renommage des fichiers de code ; NOUVEAU répertoire de travail (vide au départ) ; arborescence calquée
+sur les étapes ; PARTAGE MAXIMAL entre profils ; réorganisation SUR PLACE de l'existant. Aucun changement
+de logique de tirage ; aucune chaîne base touchée ; `tests/ancien_20260914/` intact (shims de test).
+
+### 22.1 Renommage des fichiers de code (commit dédié 7eb0823)
+
+`config_v8.R` → `config.R`, `helpers_v8.R` → `helpers.R`, `etapes_v8.R` → `etapes.R`,
+`extraction_associations_codes_v8.R` → `extraction.R`, `tirage_scenarios_v8.R` → `tirage.R` (`git mv`) ;
+toutes les références mises à jour (sources, notebooks, tests, démo, CI, README, VISITE_GUIDEE, RUN.md,
+messages, `config_locale.exemple.R`) ; `MODIFICATIONS_V8.md` garde son nom ; préfixes des chunks
+inchangés. Le test d'identité copie les instantanés figés sous leur nom d'origine et écrit des shims
+`config_v8.R` / `helpers_v8.R` (qui sourcent les nouveaux noms) dans son projet temporaire. 4 passes vertes
+(helpers 320 / 317, SQLite 154 / 154), démo et notebooks verts au commit.
+
+### 22.2 Arborescence par étapes, partage maximal (§1)
+
+- Bloc UNIQUE de chemins dans `config.R`, après les surcharges : `PATH_RESULTS` (posable par `config_locale.R`
+  ou une surcharge ; jamais hérité d'un source précédent), magasins partagés `DIR_PARTIELS` (`00_partiels/`),
+  `DIR_REFERENCES` (`10_references/`), `DIR_CATALOGUE_M` (`20_catalogue/`), `DIR_COURTS` (`30_courts/`),
+  `DIR_DIAGNOSTICS` (`90_diagnostics/`) — chacun surchargeable par profil via `CHEMINS_SURCHARGES$<magasin>`
+  (soupape, non utilisée par défaut) ; par profil `DIR_PROFIL`, `DIR_CAMPAGNES` (`40_campagnes/`),
+  `DIR_REGISTRE_M` (`50_registre/`), `DIR_EXPORT_FINAL` (`60_export_final/`). `EXPORTS_DIR`, `PARTIELS_DIR`,
+  `CHUNKS_DIR` supprimés. Accesseurs dérivés dans `etapes.R` (`DIR_*()` / `FICHIER_*()`) : aucune autre
+  concaténation de chemin.
+- Justification : lisibilité par étapes (le numéro = l'ordre du flux) ; doctrine du partage = « partagé tout
+  objet qui ne dépend que de paramètres, pas du profil ; la garde à chaque chargement ».
+- `etat_pipeline()` : colonne [partagé] / [profil] / [session], gardes en écart signalées, livrables listés ;
+  carte des dossiers dans `RUN.md`, `RUN_aval.Rmd` (§0), `VISITE_GUIDEE.md` (§3).
+
+### 22.3 Gardes des magasins partagés (§1bis)
+
+Helpers I1 : `CLES_MAGASINS` (partiels : clés bloquantes historiques ; références : les 6 clés ex-Q13 ;
+catalogue : périmètre `ANS_HISTORIQUE` / `TYPES_ETBS_LONGS` + `SEUIL_PIVOT` + conversion + clés amont ;
+courts : `AN_REF` + paramètres courts + seed + chunking), `meta_magasin()`, `verifier_magasin()` (message :
+clés en écart magasin / courant, drapeau `FORCER_*`, soupape `CHEMINS_SURCHARGES`, et pour le catalogue
+l'issue « aligner ANS_HISTORIQUE / TYPES_ETBS_LONGS sur la décision de périmètre »). Appliquée à chaque
+chargement (`garder_magasin` dans `etapes.R` : refs, catalogue, courts) et à chaque écriture ; régénération
+seulement sous `FORCER_PARTIELS` / `FORCER_REFS` / `FORCER_CATALOGUE` / `FORCER_COURTS` (config).
+`etape_catalogue` devient idempotente (magasin à jour ⇒ sauté). La machinerie de migration inter-profils
+(`localiser_catalogue`, `condition_q13`, `fichiers_migration_catalogue`, chunk `migration_catalogue`) est
+RETIRÉE ; `verifier_partiels_meta` passe par `verifier_magasin` ; `message_catalogue_absent` simplifié.
+
+### 22.4 Livrable unique par campagne (§2)
+
+`etape_finalisation` → `<profil>/60_export_final/scenarios_<C>.parquet` + `scenarios_<C>_meta.yaml` : longs
+(toutes populations, colonne `population`) ET courts (relus depuis `30_courts/` avec garde, embarqués ;
+provenance et méta du magasin au méta du livrable) en union de schémas (helpers I2 : `modele_schema`,
+`harmoniser`, `type_commun` — colonne présente dans les deux branches avec des types différents ⇒
+numeric si integer/numeric, sinon texte : `age` est un entier chez les courts et une classe lt_18/ge_18
+chez les longs ; documenté au méta), `branche` = long / court en tête, ordre des colonnes par familles
+(`FAMILLES_COLONNES` : identité, profil clinique, contexte, diagnostics, habillage, typologie, traçabilité,
+audit, autres). Repli parts `scenarios_<C>/part_XXXX.parquet` au-delà de `SEUIL_MONOFICHIER` (5e6) ;
+`lire_corpus_final` (H4) lit les deux formes, filtre branche / population / colonnes (repli mock inclus).
+Garde-fous conservés (`verifier_dossier_final` sur le méta du livrable) ; relancée sans lots habillés,
+reconstruit depuis les chunks (habillage relancé, aucun re-tirage). Revue tirée du livrable unifié
+(`echantillonner_livrable`, `NB_REVUE` = 50, `PART_REVUE_COURTS` = 0,5 : deux branches, proportion
+configurable) ; rapport `rapport_<C>.txt` avec section « L. Livrable unique » (volumes par branche,
+familles) ; `top30_das_par_cmd_<C>.csv` ; `SEUIL_EXPORT_MONOFICHIER` remplacé par `SEUIL_MONOFICHIER`.
+Le mode historique (quota_dp / catalogue_complet) produit le même livrable (longs de session + courts).
+
+### 22.5 Nommage (§3) — table ancien → nouveau
+
+| Ancien | Nouveau |
+|---|---|
+| `results/partiels/`, `partiels_meta.yaml` | `00_partiels/`, `_meta.yaml` |
+| `exports*/<ref>.parquet` : `distribution_e660`, `pivots_courts`, `v_admin_courts`, `v_admin_longs`, `referentiel_substitution_imprecis`, `referentiel_paires_chroniques` | `10_references/ref_distribution_e660`, `ref_pivots_courts`, `ref_v_admin_courts`, `ref_v_admin_longs`, `ref_substitution_imprecis`, `ref_paires_chroniques` (+ `_meta.yaml`) |
+| `exports*/catalogue_longs_seuil.parquet` (+ `_meta.yaml`), `catalogue_longs_seuil/` + `_sidecar.yaml`, `rapport_extraction_v8_<date>.txt` | `20_catalogue/catalogue_longs_seuil.parquet` (+ méta), `catalogue_longs_seuil/` + `_meta.yaml`, `rapport_extraction.txt` |
+| `exports*/chunks/courts_chunk_*`, `scenarios_courts_v8_<date>.parquet` | `30_courts/chunks/…`, `30_courts/scenarios_courts.parquet` + `_meta.yaml` |
+| `exports*/diagnostic_apports.csv`, `recouvrement.csv`, `diagnostic_memoire.csv` | `90_diagnostics/…`, `diagnostic_memoire_<profil>.csv` |
+| `exports*/selection_longs/`, `meta_tirage.yaml`, `chunks/<pop>/`, `habille/` | `<profil>/40_campagnes/<C>/selection/` (+ `_meta.yaml`, `<pop>/_meta.yaml`), `chunks/`, `habille/` |
+| `exports/registre_tirages/` | `<profil>/50_registre/registre_tirages/` |
+| `scenarios_longs_tirage_v8_<C>/<pop>/part_*` (+ monofichier daté), `scenarios_courts` séparés, `rapport_v8_<date>.txt`, `echantillon_revue.csv`, `top30_das_par_cmd.csv` | `<profil>/60_export_final/scenarios_<C>.parquet` + `_meta.yaml` (livrable unique), `rapport_<C>.txt`, `echantillon_revue_<C>.csv`, `top30_das_par_cmd_<C>.csv` |
+
+`DATE_TAG` supprimé de la config ; `chemin_export`, `chemin_export_lecture`, `resoudre_export_date`
+RETIRÉS (la date vit dans les métas et en première ligne des `.txt`) ; `message_courts_absent` réécrit
+(magasin partagé). Le code ne lit QUE les nouveaux noms : les anciens sont convertis une fois par la
+réorganisation.
+
+### 22.6 Réorganisation sur place (§4)
+
+Helpers I3 `planifier_reorganisation(inventaire, migrer_registre)` (plan pur : reconnus → destination et
+action, ignorés avec motif, non reconnus ; doublons datés ou inter-profils : le plus récent retenu ;
+registre reconnu seulement si `migrer_registre`, jamais depuis `exports_diagnostic/`), `ANCIENS_NOMS_REFS`,
+`imprimer_plan_reorganisation`. `etapes.R :: etape_reorganiser(dossier = PATH_RESULTS/_a_reorganiser,
+mode = "plan" | "executer", migrer_registre = FALSE)` : plan = rien déplacé ; executer = copie depuis
+`_a_reorganiser/` (intact), conversion des métas (partiels ; catalogue : sidecar + clés du magasin reprises
+du méta d'origine ; références et courts : méta reconstruit depuis le méta du catalogue d'origine ou la
+config, date d'origine conservée), vérifications imprimées, idempotente, garde-fou magasin différent déjà
+présent ⇒ stop. `RUN_aval.Rmd` §1 : deux chunks (plan ; executer derrière `JE_CONFIRME_REORGANISATION`,
+en-tête sur `migrer_registre`) ; `RUN.md` : procédure complète de changement de répertoire.
+
+### 22.7 Tests
+
+- Helpers : `verifier_magasin` (ok / écart / message / vecteurs), `meta_magasin`, messages, plan de
+  réorganisation sur un inventaire encombré (doublons datés et inter-profils, transitoires, inconnus,
+  `migrer_registre`), `lire_corpus_final` monofichier et parts, `modele_schema` / `harmoniser` /
+  `familles_colonnes` / `echantillonner_livrable`, garde « aucune résolution de dates ni DATE_TAG ».
+- SQLite : chaque étape écrit / lit aux emplacements §1 ; garde du catalogue à l'extension du périmètre
+  (stop puis `FORCER_CATALOGUE`) ; catalogue sauté à paramètres identiques ; **deux profils sur le MÊME
+  `PATH_RESULTS`** (production surchargeant `PATH_RESULTS` du projet diagnostic) : partiels, refs, catalogue
+  relus sans recalcul, aucun fichier recréé ; divergence simulée d'une clé ex-Q13 (`SEUIL_REF_DAS`) ⇒ stop
+  nommant la clé ; soupape `CHEMINS_SURCHARGES$references` ⇒ divergence autorisée ; livrable unique
+  (deux branches, union de schémas, NA typés, volumes == méta == rapport, repli parts + relecture identique,
+  idempotence, reconstruction depuis les chunks, C1 puis C2 intacts) ; nommage sans date ; identité avec
+  les anciens scripts d'entrée (refs anciens noms → `ref_*`, courts hors identifiants, longs hors colonnes
+  d'union, sélection, top30 ; la revue, désormais tirée du livrable unifié, n'est plus comparable) ;
+  réorganisation sur une copie ENCOMBRÉE (plan : 3 tables, rien déplacé ; executer == plan ; idempotence ;
+  garde-fou ; pipeline déroulé ensuite SANS re-extraction sous mock interdit, campagne C3 sous registre
+  migré).
+
+### 22.8 Vérifications
+
+| Passe | Résultat |
+|---|---|
+| `tests/test_helpers.R` avec / sans arrow | 329 / 326 |
+| `tests/test_chaines_sqlite.R` avec / sans arrow | 171 / 171 |
+| démo + notebooks (`RUN.Rmd`, `RUN_aval.Rmd`) avec / sans arrow | verts (arborescence par étapes sous `demo/resultats/`, livrable `production/60_export_final/scenarios_DEMO.parquet`) |
+
+### 22.9 Questions (aucune action non autorisée)
+
+- **Q57** — Garde du catalogue sur le périmètre : `etape_catalogue(ans, etbs)` avec un périmètre différent
+  de la config est accepté (avertissement) mais le catalogue n'est chargeable qu'avec une config alignée.
+  Voulu (la décision de périmètre doit être portée dans la config du profil) ; sinon assouplir en
+  « périmètre = décision, non gardé ».
+- **Q58** — `age` : entier chez les courts, classe lt_18 / ge_18 chez les longs ; unifié en texte dans le
+  livrable. Renommer la colonne des longs (`age_classe`) changerait la recette d'identifiant `id_v1` :
+  non fait.
+- **Q59** — Livrable en mémoire : le monofichier est construit en RAM (courts + tous les lots) ; en parts,
+  chaque part est écrite au fil de l'eau mais les lots restent en liste jusqu'à l'écriture. Pour un corpus
+  bien au-delà de `SEUIL_MONOFICHIER`, une écriture en flux stricte serait à prévoir.
+- **Q60** — Réorganisation : le méta des références est reconstruit depuis le méta du catalogue d'origine
+  (6 clés), celui des courts depuis la config courante ; si les courts avaient été tirés sous d'autres
+  paramètres, le méta ne le sait pas (date d'origine conservée). `FORCER_COURTS` au moindre doute ?
+- **Q61** — Anciens corpus (`scenarios_longs_tirage_v8_*`) volontairement ignorés par la réorganisation
+  (ancienne génération) : faut-il un convertisseur vers le livrable unique pour les campagnes passées ?
+- **Q62** — `SEUIL_EXPORT_MONOFICHIER` remplacé par `SEUIL_MONOFICHIER` (défaut 5e6) ; les surcharges
+  personnelles qui posaient l'ancien nom sont sans effet (variable ignorée). À vérifier dans `palier.R` /
+  `campagne.R` locaux.
+- **Q63** — Préfixe `c` des identifiants courts : `c` est aussi un chiffre hexadécimal, un `id_profil` long peut
+  commencer par `c` ; le préfixe n'est donc pas un discriminant à lui seul (la colonne `branche` du livrable l'est).
+  Constaté en écrivant les tests du livrable ; changer le préfixe (ex. `k`) changerait la recette `id_courts_v1`.

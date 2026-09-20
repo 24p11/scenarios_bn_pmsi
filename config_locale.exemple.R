@@ -11,6 +11,11 @@
 ## Racine du dépôt (obligatoire si SCENARIOS_PMSI_PATH n'est pas définie dans l'environnement)
 # SCENARIOS_PMSI_PATH <- "/home/utilisateur/projets/scenarios_bn_pmsi/"
 
+## Répertoire de travail (résultats) : NOUVEAU répertoire, vide au départ, arborescence par étapes (00_partiels/ ...
+## <profil>/60_export_final/). Sans cette ligne : <racine du dépôt>/results/. L'ancien results/ se réorganise
+## SUR PLACE par etape_reorganiser() après copie manuelle dans <PATH_RESULTS>/_a_reorganiser/ (RUN.md).
+# PATH_RESULTS <- "/home/utilisateur/travail/scenarios_pmsi_resultats/"
+
 ## Schéma personnel de la plateforme (utils.R, héritage v7 ; inutile au v8)
 # pschema <- "prenom-nom-0000."
 

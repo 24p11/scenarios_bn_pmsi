@@ -32,19 +32,16 @@ options(pmsi_mock_interdit = TRUE)   # à partir d'ici, tout appel base stoppe
 source(file.path(DEMO$projet, "tirage.R"))                # courts, sélection, DAS longs, habillage, finalisation
 
 ## ---- 3. Résumé ----
-chemin_export_dir <- function(x) sub("/+$", "", EXPORTS_DIR) %+% "/" %+% x   # EXPORTS_DIR se termine par "/"
-lire_parts <- function(d) if(dir.exists(d)) dplyr::bind_rows(lapply(list.files(d, pattern = "^part_.*\\.parquet$", full.names = TRUE), function(f) as_tibble(arrow::read_parquet(f)))) else tibble()
-longs <- dplyr::bind_rows(lapply(names(POPULATIONS), function(pp){ d <- lire_parts(DIR_FINAL(pp)); if(nrow(d)) d$population <- pp; d }))
-f_courts <- chemin_export("scenarios_courts")
-courts <- if(file.exists(f_courts)) as_tibble(arrow::read_parquet(f_courts)) else tibble()
+livrable <- lire_corpus_final(CAMPAGNE)
+longs <- livrable[livrable$branche == "long", , drop = FALSE]; courts <- livrable[livrable$branche == "court", , drop = FALSE]
 cat("\n==== RÉSUMÉ DÉMO (", round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 1), " min) ====\n",
-    "Scénarios longs : ", nrow(longs), " (", paste(sprintf("%s = %d", names(POPULATIONS), vapply(names(POPULATIONS), function(pp) sum(longs$population == pp), integer(1))), collapse = ", "), ")\n",
-    "Scénarios courts : ", nrow(courts), "\n", sep = "")
+    "Livrable unique : ", FICHIER_LIVRABLE(), " (", nrow(livrable), " lignes)\n",
+    "Scénarios longs : ", nrow(longs), " (", paste(sprintf("%s = %d", names(POPULATIONS), vapply(names(POPULATIONS), function(pp) sum(longs$population == pp, na.rm = TRUE), integer(1))), collapse = ", "), ")\n",
+    "Scénarios courts : ", nrow(courts), " (embarqués depuis ", FICHIER_COURTS(), ")\n", sep = "")
 if(nrow(longs) && "TPEC" %in% names(longs)){
   cat("Répartition des longs par TPEC :\n"); print(longs |> count(TPEC, sort = TRUE) |> mutate(part = sprintf("%.1f %%", 100 * n / sum(n))), n = 50)
 }
-cat("\nÉchantillon de revue : ", chemin_export_dir("echantillon_revue.csv"), "\n",
-    "Livrables : ", DIR_FINAL(), "/<population>/part_*.parquet (+ _meta.yaml) ; registre : ", chemin_export_dir("registre_tirages"), "\n",
-    "Rapports : ", chemin_export_dir("rapport_v8_" %+% DATE_TAG %+% ".txt"), " ; tableau de bord : etat_pipeline()\n",
+cat("\nÉchantillon de revue : ", FICHIER_REVUE(), "\nRapport : ", FICHIER_RAPPORT(), " ; méta : ", FICHIER_LIVRABLE_META(), " ; registre : ", DIR_REGISTRE(), "\n",
+    "Arborescence : ", PATH_RESULTS, " (00_partiels, 10_references, 20_catalogue, 30_courts, 90_diagnostics [partagés] ; production/40_campagnes, 50_registre, 60_export_final) ; tableau de bord : etat_pipeline()\n",
     "Rappel : scénarios ALÉATOIRES issus d'une base fictive, aucune validité épidémiologique.\n", sep = "")
 if(nrow(longs) == 0) stop("Démo : aucun scénario long produit (échec)")

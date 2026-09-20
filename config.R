@@ -15,6 +15,7 @@ MESSAGE_PATH_PROJET_ABSENT <- paste0("Racine du projet inconnue : définissez (1
   "(Sys.setenv(SCENARIOS_PMSI_PATH = \"<racine du dépôt>\") avant le source), ou (2) un fichier config_locale.R à la racine du dépôt ",
   "(copiez config_locale.exemple.R, non versionné) contenant SCENARIOS_PMSI_PATH <- \"<racine du dépôt>\".")
 PATH_PROJET <- Sys.getenv("SCENARIOS_PMSI_PATH", unset = "")
+if(exists("PATH_RESULTS", inherits = FALSE)) rm(PATH_RESULTS)   # jamais hérité d'un source précédent : posé par config_locale.R, une surcharge, ou le défaut
 CONFIG_LOCALE <- if(nzchar(PATH_PROJET)) file.path(PATH_PROJET, "config_locale.R") else "config_locale.R"   # sourcé AVANT le bloc PROFIL
 if(file.exists(CONFIG_LOCALE)){
   source(CONFIG_LOCALE, local = FALSE)
@@ -22,7 +23,10 @@ if(file.exists(CONFIG_LOCALE)){
 }
 if(!nzchar(PATH_PROJET)) stop(MESSAGE_PATH_PROJET_ABSENT, call. = FALSE)
 if(!grepl("/$", PATH_PROJET)) PATH_PROJET <- paste0(PATH_PROJET, "/")
-PATH_RESULTS        <- paste0(PATH_PROJET, "results/")
+# Répertoire de travail (résultats) : config_locale.R (ou une surcharge) peut le poser — PATH_RESULTS <- "<nouveau
+# répertoire>/", vide au départ, peuplé par etape_reorganiser — ; sinon <racine>/results/. Arborescence : bloc CHEMINS.
+if(!exists("PATH_RESULTS", inherits = FALSE)) PATH_RESULTS <- paste0(PATH_PROJET, "results/")
+CHEMINS_SURCHARGES <- list()   # soupape : un magasin partagé peut être détourné pour un profil (bloc PROFIL ou surcharge), ex. CHEMINS_SURCHARGES$references <- "/ailleurs/10_references/"
 PATH_PAIRES_EXCLUES <- paste0(PATH_PROJET, "referentiels/exclusions_paires.yaml")
 PATH_TYPOLOGIE      <- paste0(PATH_PROJET, "referentiels/typologie_sejours.yaml")   # typologie DPEC / TPEC (chantier aval)
 
@@ -34,7 +38,7 @@ if(!PROFIL %in% c("diagnostic", "production")) stop("PROFIL inconnu : " %+% PROF
 
 AN_REF         <- 26L               # année de référence (tables de référence, pivots courts)
 SEED           <- 20260907
-VERSION_SCRIPT <- "v8-industrialisation-1"   # écrit dans partiels_meta.yaml et les meta.yaml
+VERSION_SCRIPT <- "v8-industrialisation-1"   # écrit dans 00_partiels/_meta.yaml et les métas
 
 SEUIL_PIVOT        <- 10            # divulgation : nb > SEUIL_PIVOT au niveau des pivots (§2.2)
 SEUIL_REF_DAS      <- 20            # effectif min de codes candidats d'une strate de référence (§6.2)
@@ -129,16 +133,16 @@ anseqta_de <- function(an){
                    an > 17 & an <= 22 ~ "23",
                    TRUE ~ "25")
 }
-DATE_TAG <- format(Sys.Date(), "%Y%m%d")
 
-# Produits de référence exportés par l'extraction (EXPORTS_DIR/<nom>.parquet) ; l'absence
+# Produits de référence exportés par l'extraction (10_references/<nom>.parquet) ; l'absence
 # d'un produit déclenche sa (re)création. Les REFS_CHRONIQUES exigent prep_das_chronique.
 # Ordre = ordre de calcul : ref_das_chronique puis distribution_e660 (calculée sur ses comptes
 # bruts) avant toute ref convertie.
-NOMS_REFS <- c("ref_das_chronique", "distribution_e660", "ref_das_aigu", "ref_nb_chroniques", "ref_comp_diabete",
-               "pivots_courts", "v_admin_courts", "v_admin_longs",
-               "referentiel_substitution_imprecis", "referentiel_paires_chroniques")
-REFS_CHRONIQUES <- c("ref_das_chronique", "distribution_e660", "ref_nb_chroniques", "referentiel_paires_chroniques")
+# Préfixe unique ref_ (chantier « livrable unique + nommage ») : le nom logique = le nom de fichier (ref_<nom>.parquet).
+NOMS_REFS <- c("ref_das_chronique", "ref_distribution_e660", "ref_das_aigu", "ref_nb_chroniques", "ref_comp_diabete",
+               "ref_pivots_courts", "ref_v_admin_courts", "ref_v_admin_longs",
+               "ref_substitution_imprecis", "ref_paires_chroniques")
+REFS_CHRONIQUES <- c("ref_das_chronique", "ref_distribution_e660", "ref_nb_chroniques", "ref_paires_chroniques")
 
 ## ---- Bloc PROFIL ----
 if(PROFIL == "diagnostic"){
@@ -146,16 +150,14 @@ if(PROFIL == "diagnostic"){
   TYPES_ETBS_LONGS   <- c("CHR/U", "CH")    # LES DEUX catégories (ordre v7.2 : CHR/U puis CH)
   MODE_SELECTION     <- "quota_dp"          # avec remise (conservé pour le diagnostic)
   NB_CRH_CIBLE       <- 1000L               # volume de la campagne (ex BUDGET_TOTAL_LONGS)
-  EXPORTS_DIR        <- paste0(PATH_RESULTS, "exports_diagnostic/")
 } else {
   # À choisir d'après diagnostic_apports.csv (RUN.md, étape 2)
   ANS_HISTORIQUE     <- 17:AN_REF
   TYPES_ETBS_LONGS   <- c("CHR/U", "CH")
   MODE_SELECTION     <- "quota_dp_fixe"     # k lignes par DP, variantes déduites (catalogue_complet retiré pour ce corpus)
   NB_CRH_CIBLE       <- 500000L             # volume de la campagne : un ORDRE DE GRANDEUR, pas un engagement
-  EXPORTS_DIR        <- paste0(PATH_RESULTS, "exports/")
+  # CHEMINS_SURCHARGES$references <- "..."  # exemple de soupape : magasin partagé détourné pour ce seul profil (non utilisé par défaut)
 }
-PARTIELS_DIR        <- paste0(PATH_RESULTS, "partiels/")   # PARTAGÉ entre profils (cache inter-profils)
 QUOTA_MIN_PAR_UNITE <- 5L        # mode quota_dp : plancher par type_unite présent au catalogue du DP
 # Mode quota_dp_fixe (production par campagnes ; doctrine : représentativité des DP avant celle des
 # situations cliniques, la diversité des contextes se reconstituant ENTRE les campagnes).
@@ -181,7 +183,14 @@ NB_CHUNKS_MAX   <- 50L           # borne haute du nombre de chunks par tirage
 CHUNK_SIZE_MIN  <- 500L          # plancher : en dessous, moins de chunks que NB_CHUNKS_MAX
 CHUNK_SIZE_FIXE <- NA_integer_   # surcharge manuelle : si non-NA, court-circuite le calcul
 GARDER_CHUNKS       <- TRUE      # conserver les chunks de tirage après assemblage (reprise)
-FORCER_REFS         <- FALSE     # TRUE : ignorer l'existence des refs et les recalculer (changement d'AN_REF, correction amont)
+FORCER_REFS         <- FALSE     # TRUE : recalculer les refs (magasin partagé 10_references/) malgré un _meta.yaml en écart
+FORCER_PARTIELS     <- FALSE     # TRUE : vider et recalculer les partiels (magasin partagé 00_partiels/) malgré un _meta.yaml en écart
+FORCER_CATALOGUE    <- FALSE     # TRUE : régénérer le catalogue (magasin partagé 20_catalogue/) malgré un _meta.yaml en écart
+FORCER_COURTS       <- FALSE     # TRUE : re-tirer les séjours courts (magasin partagé 30_courts/) malgré un _meta.yaml en écart
+# Livrable unique par campagne (<profil>/60_export_final/scenarios_<CAMPAGNE>.parquet) : longs + courts en union de schémas
+SEUIL_MONOFICHIER   <- 5000000L  # au-delà (lignes), le livrable est écrit en parts scenarios_<CAMPAGNE>/part_XXXX.parquet
+NB_REVUE            <- 50L       # échantillon de revue tiré du livrable unifié ...
+PART_REVUE_COURTS   <- 0.5       # ... dont cette proportion de séjours courts (le reste : longs)
 
 ## ---- Surcharges individuelles (après le bloc PROFIL) ----
 # Exemples : BUDGET_TOTAL_LONGS <- 100000L (palier production) ; ANS_HISTORIQUE <- 22:AN_REF
@@ -194,8 +203,25 @@ if(nzchar(SURCHARGE_CONFIG)) source(SURCHARGE_CONFIG, local = FALSE)
 if(!MODE_SELECTION %in% c("catalogue_complet", "quota_dp", "quota_dp_fixe")) stop("MODE_SELECTION inconnu : " %+% MODE_SELECTION)
 if(!is.character(CAMPAGNE) || !nzchar(CAMPAGNE) || grepl("[^A-Za-z0-9_-]", CAMPAGNE)) stop("CAMPAGNE : identifiant court obligatoire ([A-Za-z0-9_-]) : " %+% CAMPAGNE)
 if(!exists("BUDGET_TOTAL_LONGS")) BUDGET_TOTAL_LONGS <- NB_CRH_CIBLE   # alias de compatibilité (anciens scripts / surcharges)
-CHUNKS_DIR  <- paste0(EXPORTS_DIR, "chunks/")
 ANSEQTA_REF <- anseqta_de(AN_REF)
+
+## ---- CHEMINS : bloc UNIQUE de l'arborescence par étapes (après surcharges ; aucune concaténation ailleurs) ----
+# Magasins PARTAGÉS entre profils : tout objet qui ne dépend que de paramètres, pas du profil (chaque magasin porte un
+# _meta.yaml avec les paramètres qui le définissent, vérifié à chaque chargement : verifier_magasin). Chaque chemin de
+# magasin partagé est surchargeable par profil via CHEMINS_SURCHARGES (soupape, non utilisée par défaut).
+if(!grepl("/$", PATH_RESULTS)) PATH_RESULTS <- paste0(PATH_RESULTS, "/")
+chemin_magasin <- function(cle, defaut) if(!is.null(CHEMINS_SURCHARGES[[cle]])) sub("/*$", "/", CHEMINS_SURCHARGES[[cle]]) else paste0(PATH_RESULTS, defaut)
+DIR_PARTIELS    <- chemin_magasin("partiels",    "00_partiels/")     # cache d'extraction                         [PARTAGÉ]
+DIR_REFERENCES  <- chemin_magasin("references",  "10_references/")   # les 10 ref_*.parquet + _meta.yaml           [PARTAGÉ]
+DIR_CATALOGUE_M <- chemin_magasin("catalogue",   "20_catalogue/")    # catalogue_longs_seuil/ (parts + _meta.yaml) [PARTAGÉ]
+DIR_COURTS      <- chemin_magasin("courts",      "30_courts/")       # chunks courts + scenarios_courts.parquet    [PARTAGÉ]
+DIR_DIAGNOSTICS <- chemin_magasin("diagnostics", "90_diagnostics/")  # apports, recouvrement ; mémoire par profil  [PARTAGÉ]
+# PAR PROFIL (production/ ou diagnostic/)
+DIR_PROFIL       <- paste0(PATH_RESULTS, PROFIL, "/")
+DIR_CAMPAGNES    <- paste0(DIR_PROFIL, "40_campagnes/")     # <CAMPAGNE>/selection, chunks, habille (transitoires)
+DIR_REGISTRE_M   <- paste0(DIR_PROFIL, "50_registre/")      # registre_tirages/ (permanent, JAMAIS vidé)
+DIR_EXPORT_FINAL <- paste0(DIR_PROFIL, "60_export_final/")  # scenarios_<C>.parquet + _meta, rapport_<C>.txt, revue, top30
+MAGASINS_PARTAGES <- c(partiels = DIR_PARTIELS, references = DIR_REFERENCES, catalogue = DIR_CATALOGUE_M, courts = DIR_COURTS, diagnostics = DIR_DIAGNOSTICS)
 
 # Valeurs effectives écrites dans les meta.yaml (PROFIL et tout ce qui dépend du profil ou
 # d'une surcharge). Fonction pure : lit les variables dans `env`.
@@ -204,7 +230,7 @@ NOMS_CONFIG_META <- c("PROFIL", "VERSION_SCRIPT", "AN_REF", "ANS_HISTORIQUE", "T
                       "DUREE_COURTS", "DUREE_LONGS", "DUREE_MIN_REF", "NBDA_MAX", "K_GRAINE_LONGS",
                       "NB_TIRAGES_COURTS", "NB_VARIANTES_ADMIN_COURTS", "NB_VARIANTES_ADMIN_LONGS",
                       "MODE_SELECTION", "NB_CRH_CIBLE", "NB_LIGNES_PAR_DP", "CAMPAGNE", "REGISTRE_ACTIF", "QUOTA_MIN_PAR_UNITE", "NB_CHUNKS_MAX", "CHUNK_SIZE_MIN", "CHUNK_SIZE_FIXE",
-                      "GARDER_CHUNKS", "FORCER_REFS", "EXPORTS_DIR", "PARTIELS_DIR", "PIVOTS_LONGS",
+                      "GARDER_CHUNKS", "FORCER_REFS", "PIVOTS_LONGS",
                       "CONVERSION_E669", "BARE_E669_DEFAUT", "COLLECT_PAR_MORCEAUX", "SEUIL_ALERTE_GO")
 valeurs_effectives_config <- function(env = globalenv()){
   v <- mget(NOMS_CONFIG_META, envir = env)

@@ -2,7 +2,7 @@
 # tirage.R — TIRAGE des scénarios (parquets -> scénarios), SANS base, script d'entrée
 #
 # Pipeline scenarios_bn_pmsi v8. AUCUN appel pRatihque, aucune connexion : les étapes lisent
-# les produits d'EXPORTS_DIR écrits par extraction.R (etapes.R,
+# les magasins partagés (10_references, 20_catalogue, 30_courts) écrits par extraction.R (etapes.R,
 # famille tirage). Ce script n'appelle que les étapes, dans l'ordre : etape_tirage_courts() ;
 # etape_selection_longs() ; etape_tirage_das_longs() ; etape_habillage_longs() ;
 # etape_finalisation(). Pour charger la session sans rien exécuter (RUN.Rmd) :

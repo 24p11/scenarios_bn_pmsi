@@ -21,13 +21,13 @@ source("demo/session_demo.R")
 
 **Session SANS connexion base, par conception** : toute la chaîne aval lit des parquets. Les
 étapes d'extraction (prep_data, refs, partiels, catalogue) relèvent de `RUN.Rmd`. **N'ouvrez pas de
-connexion ici.** Tous les chemins sont absolus via `PATH_RESULTS` / `EXPORTS_DIR` (piège du working
-directory des notebooks) : ne jamais écrire de chemin relatif dans ce notebook.
+connexion ici.** Tous les chemins dérivent du bloc unique de `config.R` (`PATH_RESULTS`, magasins
+`DIR_*`, accesseurs `FICHIER_*()` / `DIR_*()`) : ne jamais écrire de chemin relatif dans ce notebook.
 
-Notebook de la phase **aval**, ordonné comme le **cycle de vie d'une campagne** : 0 session — 1 migration
-inter-profils — 2 repartitionnement — 3 ouvrir une campagne — 4 tirage — 5 palier de mesure (optionnel) —
+Notebook de la phase **aval**, ordonné comme le **cycle de vie d'une campagne** : 0 session — 1 réorganisation
+d'un ancien results/ (une fois) — 2 repartitionnement — 3 ouvrir une campagne — 4 tirage — 5 palier de mesure (optionnel) —
 6 habillage, finalisation, registre, rapport — 7 revue — 8 outils. Tout part du catalogue longs déjà produit
-(`exports*/catalogue_longs_seuil.parquet`, 21,6 M lignes en production, obtenu en dépassement RAM toléré :
+(`20_catalogue/`, 21,6 M lignes en production, obtenu en dépassement RAM toléré :
 **ne JAMAIS le reconstruire sur ce périmètre**). Référence texte : `RUN.md` (section « Séquence PRODUCTION »
 et « Architecture des fichiers d'une campagne ») ; journal : `MODIFICATIONS_V8.md` sections 16, 18 et 20 ;
 notebook de l'amont (extraction, diagnostic) : `RUN.Rmd`.
@@ -75,75 +75,63 @@ cat("CAMPAGNE =", CAMPAGNE, "; REGISTRE_ACTIF =", REGISTRE_ACTIF, "; MODE_SELECT
 str(POPULATIONS); str(PLAFONDS_DPEC)
 cat("NB_CHUNKS_MAX =", NB_CHUNKS_MAX, "; CHUNK_SIZE_MIN =", CHUNK_SIZE_MIN, "; CHUNK_SIZE_FIXE =", CHUNK_SIZE_FIXE,
     "; LOT_CHUNKS_FINALISATION =", LOT_CHUNKS_FINALISATION, "; SEUIL_EXPORT_MONOFICHIER =", SEUIL_EXPORT_MONOFICHIER, "\n")
-cat("typologie :", charger_typo()$version, "; corpus final :", DIR_FINAL(), "\n")
+cat("typologie :", charger_typo()$version, "; livrable :", FICHIER_LIVRABLE(), "\n")
+cat("PATH_RESULTS =", PATH_RESULTS, "; magasins partagés :", paste(names(MAGASINS_PARTAGES), collapse = ", "), "; profil :", DIR_PROFIL, "\n")
 ```
 
-## Architecture des fichiers d'une campagne
+## Architecture des fichiers (arborescence par étapes, partage maximal)
 
-Tout vit sous `EXPORTS_DIR` (= `PATH_RESULTS/exports/` en production, `exports_diagnostic/` en
-diagnostic). Deux familles, à ne jamais confondre :
+Tout vit sous `PATH_RESULTS`. **Partagé** = tout objet qui ne dépend que de paramètres, pas du profil ;
+chaque magasin partagé porte un `_meta.yaml` avec les paramètres qui le définissent, comparé à la config
+à chaque chargement (`verifier_magasin` : écart ⇒ stop nommant les clés et les issues).
 
-| Famille | Chemin | Écrit par | Lu par | Durée de vie |
+| Dossier | Contenu | Écrit par | Lu par | Statut |
 |---|---|---|---|---|
-| **PERMANENT** | `catalogue_longs_seuil/part_<L>.parquet` + `_sidecar.yaml` (le `.ancien` = monofichier) | `etape_repartitionner_catalogue()` (§2) | sélection, rétro-inscription, rapports | toute la vie du corpus ; se refait seulement si la typologie ou la recette d'id change |
-| PERMANENT | les 10 refs `ref_*.parquet`, `pivots_courts`, `v_admin_*`, `distribution_e660`, `referentiel_*` | `etape_refs()` (RUN.Rmd, base) | courts, tirage des DAS, habillage | tant que `AN_REF`, `SEUIL_REF_*`, `CONVERSION_E669` ne changent pas |
-| PERMANENT | `registre_tirages/registre_<Cn>.parquet` | `etape_registre_campagne()` (fin de §6) ou `etape_retro_inscrire()` (§8) | sélection (§3), rapports | **append-only, ne se vide JAMAIS** |
-| PERMANENT | `scenarios_longs_tirage_v8_<Cn>/<population>/part_*.parquet` + `_meta.yaml` (un dossier PAR CAMPAGNE) | `etape_finalisation()` (§6) | livraison, `corpus` (§7) | corpus des campagnes passées : jamais écrasé (garde-fou sur `_meta.yaml`) |
-| PERMANENT | `scenarios_courts_v8_<date>.parquet` | `etape_tirage_courts()` (RUN.Rmd) | finalisation (relu le plus récent si le jour a changé) | tant que les refs courts ne changent pas |
-| **PAR CAMPAGNE** | `selection_longs/<population>/` + `meta_tirage.yaml` (racine d'`EXPORTS_DIR`) | `etape_selection_longs()` (§3) | tirage, habillage, registre | vidés à l'ouverture de la campagne suivante |
-| PAR CAMPAGNE | `chunks/<population>/longs_chunk_*.parquet` + sidecar | `etape_tirage_das_longs()` (§4) | habillage, registre | idem |
-| PAR CAMPAGNE | `habille/<population>/lot_*.parquet` | `etape_habillage_longs()` (§6) | finalisation | idem (réécrits à chaque habillage) |
-| PAR CAMPAGNE | `rapport_v8_<date>.txt`, `echantillon_revue.csv`, `top30_das_par_cmd.csv` | finalisation | revue (§7) | écrasés à chaque finalisation |
+| `00_partiels/` | `catalogue_partiel_<etbs>_<an>.parquet` + `_meta.yaml` (clés bloquantes) | `etape_partiels_longs()` (base) | catalogue | **[partagé]** cache d'extraction |
+| `10_references/` | les 10 `ref_*.parquet` + `_meta.yaml` (6 clés ex-Q13) | `etape_refs()` (base) | courts, tirage, habillage | **[partagé]** |
+| `20_catalogue/` | `catalogue_longs_seuil/part_<L>.parquet` + `_meta.yaml` (périmètre, seuil, conversion, typologie, recette id) ; monofichier transitoire + méta ; `rapport_extraction.txt` | `etape_catalogue()`, `etape_repartitionner_catalogue()` | sélection, rétro-inscription | **[partagé]** |
+| `30_courts/` | `chunks/`, `scenarios_courts.parquet` + `_meta.yaml` | `etape_tirage_courts()` | finalisation (embarqués dans chaque livrable) | **[partagé]** |
+| `90_diagnostics/` | `diagnostic_apports.csv`, `recouvrement.csv` [partagés] ; `diagnostic_memoire_<profil>.csv` | extraction | RUN.Rmd | [partagé] |
+| `<profil>/40_campagnes/<C>/` | `selection/` (+ `_meta.yaml`), `chunks/`, `habille/` | sélection, tirage, habillage | finalisation, registre | **[profil]** transitoires, un dossier par campagne |
+| `<profil>/50_registre/registre_tirages/` | `registre_<C>.parquet` | fin de finalisation, rétro-inscription | sélection sous registre | **[profil]** permanent, **JAMAIS vidé** |
+| `<profil>/60_export_final/` | `scenarios_<C>.parquet` + `_meta.yaml` (ou `scenarios_<C>/part_*`), `rapport_<C>.txt`, `echantillon_revue_<C>.csv`, `top30_das_par_cmd_<C>.csv` | finalisation | livraison, revue | **[profil]** un livrable par campagne, jamais écrasé par une autre |
 
-**Pourquoi deux répertoires d'exports** : `exports_diagnostic/` et `exports/` = un par profil, jamais
-mélangés. Ce qui **se migre** d'un profil à l'autre : le catalogue et ses refs (condition Q13, chunk
-`migration_catalogue`, §1). Ce qui **ne se migre PAS** : les sorties de tirage (courts, sélection, chunks,
-habillé, corpus) — elles se **refont** sous le profil cible, étapes rapides et sans base.
+Règle de nommage : **nom stable, date dans le méta** (aucun nom daté). Convention : `_meta.yaml` dans
+chaque magasin / dossier, `<objet>_meta.yaml` à côté d'un fichier. Deux profils travaillent sur le même
+`PATH_RESULTS` : le second réutilise partiels, refs, catalogue et courts sans recalcul.
 
 ---
 
-# 1. Migration inter-profils du catalogue (si absent d'EXPORTS_DIR)
+# 1. Réorganisation SUR PLACE d'un ancien `results/` (une fois, nouveau répertoire de travail)
 
-Le catalogue est produit par un profil (souvent `exports_diagnostic/`) et exploité par un autre
-(`exports/`). Ce chunk teste sa présence dans `EXPORTS_DIR` ; s'il est absent mais présent dans un
-autre dossier d'exports du même `PATH_RESULTS`, il propose la copie (catalogue + méta + refs +
-`distribution_e660` + `pivots_courts` + `v_admin_*` + `referentiel_*`) derrière `JE_CONFIRME_COPIE`,
-en affichant la **condition de validité Q13** : copie sûre si et seulement si `AN_REF`,
-`SEUIL_REF_DAS`, `SEUIL_REF_IMPRECIS`, `SEUIL_REF_PAIRES`, `CONVERSION_E669`, `BARE_E669_DEFAUT`
-sont identiques entre les deux profils ; sinon copier le seul catalogue et lancer
-`etape_refs(forcer = TRUE)` (RUN.Rmd, connexion requise) ou recalculer.
+Geste préalable, à la main (RUN.md, « changement de répertoire ») : poser le nouveau `PATH_RESULTS`
+dans `config_locale.R`, puis `cp -r` les TROIS dossiers de l'ancien `results/` — `partiels/`,
+`exports/`, `exports_diagnostic/` — dans `<PATH_RESULTS>/_a_reorganiser/`. L'ancien répertoire n'est
+jamais touché par le code. Deux temps : le **plan** (rien n'est déplacé, trois tables : reconnus →
+destination, ignorés, non reconnus à arbitrer), puis **executer** derrière confirmation.
 
-```{r migration_catalogue, demo=FALSE}
-# Ce que ce chunk touche : EXPORTS_DIR (copie du catalogue + méta + refs depuis l'autre profil, jamais d'écrasement).
-# Ce qu'il ne touche JAMAIS : les sorties de tirage (courts, sélection, chunks, habillé, corpus) — elles ne se
-#   migrent pas, elles se REFONT sous ce profil ; ni le registre, ni les corpus des campagnes passées.
-# Quand : catalogue absent d'EXPORTS_DIR alors qu'il existe sous l'autre profil. Quand PAS : catalogue présent (ne fait rien).
-# En démo (demo=FALSE) : sans objet, un seul profil.
-present <- file.exists(MONO_CATALOGUE()) || (dir.exists(DIR_CATALOGUE()) && length(list.files(DIR_CATALOGUE(), "^part_")) > 0)
-cat("EXPORTS_DIR effectif :", EXPORTS_DIR, "\ncatalogue présent :", present, "\n")
-cat("RAPPEL : se migrent le catalogue et ses refs (condition Q13) ; NE se migrent PAS les sorties de tirage (courts, sélection, chunks, habillé, corpus) : à refaire ici, sans base.\n")
-if (!present) {
-  autres <- localiser_catalogue(PATH_RESULTS, EXPORTS_DIR)
-  if (nrow(autres) == 0) {
-    cat(message_catalogue_absent("migration", EXPORTS_DIR, PATH_RESULTS), "\n")
-  } else {
-    print(autres)
-    src <- autres$dossier[1]                                              # chemin ABSOLU (PATH_RESULTS/exports_xxx)
-    meta_src <- yaml::read_yaml(file.path(src, "catalogue_longs_seuil_meta.yaml"))
-    q13 <- condition_q13(meta_src, valeurs_effectives_config())
-    cat("source :", src, "\n", q13$message, "\n")
-    a_copier <- file.path(src, fichiers_migration_catalogue()); a_copier <- a_copier[file.exists(a_copier)]
-    if (!q13$ok) a_copier <- a_copier[basename(a_copier) %in% c("catalogue_longs_seuil.parquet", "catalogue_longs_seuil_meta.yaml")]
-    cat("fichiers à copier vers", EXPORTS_DIR, ":\n"); print(basename(a_copier))
-    JE_CONFIRME_COPIE <- FALSE   # passer à TRUE en connaissance de cause (condition Q13 lue ci-dessus)
-    if (JE_CONFIRME_COPIE) {
-      if (!dir.exists(EXPORTS_DIR)) dir.create(EXPORTS_DIR, recursive = TRUE)
-      ok <- file.copy(a_copier, EXPORTS_DIR, overwrite = FALSE); cat("copiés :", sum(ok), "/", length(ok), "\n")
-      if (!q13$ok) cat("Refs NON copiées (Q13) : lancer etape_refs(forcer = TRUE) depuis RUN.Rmd.\n")
-    } else cat("Rien copié : passer JE_CONFIRME_COPIE à TRUE d'abord.\n")
-  }
-}
-etat_pipeline()
+```{r reorganisation_plan, demo=FALSE}
+# Ce que ce chunk touche : RIEN (mode plan : inventaire et impression des trois tables).
+# En démo (demo=FALSE) : sans objet (pas d'ancien results/).
+plan <- etape_reorganiser(mode = "plan", migrer_registre = FALSE)   # migrer_registre : voir ci-dessous
+```
+
+`migrer_registre` : `TRUE` = les campagnes passées **comptent** (l'ancien registre `exports/registre_tirages/`
+est repris sous `production/50_registre/` : la prochaine sélection les considère consommées) ; `FALSE` =
+registre vierge (les campagnes passées ne comptent pas). Décision liée au verdict de la revue clinique
+des campagnes antérieures.
+
+```{r reorganisation_executer, demo=FALSE}
+# Ce que ce chunk touche : COPIE depuis _a_reorganiser/ vers 00_partiels, 10_references, 20_catalogue, 30_courts,
+#   90_diagnostics (+ production/50_registre si migrer_registre) ; métas convertis ; _a_reorganiser/ reste intact.
+# Ce qu'il ne touche JAMAIS : l'ancien results/ (jamais lu par le code), les fichiers ignorés ou non reconnus.
+# Garde-fou : magasin différent déjà présent -> stop. Idempotent. Ensuite : etat_pipeline(), puis supprimer _a_reorganiser/ à la main.
+JE_CONFIRME_REORGANISATION <- FALSE
+MIGRER_REGISTRE <- FALSE
+if (JE_CONFIRME_REORGANISATION) {
+  etape_reorganiser(mode = "executer", migrer_registre = MIGRER_REGISTRE)
+  etat_pipeline()
+} else cat("Rien fait : lire le plan ci-dessus, poser MIGRER_REGISTRE, puis passer JE_CONFIRME_REORGANISATION à TRUE.\n")
 ```
 
 ---
@@ -152,7 +140,7 @@ etat_pipeline()
 
 Lit le monofichier **par morceaux de lettres de DP** (jamais tout en RAM), ajoute `lettre`,
 `DPEC`, `TPEC` (typologie `referentiels/typologie_sejours.yaml`, version tracée dans le sidecar) et
-`id_profil` (recette `id_v1`), écrit `catalogue_longs_seuil/part_<L>.parquet` + `_sidecar.yaml`, vérifie
+`id_profil` (recette `id_v1`), écrit `20_catalogue/catalogue_longs_seuil/part_<L>.parquet` + `_meta.yaml`, vérifie
 nb_lignes == méta, renomme le monofichier en `.ancien` (jamais supprimé). Idempotente (« déjà présent :
 sauté »). Changer la version de typologie ⇒ supprimer le dossier, restaurer le `.ancien` et relancer
 (le garde-fou l'impose).
@@ -165,7 +153,7 @@ etat_pipeline()
 Contrôle du sidecar et de la typologie :
 
 ```{r verif_repartitionnement}
-side <- lire_si_present(file.path(DIR_CATALOGUE(), "_sidecar.yaml"), "etape_repartitionner_catalogue()")
+side <- lire_si_present(FICHIER_CATALOGUE_META(), "etape_repartitionner_catalogue()")
 if (!is.null(side)) {
   cat("lignes :", side$nb_lignes_total, "; parts :", length(side$nb_lignes_par_part), "; typologie :", side$version_typologie, "; recette id :", side$version_recette_id, "\n")
   print(data.frame(DPEC = names(side$effectifs_dpec), n = unlist(side$effectifs_dpec))[order(-unlist(side$effectifs_dpec)), ])
@@ -182,7 +170,7 @@ Le corpus se construit par **campagnes** puisées dans le catalogue permanent ; 
 (`registre_tirages/registre_<campagne>.parquet`, append-only, **jamais vidé**) tient la comptabilité
 inter-campagnes : identifiants stables (`id_profil` = hash du contenu de la ligne du catalogue, recette
 `id_v1` figée ; `id_scenario` = `id_profil-variante`), `hash_das` du jeu réellement tiré. Une campagne
-= un identifiant `CAMPAGNE` (`Cn`), un corpus `scenarios_longs_tirage_v8_<Cn>/`, une ligne au registre.
+= un identifiant `CAMPAGNE` (`Cn`), un livrable `60_export_final/scenarios_<Cn>.parquet`, une ligne au registre.
 
 **Ordre impératif** : (a) poser `CAMPAGNE <- "Cn"` (config ou surcharge) et `REGISTRE_ACTIF <- TRUE`,
 **Restart R**, rejouer §0 — la session affiche « jamais inscrite au registre » ; sinon changez
@@ -190,18 +178,20 @@ d'identifiant : sur une campagne déjà inscrite, la sélection ne fait que reli
 sorties de la campagne précédente (chunk ci-dessous, gardé) ; (c) sélectionner.
 
 ```{r nouvelle_campagne}
-# Ce que ce chunk touche (SUPPRIME) : chunks/, selection_longs/, habille/ et meta_tirage.yaml de la campagne PRÉCÉDENTE.
-# Ce qu'il ne touche JAMAIS : registre_tirages/ (append-only), les corpus scenarios_longs_tirage_v8_<Cn>/ des
-#   campagnes passées, le catalogue et les refs, scenarios_courts.
+# Ce que ce chunk touche (SUPPRIME) : les dossiers 40_campagnes/<Cn>/ des campagnes PRÉCÉDENTES (sélection, chunks, habillé).
+# Ce qu'il ne touche JAMAIS : 50_registre/ (append-only), les livrables 60_export_final/ des campagnes passées, les magasins
+#   partagés (partiels, refs, catalogue, courts). Le dossier de la campagne courante est neuf : rien à vider pour elle.
 # Quand : après avoir posé CAMPAGNE <- "Cn" + Restart R + §0 (statut « jamais inscrite »), AVANT la sélection.
 # Quand PAS : reprise d'une campagne en cours (les chunks présents sont la reprise) ; campagne déjà finalisée
 #   que l'on veut conserver (son corpus est ailleurs, mais sa sélection/chunks seraient perdus : sans conséquence
 #   si le registre est écrit — vérifier au §0).
-JE_CONFIRME_NOUVELLE_CAMPAGNE <- FALSE   # TRUE : vide chunks + sélection + méta + habillé (le registre reste)
+JE_CONFIRME_NOUVELLE_CAMPAGNE <- FALSE   # TRUE : supprime les dossiers transitoires des campagnes précédentes (le registre et les livrables restent)
+anciennes <- setdiff(basename(list.dirs(DIR_CAMPAGNES, recursive = FALSE)), CAMPAGNE)
+cat("campagne courante :", CAMPAGNE, "; dossiers transitoires d'autres campagnes :", if (length(anciennes)) paste(anciennes, collapse = ", ") else "aucun", "\n")
 if (JE_CONFIRME_NOUVELLE_CAMPAGNE) {
-  unlink(c(CHUNKS_DIR, DIR_SELECTION(), file.path(EXPORTS_DIR, "habille"), file.path(EXPORTS_DIR, "meta_tirage.yaml")), recursive = TRUE)
-  cat("Vidé. Campagne courante :", CAMPAGNE, "— enchaîner sur la sélection.\n")
-} else cat("Rien fait : passer JE_CONFIRME_NOUVELLE_CAMPAGNE à TRUE d'abord (campagne courante :", CAMPAGNE, ").\n")
+  unlink(file.path(DIR_CAMPAGNES, anciennes), recursive = TRUE)
+  cat("Vidé :", paste(anciennes, collapse = ", "), "— enchaîner sur la sélection de", CAMPAGNE, ".\n")
+} else cat("Rien fait : passer JE_CONFIRME_NOUVELLE_CAMPAGNE à TRUE d'abord.\n")
 ```
 
 ## 3b. Sélection de campagne (`quota_dp_fixe`)
@@ -221,7 +211,7 @@ etape_selection_longs()      # budget = NB_CRH_CIBLE, mode = MODE_SELECTION, k =
 ```
 
 ```{r verif_selection}
-mt <- lire_si_present(file.path(EXPORTS_DIR, "meta_tirage.yaml"), "etape_selection_longs()")
+mt <- lire_si_present(FICHIER_SELECTION_META(), "etape_selection_longs()")
 if (!is.null(mt)) {
   cat("campagne", mt$CAMPAGNE, "; volume attendu total :", mt$volume_attendu, "(cible", mt$NB_CRH_CIBLE, ")\n"); str(mt$par_population)
   stats_dp <- do.call(rbind, lapply(names(POPULATIONS), function(p){ d <- lire_si_present(file.path(DIR_SELECTION(p), "selection_longs_stats_dp.csv"), "etape_selection_longs()"); if (is.null(d)) NULL else cbind(population = p, d) }))
@@ -280,7 +270,7 @@ Sys.setenv(SCENARIOS_PMSI_SURCHARGE = normalizePath("palier.R"))
 ```
 
 ```{r palier_tirage, demo=FALSE}
-# Ce que ce chunk touche : selection_longs/, meta_tirage.yaml, chunks/ — sous le BUDGET DE PALIER (à vider ensuite).
+# Ce que ce chunk touche : 40_campagnes/<CAMPAGNE>/ (sélection, chunks) — sous le BUDGET DE PALIER (à vider ensuite).
 # Ce qu'il ne touche JAMAIS : le registre (palier.R impose REGISTRE_ACTIF <- FALSE et etape_registre_campagne() refuse
 #   tout appel sous palier), les corpus des campagnes passées, le catalogue.
 # Garde : ne tire QUE si la surcharge palier est active (palier.R + SCENARIOS_PMSI_SURCHARGE) ; sinon marche à suivre, rien exécuté.
@@ -292,25 +282,23 @@ if (!palier_actif()) {
   t0 <- Sys.time()
   etape_tirage_das_longs()                 # tout, ou chunk_range = c(1, 5) pour un échantillon de chunks
   duree_s <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
-  mt <- yaml::read_yaml(file.path(EXPORTS_DIR, "meta_tirage.yaml"))
+  mt <- yaml::read_yaml(FICHIER_SELECTION_META())
   debit <- mt$volume_attendu / duree_s
   cat(sprintf("débit ≈ %.0f scénarios/s ; campagne complète (%d) ≈ %.1f h ; sessions parallèles suggérées pour tenir en 4 h : %d\n",
               debit, NB_CRH_CIBLE, NB_CRH_CIBLE / debit / 3600, ceiling(NB_CRH_CIBLE / debit / 3600 / 4)))
 }
 ```
 
-Avant de revenir au budget complet : le garde-fou `meta_tirage.yaml` refuse de mélanger des chunks
+Avant de revenir au budget complet : le garde-fou `selection/_meta.yaml` refuse de mélanger des chunks
 tirés sous d'autres paramètres ⇒ vider chunks + sélection + méta (geste destructeur, gardé) :
 
 ```{r vider_palier, demo=FALSE}
-# Ce que ce chunk touche (SUPPRIME) : chunks/, selection_longs/, meta_tirage.yaml tirés sous le palier ; palier.R ; la surcharge de session.
-# Ce qu'il ne touche JAMAIS : registre_tirages/, les corpus scenarios_longs_tirage_v8_<Cn>/, le catalogue, les refs.
+# Ce que ce chunk touche (SUPPRIME) : 40_campagnes/<CAMPAGNE>/ tiré sous le palier ; palier.R ; la surcharge de session.
+# Ce qu'il ne touche JAMAIS : 50_registre/, les livrables 60_export_final/, les magasins partagés.
 # Quand : après la mesure, avant la campagne réelle. Quand PAS : si les chunks présents sont ceux d'une campagne réelle en cours.
 JE_CONFIRME <- FALSE   # passer à TRUE en connaissance de cause
 if (JE_CONFIRME) {
-  unlink(CHUNKS_DIR, recursive = TRUE)
-  unlink(DIR_SELECTION(), recursive = TRUE)
-  unlink(file.path(EXPORTS_DIR, "meta_tirage.yaml"))
+  unlink(DIR_CAMPAGNE(), recursive = TRUE)
   Sys.setenv(SCENARIOS_PMSI_SURCHARGE = ""); unlink("palier.R")
   cat("Vidé : rejouer §0 (Restart R) puis §3.\n")
 } else cat("Rien fait : passer JE_CONFIRME à TRUE d'abord.\n")
@@ -330,12 +318,14 @@ etape_habillage_longs()      # populations = "adulte" pour une seule population
 ```
 
 **Finalisation** : relecture des lots en flux, contrôles §8.2 et statistiques agrégés par lot, doublons
-éliminés par DP, export `scenarios_longs_tirage_v8_<CAMPAGNE>/<population>/part_*.parquet` + `_meta.yaml`
-(+ monofichier fusionné si volume ≤ `SEUIL_EXPORT_MONOFICHIER` ou `fusionner = TRUE`). Garde-fou : un
-dossier portant le `_meta.yaml` d'une **autre** campagne arrête tout (rien n'est écrasé) ; la même
-campagne est reprise. Les stats des séjours courts sont relues depuis `scenarios_courts_v8_<date>.parquet`
-(produit par `RUN.Rmd`, étape 2) : le fichier du jour, sinon le plus récent (annoncé) ; s'il n'existe pas,
-le message dit de le **refaire** ici (`etape_tirage_courts()`), jamais de le copier depuis l'autre profil.
+éliminés par DP, puis **UN SEUL LIVRABLE** `<profil>/60_export_final/scenarios_<CAMPAGNE>.parquet` +
+`scenarios_<CAMPAGNE>_meta.yaml` : tous les scénarios de la campagne — longs (toutes populations, colonne
+`population`) **et** courts (relus depuis le magasin `30_courts/`, embarqués : livrable autoportant) — en
+union de schémas, colonne `branche` (`long` / `court`) en tête, NA typés où une colonne ne s'applique pas,
+familles de colonnes documentées au méta. Au-delà de `SEUIL_MONOFICHIER` lignes : parts
+`scenarios_<CAMPAGNE>/part_*.parquet` (`lire_corpus_final()` lit les deux formes). Garde-fou : un méta d'une
+**autre** campagne arrête tout (rien n'est écrasé) ; la même campagne est réécrite à l'identique
+(idempotent) ; relancée sans lots habillés, elle les reconstruit depuis les chunks (aucun re-tirage).
 Le **registre** `registre_<CAMPAGNE>.parquet` est écrit automatiquement en fin de finalisation.
 
 ```{r finalisation}
@@ -350,8 +340,8 @@ section « Campagne Cn » (DP vierges / partiellement consommés / recyclés), c
 catalogue par DPEC, 30 DP les plus proches de l'épuisement total ; `registre_<Cn>.parquet` écrit.
 
 ```{r rapport}
-# Lecture robuste : le rapport le plus récent (résolution inter-sessions), message si aucune finalisation encore
-cat(lire_si_present(dernier_fichier(EXPORTS_DIR, "^rapport_v8_[0-9]{8}\\.txt$"), "etape_finalisation()", nom = "rapport_v8_<date>.txt"), sep = "\n")
+# Lecture robuste : rapport_<CAMPAGNE>.txt (nom stable, date en première ligne), message si aucune finalisation encore
+cat(lire_si_present(FICHIER_RAPPORT(), "etape_finalisation()"), sep = "\n")
 reg <- lire_registre(DIR_REGISTRE())
 cat("campagnes :", reg$nb_campagnes, "; scénarios cumulés :", reg$nb_scenarios, "; profils consommés :", nrow(reg$par_profil), "\n")
 reg$par_campagne
@@ -362,20 +352,20 @@ reg$par_campagne
 # 7. Revue
 
 ```{r revue}
-revue <- lire_si_present(file.path(EXPORTS_DIR, "echantillon_revue.csv"), "etape_finalisation()"); if (!is.null(revue)) View(revue)   # csv2 détecté
-top30 <- lire_si_present(file.path(EXPORTS_DIR, "top30_das_par_cmd.csv"), "etape_finalisation()"); if (!is.null(top30)) View(top30)
+revue <- lire_si_present(FICHIER_REVUE(), "etape_finalisation()"); if (!is.null(revue)) View(revue)   # csv2 détecté ; deux branches (court / long)
+top30 <- lire_si_present(FICHIER_TOP30(), "etape_finalisation()"); if (!is.null(top30)) View(top30)
 ```
 
-Lecture du corpus final de la campagne courante en flux (jamais tout en RAM au-delà du besoin) :
+Lecture du livrable de la campagne courante (lecteur unique à repli, monofichier ou parts) :
 
 ```{r corpus}
 # Lecteur UNIQUE du corpus final (lire_corpus_final) : dataset arrow si arrow réel, rbind des parts sinon —
 # jamais d'appel direct à un dataset arrow dans un notebook (repli mock = arrow partiel).
-meta_f <- lire_si_present(FICHIER_META_FINAL(), "etape_finalisation()")
-corpus <- lire_corpus_final(colonnes = c("population", "DPEC"))   # colonnes = NULL pour tout ; populations = "adulte" pour une seule
-if (is.null(corpus)) cat("corpus", CAMPAGNE, "absent (", DIR_FINAL(), ") — produit par etape_finalisation(), pas encore exécutée (voir etat_pipeline()).\n") else {
-  cat(DIR_FINAL(), ":", nrow(corpus), "lignes ;", yaml::as.yaml(meta_f))
-  print(corpus |> dplyr::count(population, DPEC))
+meta_f <- lire_si_present(FICHIER_LIVRABLE_META(), "etape_finalisation()")
+corpus <- lire_corpus_final(colonnes = c("branche", "population", "DPEC"))   # colonnes = NULL pour tout ; branche = "long" ; populations = "adulte"
+if (is.null(corpus)) cat("livrable", CAMPAGNE, "absent (", FICHIER_LIVRABLE(), ") — produit par etape_finalisation(), pas encore exécutée (voir etat_pipeline()).\n") else {
+  cat(FICHIER_LIVRABLE(), ":", nrow(corpus), "lignes ; familles de colonnes :", paste(names(meta_f$familles_colonnes), collapse = ", "), "\n")
+  print(corpus |> dplyr::count(branche, population, DPEC))
 }
 ```
 
@@ -390,8 +380,8 @@ Idempotente.
 ```{r retro_inscription}
 # Ce que ce chunk touche : registre_tirages/registre_<C0>.parquet (ajout ; stop si un contenu différent existe déjà).
 # Ce qu'il ne touche JAMAIS : la sélection et les chunks lus, le catalogue, les corpus.
-DOSSIER_SELECTION_ANTERIEURE <- DIR_SELECTION()      # ex. file.path(PATH_RESULTS, "exports", "selection_longs")
-DOSSIER_CHUNKS_ANTERIEURS    <- CHUNKS_DIR           # ex. file.path(PATH_RESULTS, "exports", "chunks")
+DOSSIER_SELECTION_ANTERIEURE <- DIR_SELECTION()      # ex. file.path(DIR_CAMPAGNES, "C0", "selection")
+DOSSIER_CHUNKS_ANTERIEURS    <- DIR_CHUNKS_LONGS()   # ex. file.path(DIR_CAMPAGNES, "C0", "chunks")
 # etape_retro_inscrire(DOSSIER_SELECTION_ANTERIEURE, DOSSIER_CHUNKS_ANTERIEURS, campagne = "C0")
 ```
 
@@ -422,17 +412,16 @@ memoire_session()   # objets par taille (Mo) ; Restart R si le pic monte
 
 # Règles de cache (mémo aval)
 
-- Catalogue partitionné (`catalogue_longs_seuil/`) : sidecar avec version de typologie et recette d'id ;
-  changer l'une ou l'autre ⇒ supprimer le dossier, restaurer le `.ancien`, relancer §2, puis recalculer
-  le registre par rétro-inscription de TOUTES les campagnes.
-- Chunks / sélection / `meta_tirage.yaml` / `habille/` : reprise telle quelle ; à vider à l'ouverture d'une
-  campagne (§3) ou après changement de `MODE_SELECTION`, `NB_CRH_CIBLE`, `NB_LIGNES_PAR_DP`, `NB_CHUNKS_MAX`,
-  `CHUNK_SIZE_MIN`, `CHUNK_SIZE_FIXE`, `SEED`, de la version de typologie ou du catalogue (le garde-fou le demande).
-- Chunks par population dans `chunks/<population>/` ; lots habillés dans `habille/<population>/`
-  (réécrits à chaque habillage) ; parts finales dans `scenarios_longs_tirage_v8_<CAMPAGNE>/<population>/`
-  (un dossier par campagne, `_meta.yaml`, jamais écrasé par une autre campagne).
-- Fichiers datés (`scenarios_courts_v8_<date>`, `rapport_v8_<date>`) : écrits au jour de la session ; relus
-  au jour, sinon le plus récent (annoncé « relu depuis … »).
+- Magasins partagés (`00_partiels/`, `10_references/`, `20_catalogue/`, `30_courts/`) : chacun porte un
+  `_meta.yaml` (paramètres qui le définissent) vérifié à chaque chargement ; écart ⇒ stop nommant les clés,
+  le drapeau `FORCER_*` (régénération : il sert TOUS les profils) et la soupape `CHEMINS_SURCHARGES`.
+- Catalogue partitionné : `_meta.yaml` avec version de typologie et recette d'id ; changer l'une ou l'autre ⇒
+  supprimer `catalogue_longs_seuil/`, restaurer le `.ancien`, relancer §2, puis recalculer le registre par
+  rétro-inscription de TOUTES les campagnes.
+- `40_campagnes/<C>/` (sélection + `_meta.yaml`, chunks, habillé) : reprise telle quelle ; un dossier par
+  campagne ; à vider après changement de `MODE_SELECTION`, `NB_CRH_CIBLE`, `NB_LIGNES_PAR_DP`, `NB_CHUNKS_MAX`,
+  `CHUNK_SIZE_MIN`, `CHUNK_SIZE_FIXE`, `SEED`, de la version de typologie ou du catalogue.
+- Livrable : `60_export_final/scenarios_<C>.parquet` + méta (ou parts au-delà de `SEUIL_MONOFICHIER`), un par
+  campagne, jamais écrasé par une autre ; nom stable, date dans le méta.
 - Une ligne de sélection et ses variantes vivent dans le même chunk (requis par le dédoublonnage).
-- Registre (`registre_tirages/`) : append-only, ne se vide **JAMAIS** ; changer de campagne vide chunks +
-  sélection + méta + habillé, pas le registre.
+- Registre (`50_registre/registre_tirages/`) : append-only, ne se vide **JAMAIS**.

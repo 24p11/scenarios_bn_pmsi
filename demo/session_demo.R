@@ -53,7 +53,7 @@ local({
     "NB_CRH_CIBLE <- 2000L ; NB_LIGNES_PAR_DP <- 1L ; MODE_SELECTION <- 'quota_dp_fixe'",
     "CAMPAGNE <- '" %+% campagne %+% "' ; REGISTRE_ACTIF <- TRUE",
     "PAIRES_RECOUVREMENT <- list(c('CHR/U', " %+% min(annees_base) %+% ", " %+% max(annees_base) %+% "))",
-    "PATH_RESULTS <- '" %+% dossier_res %+% "/' ; EXPORTS_DIR <- PATH_RESULTS %+% 'exports_demo/' ; PARTIELS_DIR <- PATH_RESULTS %+% 'partiels/'"),
+    "PATH_RESULTS <- '" %+% dossier_res %+% "/'   # arborescence par étapes sous demo/resultats/ (00_partiels ... production/60_export_final)"),
     f_surcharge)
   Sys.setenv(SCENARIOS_PMSI_PATH = proj, SCENARIOS_PMSI_PROFIL = "production", SCENARIOS_PMSI_SURCHARGE = f_surcharge, SCENARIOS_PMSI_DEMO = "1")
   cat("\n#### MODE DÉMO scenarios_bn_pmsi — base ", base_demo, " ; millésimes 20", paste(annees_base, collapse = ", 20"), " ; campagne ", campagne,
