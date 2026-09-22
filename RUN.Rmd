@@ -65,15 +65,22 @@ des seules années nécessaires. À relancer à chaque nouvelle session d'extrac
 etape_prep_data()          # ans = c(24, 25) pour forcer des années
 ```
 
-# Étape 2 — séjours courts (AN_REF uniquement)
+# Étape 2 — tables de référence, dont le TIRABLE courts (`30_courts/`)
+
+Les dix `ref_*` : neuf dans `10_references/`, et `ref_pivots_courts` — **le catalogue des courts** — dans
+`30_courts/` (magasin partagé, méta : `ANS_COURTS`, seuils). `ANS_COURTS` (défaut `AN_REF`) étend le tirable
+et ses refs de saturation sur le **cumul** de plusieurs années (ids des pivots stables sous extension).
+Le **tirage** des courts n'est plus ici : c'est une étape **de campagne** (`RUN_aval.Rmd` §4b, après la
+sélection : budget `NB_CRH_CIBLE_COURTS` ou `RATIO_COURTS` × volume longs). `ref_v_admin_longs` est
+photographié SANS `nbda` (habillage robuste) : un magasin antérieur est en écart ⇒ `etape_refs(forcer = TRUE)`
+(une requête distinct, quelques minutes).
 
 ```{r refs}
-etape_refs()               # forcer = TRUE après changement d'AN_REF, de SEUIL_REF_*, de CONVERSION_E669
+etape_refs()               # forcer = TRUE après changement d'AN_REF / ANS_COURTS, de SEUIL_REF_*, de CONVERSION_E669, ou magasin antérieur au retrait de nbda
 ```
 
-```{r courts}
-Sys.setenv(SCENARIOS_PMSI_ETAPES_SEULEMENT = "1"); source("tirage.R")   # famille tirage (sans base)
-etape_tirage_courts()      # chunks courts + scenarios_courts_v8_<date>.parquet ; parallélisme : etape_tirage_courts(chunk_range = c(i, j)) par session, plages disjointes, puis un appel final sans plage
+```{r tirable_courts}
+Sys.setenv(SCENARIOS_PMSI_ETAPES_SEULEMENT = "1"); source("tirage.R")   # famille tirage (sans base) : ligne `tirable_courts` du tableau de bord
 etat_pipeline()
 ```
 
@@ -200,7 +207,7 @@ chunks tirés sous d'autres paramètres. Vider le dossier de campagne `40_campag
 
 ```{r vider_chunks, demo=FALSE}
 # Ce que ce chunk touche (SUPPRIME) : <profil>/40_campagnes/<CAMPAGNE>/ (sélection, chunks longs, habillé) de la campagne courante.
-# Ce qu'il ne touche JAMAIS : 50_registre/, les livrables 60_export_final/, les magasins partagés (partiels, refs, catalogue, courts).
+# Ce qu'il ne touche JAMAIS : 50_registre/, les livrables 60_export_final/, les magasins partagés (partiels, refs, catalogue, tirable courts).
 JE_CONFIRME <- FALSE   # passer à TRUE en connaissance de cause
 if (JE_CONFIRME) {
   unlink(DIR_CAMPAGNE(), recursive = TRUE); cat("Vidé :", DIR_CAMPAGNE(), "\n")
@@ -221,7 +228,7 @@ if (JE_CONFIRME) {
   **pas** de `SEUIL_PIVOT`, du périmètre d'années ni de `CONVERSION_E669` (`FORCER_PARTIELS`).
 - `10_references/` : `AN_REF`, `SEUIL_REF_*`, `CONVERSION_E669`, `BARE_E669_DEFAUT` (`FORCER_REFS`).
 - `20_catalogue/` : périmètre + seuil + conversion + clés amont (+ typologie, recette d'id) ;
-  identique ⇒ sauté, en écart ⇒ `FORCER_CATALOGUE`. `30_courts/` : `AN_REF`, paramètres courts (`FORCER_COURTS`).
+  identique ⇒ sauté, en écart ⇒ `FORCER_CATALOGUE`. `30_courts/` (le tirable) : `ANS_COURTS`, `SEUIL_PIVOT`, `DUREE_COURTS`, `PIVOTS_COURTS`, conversion (`FORCER_COURTS` régénère les pivots).
 - `40_campagnes/<C>/` (sélection, chunks, habillé, `selection/_meta.yaml`) : reprise telle quelle ; un
   dossier par campagne, à vider après changement de `MODE_SELECTION`, `NB_CRH_CIBLE`,
   `NB_LIGNES_PAR_DP`, `QUOTA_MIN_PAR_UNITE`, `SEED`, de la version de typologie ou du catalogue.

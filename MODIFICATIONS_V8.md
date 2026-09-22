@@ -87,9 +87,14 @@ section 5 (« non repris ») ; Q1 résolue. La construction de `REFS` (commune a
 **Source :** v7.1.2 l.219-221. Écarts : `an` → `AN_REF` ; `duree<3` → `duree%in%DUREE_COURTS`
 (config `0:2`, équivalent pour une durée entière) ; `all_of(pivots)` → `dplyr::all_of(PIVOTS_COURTS)` ;
 `nb>10` → `nb>SEUIL_PIVOT` (même valeur) ; `-> df_cases` → `df_cases_courts <-`.
+Chantier « courts en campagnes » (§24.2) : `an` redevient un paramètre (défaut `AN_REF`, chaîne intacte) ; pour
+`ANS_COURTS` multi-années, une chaîne NOUVELLE `fabrique_pivots_courts_cumul(ans)` cumule les comptes EN BASE
+(`union_all` des sommes par année, `sum(nb)` par pivot, seuil `nb>SEUIL_PIVOT` rejugé sur le cumul, `collect`).
 
 ### B7 — `df_v_admin_courts` — extraction l.549-553 (`fabrique_v_admin_courts`)
 **Source :** v7.1.2 l.232-234. Écarts : `an` (25 en dur) → `AN_REF` ; nom `df_v_admin` → `df_v_admin_courts`.
+Chantier « courts en campagnes » (§24.2) : `an` paramétré (défaut `AN_REF`, chaîne intacte) ; multi-années =
+chaîne par année puis `distinct` en R (`fabrique_v_admin_courts_cumul`).
 
 ### B8 — `prep_scenarios2(...)` — extraction l.488-547 (écart P1 depuis le chantier mémoire, section 13)
 **Source :** v7.2 l.278-327. Écarts :
@@ -111,6 +116,10 @@ Supprimés : `print("- Noombre ...")` (§5.14), l.537-540 (`sample_n(3000)`, `nb
 
 ### B10 — `df_v_admin_longs` — extraction l.555-559 (`fabrique_v_admin_longs`)
 **Source :** v7.2 l.551-553. Écarts : `an` (25 en dur) → `AN_REF` ; nom → `df_v_admin_longs`.
+**Chantier « habillage robuste » (§24.6), DÉCISION UTILISATEUR : `nbda` retiré du `distinct()`** (défaut trouvé en
+revue clinique : NA durée + modes) — la photographie rétrécit, les variantes se cumulent entre valeurs de `nbda` ;
+la jointure d'habillage porte 6 clés (`CLES_ADMIN_LONGS`). Seule modification de contenu d'une chaîne depuis la
+règle d'or ; clé du magasin `10_references` (`CLES_ADMIN_LONGS`) : un magasin antérieur est en écart de lui-même.
 
 ### B11 — `cma` dans `referentiels.R` l.32
 `dplyr::filter(v2025>1)` → `dplyr::filter(!!dplyr::sym("v20" %+% ANSEQTA_REF)>1)` (§5.8) avec
@@ -1606,3 +1615,159 @@ Voir le compte rendu de livraison (passes helpers ± arrow, SQLite ± arrow, dé
 - **Q66** — La variable `SCENARIOS_PMSI_SURCHARGE` survit au Restart R mais pas à une nouvelle session RStudio :
   après réouverture, relancer `ouvrir_campagne` (réécriture identique, acceptée) ou poser la variable à la main ;
   la session affiche `défaut config` partout dans ce cas, ce qui est le signal.
+
+## 24. Chantier « courts en campagnes + habillage robuste »
+
+Décisions actées : les séjours courts ont le MÊME STATUT que les longs dans le corpus (leur traitement diffère —
+saturation des DAS sous-codés en routine — pas leur rôle) ; ils entrent dans l'économie des campagnes ; adoption de C1
+= longs + courts historiques SANS re-tirage ; tirable courts extensible multi-années ; correctif du défaut d'habillage
+TROUVÉ EN REVUE CLINIQUE. Aucun changement des doctrines de tirage (saturation, diabète, I10, dedup de catégorie) ni
+des recettes d'identifiants (`id_v1`, `id_courts_v1`).
+
+### 24.1 Modèle : les pivots courts = le catalogue des courts (§1)
+
+- `30_courts/` = le magasin du TIRABLE : `ref_pivots_courts.parquet` (écrit par `etape_refs`, accesseur `FICHIER_REF` :
+  le seul `ref_*` hors `10_references`) + `_meta.yaml` (clés `ANS_COURTS`, `SEUIL_PIVOT`, `DUREE_COURTS`, `PIVOTS_COURTS`,
+  conversion ; `FORCER_COURTS` régénère les pivots) ; plus un corpus tiré. `scenarios_courts.parquet` y reste comme
+  corpus courts HISTORIQUE (dé-daté par la réorganisation, méta `scenarios_courts_meta.yaml` avec la date d'origine),
+  matière de l'adoption, jamais re-tiré.
+- `etape_tirage_courts(chunk_range, budget = NB_CRH_CIBLE_COURTS, ratio = RATIO_COURTS)` devient une ÉTAPE DE CAMPAGNE
+  (après `etape_selection_longs`) : budget = `NB_CRH_CIBLE_COURTS` (absolu) ou `RATIO_COURTS` × volume longs attendu de la
+  sélection (`budget_courts`), réparti sur les pivots AU POIDS `n` aux plus forts restes (`repartir_budget_pivots`, remise
+  au niveau pivot : un pivot reçoit `nb_tirages` variantes) ; variantes numérotées PAR PIVOT (`pivots_sous_registre` :
+  `variante_debut` = `variante_max` + 1, `hash_exclus`) ; dédoublonnage souple et exclusion des hash du registre dans
+  `sample_das_court` (mêmes mécaniques que `sample_das_long`, doctrine de tirage intacte) ; typologie DPEC/TPEC (vraie
+  durée, âge tiré), population, lettre, campagne ; habillage admin par `habiller_admin` (strate = les 6 pivots, stop
+  nominatif) ; sorties `40_campagnes/<C>/chunks_courts/` (transitoires) et `habille/courts/scenarios_courts.parquet` +
+  `_meta.yaml` (budget, source, gardés / demandés, pivots vierges / recyclés, seed). Seed des courts dérivé de la
+  campagne (`seed_courts`). Bannière : campagne, budget courts, source (ratio / absolu), surcharge active.
+- `RATIO_COURTS <- 1.0` (config, commenté « provisoire — à calibrer avec l'équipe apprentissage », point ouvert du
+  consortium, Q67) ; `NB_CRH_CIBLE_COURTS <- NULL` (NULL = ratio). Les deux exposés dans le chunk `ouvrir_campagne`
+  (`contenu_surcharge_campagne` : écrits seulement s'ils sont posés) et dans `PARAMETRES_CAMPAGNE` (sources affichées).
+- `NB_TIRAGES_COURTS` conservé (héritage : corpus courts FIXE adopté en C1), inutilisé par le tirage par campagne.
+
+### 24.2 Tirable courts multi-années (§1bis)
+
+- `ANS_COURTS <- NULL` (config ; NULL = `AN_REF`, résolu après les surcharges) ou vecteur d'années : `ref_pivots_courts`
+  ET les refs de saturation courts (`ref_das_chronique` → `ref_distribution_e660`, `ref_nb_chroniques`) et
+  `ref_v_admin_courts` (`REFS_COURTS`) sont construits sur le CUMUL des années — pivots cumulés EN BASE (chaîne nouvelle,
+  seuil rejugé sur le cumul, écart B6) ; refs chroniques et v_admin = chaînes v7 par année puis addition (`reagreger`) /
+  `distinct` en R (tables agrégées, résultat identique à une addition en base ; les chaînes restent intactes).
+  `ref_comp_diabete`, `ref_das_aigu`, `ref_paires_chroniques`, `ref_substitution_imprecis`, `ref_v_admin_longs`
+  restent sur `AN_REF` (Q68).
+- Résolution des besoins : `resoudre_besoins(..., ans_courts, refs_courts)` → `annees_a_preparer` inclut `ANS_COURTS`
+  quand une ref du tirable manque, `annees_das_chronique` (vecteur) remplace le booléen unique ; `etape_prep_data` et
+  `etape_refs` préparent `prep_data` / `prep_das_chro` des années nécessaires.
+- Métas : `ANS_COURTS` clé des magasins `courts` et `references` ; les ids des pivots sont des hash de contenu
+  (`id_courts_v1`) : stables sous extension — pivots existants inchangés au registre, nouveaux pivots vierges.
+
+### 24.3 Registre commun, mêmes règles (§2)
+
+- `COLONNES_REGISTRE` + `branche` ("long" / "court") ; `normaliser_registre` : les registres écrits avant sont relus avec
+  `branche = "long"` implicite (`lire_registre` fichier par fichier, plus de dataset arrow : schémas hétérogènes) ;
+  agrégats `par_branche`, `par_campagne` (`nb_longs`, `nb_courts`) ; `statut_campagne_registre(…, branche)`.
+- `ecrire_registre_campagne` : idempotent si identique (hors date) ; EXTENSION append-only acceptée seulement si toutes les
+  lignes existantes sont conservées à l'identique et que les ajouts sont d'une branche absente du fichier (courts adoptés
+  après une rétro-inscription des longs) ; toute autre différence → stop, rien réécrit.
+- Recyclage courts = variantes nouvelles directement (pas de notion de « pivot vierge d'abord » : les pivots sont peu
+  nombreux et destinés à resservir) — numérotation après `variante_max`, hash déjà enregistrés exclus, aucun re-tirage.
+- `etape_registre_campagne` inscrit les deux branches (courts via `registre_depuis_courts` : un scénario par
+  `id_scenario`, variantes d'habillage repliées) ; une branche absente est signalée ; `etat_pipeline` agrège par branche.
+
+### 24.4 Séquence de campagne et livrable (§3)
+
+- `tirage.R` : sélection → courts → DAS longs → habillage → finalisation (les courts ont besoin du volume attendu).
+- `etape_finalisation` embarque les courts DE LA campagne (`charger_courts_campagne` : absents mais chunks présents →
+  reconstruction sans re-tirage ; rien → message actionnable) ; méta : `volumes` par branche (lignes, scénarios),
+  `ratio_courts_realise` (scénarios courts / scénarios longs), `ratio_courts_cible`, `habillage_longs` ; rapport :
+  section « C. Séjours courts de la campagne » et « 5b. Habillage admin ».
+- Le vidage d'ouverture de campagne (`nouvelle_campagne`) couvre `chunks_courts/` et `habille/courts/` (tout
+  `40_campagnes/<Cn>/`) ; le registre, jamais. Chunk `ouvrir_campagne` : `RATIO_COURTS_CAMP`, `NB_CRH_CIBLE_COURTS_CAMP`.
+  RUN_aval.Rmd §4b (chunk `tirage_courts`), carte des dossiers, RUN.Rmd (Étape 2 = références dont le tirable ; chunk
+  `courts` retiré), RUN.md, demo (résumé) mis à jour.
+
+### 24.5 Adoption de C1 (§4)
+
+- `etape_retro_inscrire_courts(campagne, fichier_courts)` : corpus courts historique → `id_profil` (k + 15 hex sur les
+  pivots), `hash_das`, variantes telles que tirées, branche "court" ; vérification : inscrits == scénarios distincts du
+  corpus (une ligne du corpus par variante d'habillage admin : le « nb lignes » du brief est interprété en scénarios
+  distincts, Q69) ; idempotente.
+- `etape_adopter_campagne(campagne = "C1", source_longs, fichier_courts, dossier_recherche, annexes)` : relit l'ancien
+  corpus longs (`lire_corpus_longs_historique` : dossier `scenarios_longs_tirage_v8_<AAAAMMJJ>/` avec sous-dossiers
+  `<population>/`, sinon tous les parquets avec population reconstituée par cage, ou fichier), `preparer_longs_adoptes`
+  (DPEC/TPEC, `id_profil` id_v1 sur pivots + graine, hash, `id_scenario`), `preparer_courts_adoptes`, registre des deux
+  branches (extension acceptée), `ecrire_livrable(…, campagne)` → `scenarios_<C>.parquet` + méta (`origine =
+  "adoption"`, chemins sources, dates dont `date_origine` des courts, volumes, ratio, `verification_registre`), annexes
+  datées (`rapport_v8_<d>.txt`, revue, top30) copiées et renommées par campagne. Garde-fous : livrable de la même campagne
+  présent et non issu d'une adoption ou d'autres sources → stop ; plusieurs corpus datés → `source_longs` explicite ;
+  cohérence livrable / registre (`verifier_adoption`) signalée. Accesseurs `FICHIER_LIVRABLE(campagne)` etc.
+  paramétrés par campagne.
+- Réorganisation : `pivots_courts` → `30_courts/ref_pivots_courts.parquet` ; chunks courts anciens IGNORÉS (motif) ;
+  métas reconstruits : tirable (`_meta.yaml`) et corpus historique (`scenarios_courts_meta.yaml`).
+
+### 24.6 Habillage robuste — DÉFAUT TROUVÉ EN REVUE CLINIQUE (§5)
+
+La revue humaine de l'échantillon a détecté des longs sans durée ni modes (NA) — validation du processus de revue :
+les contrôles automatiques auraient dû le voir, le contrôle manquant existe désormais. Cause établie : jointure
+naturelle sur 7 clés dont l'âge EXACT et `nbda`, `ref_v_admin_longs` photographié sur `AN_REF` seule → profils du
+catalogue multi-années sans candidat → NA sur les 4 colonnes apportées, ensemble.
+- DÉCISION UTILISATEUR : `nbda` SORT des clés (`fabrique_v_admin_longs` sans `nbda`, écart B10 ; `CLES_ADMIN_LONGS` en
+  config, clé du magasin `10_references` : un magasin antérieur est en écart de lui-même → `FORCER_REFS`, une requête
+  distinct, documenté RUN.md / RUN.Rmd). `v_admin_courts` ne contenait pas `nbda` : rien à faire (vérifié).
+- `habiller_admin(d, v_admin, niveaux, cols_apport, nb_variantes, nb_repli)` (helpers K2) : (0) strate fine 6 clés,
+  toutes les variantes (`NB_VARIANTES_ADMIN_LONGS = NA`) → (1) `cage` au lieu de l'âge exact → (2) `mode_hospit × cage ×
+  racine` ; `NB_VARIANTES_ADMIN_REPLI` (2) variantes tirées au premier niveau non vide, uniformément entre candidats
+  distincts (Q70) ; colonne `repli_admin` (0/1/2) tracée jusqu'au corpus (famille `habillage_admin`) ; tous niveaux vides
+  → stop nominatif. Appliqué aux deux flux (lots et modes historiques) et, avec une seule strate, aux courts.
+- Contrôle : `controle_habillage` → « zéro NA sur les colonnes d'habillage » compté dans `TOTAL anomalies` (longs et
+  courts) et distribution de `repli_admin` au rapport (§5b) et au méta du livrable.
+
+### 24.7 Écarts et identité avec les anciens scripts
+
+Chaînes : B6 (`an` paramétré + chaîne cumul nouvelle), B7 (`an` paramétré), B10 (`nbda` retiré — décision). Identité
+avec `tests/ancien_20260914` désormais limitée par décision à l'extraction (catalogue, 8 refs, tirable), la sélection et
+le tirage des DAS longs (chunks bit à bit ; scénarios longs identiques hors habillage) ; `ref_v_admin_longs` ==
+ancienne photographie sans `nbda` ; l'habillage et les courts (par campagne) divergent, prouvé par le test.
+
+### 24.8 Tests
+
+- Helpers (+31, 363) : budget (absolu / ratio / stop), répartition au poids, pivots sous registre, `sample_das_court`
+  sous registre (numérotation, dedup, hash exclus sans re-tirage, schéma antérieur conservé) ; registre deux branches
+  (relecture implicite d'un fichier ancien sans `branche`, extension append-only acceptée / refusée, statut par branche,
+  `registre_depuis_courts` avec et sans typologie) ; habillage (nbda hors des clés, niveaux 0/1/2, premier niveau non
+  vide, déterminisme, stop nominatif, courts, contrôle NA) ; adoption (choix de la source, préparation longs / courts,
+  vérification) ; plan des besoins avec `ANS_COURTS` ; paramètres courts de `campagne.R` ; notebooks.
+- SQLite (+14, 189) : tirable dans `30_courts` (+ méta), `ref_v_admin_longs` sans `nbda` ; courts de campagne (ordre,
+  budget ratio / absolu, chunks sous `40_campagnes`, plage puis run complet, reprise) ; identité avec les anciens
+  scripts recadrée ; `etape_tirage_courts` sans sélection → erreur actionnable ; livrable (volumes, ratio, familles),
+  union de schémas (population / DPEC sur les deux branches), zéro NA d'habillage ; finalisation reconstruisant les deux
+  branches ; rétro-inscription des courts de C1 (extension du registre) ; C2 : recyclage numéroté après C1, hash exclus,
+  registre deux branches, campagne close côté courts ; réorganisation (pivots → `30_courts`, chunks courts ignorés,
+  corpus courts historique = sortie réelle des anciens scripts) ; adoption C0 (ambiguïté → stop, forme dossier et forme
+  fichier, idempotence, autres sources → stop, livrable non-adoption → stop) ; C3 recyclant les pivots historiques.
+- Démo et notebooks ± arrow.
+
+### 24.9 Vérifications
+
+helpers 363 (avec arrow) / 360 (sans arrow) ; SQLite 189 / 189 ; démo + RUN.Rmd + RUN_aval.Rmd verts avec et sans arrow
+(chunks `ouvrir_campagne`, `adoption_c1`, paliers sautés en démo). Identité avec les anciens scripts recadrée (24.7).
+
+### 24.10 Questions (aucune action non autorisée)
+
+- **Q67** — `RATIO_COURTS = 1.0` provisoire : point ouvert du consortium (équipe apprentissage) ; le ratio s'applique au
+  volume longs ATTENDU de la sélection (les courts sont tirés avant les DAS longs) — le réalisé, chiffré au méta et au
+  rapport (`ratio_courts_realise`), s'en écarte quand des strates de référence sont vides (fixtures) ou après
+  dédoublonnage (pivots pédiatriques sans DAS : une seule variante possible par pivot → gardés < demandés).
+- **Q68** — `ref_comp_diabete`, `ref_das_aigu`, `ref_v_admin_longs` restent photographiés sur `AN_REF` (partagés avec
+  les longs) ; élargir la photographie `v_admin` aux années du catalogue (`ANS` au lieu de `AN_REF`) est une décision de
+  doctrine ultérieure — le repli suffit d'abord (§5 du brief, b).
+- **Q69** — Vérification de la rétro-inscription des courts : « nb inscrits == nb lignes du corpus » est interprété en
+  scénarios DISTINCTS (le corpus porte `NB_VARIANTES_ADMIN_COURTS` lignes par scénario) ; les deux nombres sont imprimés.
+- **Q70** — « Tirage pondéré » aux niveaux de repli : `v_admin` est une table `distinct` sans effectifs, le tirage est
+  uniforme entre candidats distincts ; pondérer par les effectifs exigerait un `count` dans la fabrique (chaîne B10).
+- **Q71** — Si la revue clinique constate des durées incohérentes avec la charge en comorbidités : réintroduire `nbda`
+  EN CLASSES (0-3 / 4-7 / 8+) dans les clés — décision après revue (§5 du brief, a).
+- **Q72** — `ref_v_admin_longs` n'est pas filtré sur `DUREE_LONGS` : un scénario long peut recevoir la durée d'un séjour
+  court de même profil (pré-existant, visible depuis le retrait de `nbda`) — à trancher avec Q71.
+- **Q73** — Chunk `adoption_c1` marqué `demo=FALSE` (pas de corpus historique en démo) ; `NB_TIRAGES_COURTS` conservé en
+  config comme héritage documenté (le supprimer casserait les instantanés figés des anciens scripts).

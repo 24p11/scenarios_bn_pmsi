@@ -92,17 +92,17 @@ chaque magasin partagé porte un `_meta.yaml` avec les paramètres qui le défin
 | Dossier | Contenu | Écrit par | Lu par | Statut |
 |---|---|---|---|---|
 | `00_partiels/` | `catalogue_partiel_<etbs>_<an>.parquet` + `_meta.yaml` (clés bloquantes) | `etape_partiels_longs()` (base) | catalogue | **[partagé]** cache d'extraction |
-| `10_references/` | les 10 `ref_*.parquet` + `_meta.yaml` (6 clés ex-Q13) | `etape_refs()` (base) | courts, tirage, habillage | **[partagé]** |
+| `10_references/` | 9 `ref_*.parquet` + `_meta.yaml` (clés ex-Q13 + `ANS_COURTS`, `CLES_ADMIN_LONGS`) | `etape_refs()` (base) | courts, tirage, habillage | **[partagé]** |
 | `20_catalogue/` | `catalogue_longs_seuil/part_<L>.parquet` + `_meta.yaml` (périmètre, seuil, conversion, typologie, recette id) ; monofichier transitoire + méta ; `rapport_extraction.txt` | `etape_catalogue()`, `etape_repartitionner_catalogue()` | sélection, rétro-inscription | **[partagé]** |
-| `30_courts/` | `chunks/`, `scenarios_courts.parquet` + `_meta.yaml` | `etape_tirage_courts()` | finalisation (embarqués dans chaque livrable) | **[partagé]** |
+| `30_courts/` | **le TIRABLE courts** : `ref_pivots_courts.parquet` (= le catalogue des courts) + `_meta.yaml` (`ANS_COURTS`, seuils) ; `scenarios_courts.parquet` = corpus courts historique (adoption C1) | `etape_refs()` (base) | tirage courts de chaque campagne | **[partagé]** |
 | `90_diagnostics/` | `diagnostic_apports.csv`, `recouvrement.csv` [partagés] ; `diagnostic_memoire_<profil>.csv` | extraction | RUN.Rmd | [partagé] |
-| `<profil>/40_campagnes/<C>/` | `selection/` (+ `_meta.yaml`), `chunks/`, `habille/` | sélection, tirage, habillage | finalisation, registre | **[profil]** transitoires, un dossier par campagne |
-| `<profil>/50_registre/registre_tirages/` | `registre_<C>.parquet` | fin de finalisation, rétro-inscription | sélection sous registre | **[profil]** permanent, **JAMAIS vidé** |
+| `<profil>/40_campagnes/<C>/` | `selection/` (+ `_meta.yaml`), `chunks/<population>/`, `chunks_courts/`, `habille/<population>/`, `habille/courts/` (scénarios courts de la campagne + `_meta.yaml`) | sélection, tirage courts, tirage longs, habillage | finalisation, registre | **[profil]** transitoires, un dossier par campagne |
+| `<profil>/50_registre/registre_tirages/` | `registre_<C>.parquet` (deux branches : colonne `branche` long / court) | fin de finalisation, rétro-inscription, adoption | sélection et tirage courts sous registre | **[profil]** permanent, **JAMAIS vidé** |
 | `<profil>/60_export_final/` | `scenarios_<C>.parquet` + `_meta.yaml` (ou `scenarios_<C>/part_*`), `rapport_<C>.txt`, `echantillon_revue_<C>.csv`, `top30_das_par_cmd_<C>.csv` | finalisation | livraison, revue | **[profil]** un livrable par campagne, jamais écrasé par une autre |
 
 Règle de nommage : **nom stable, date dans le méta** (aucun nom daté). Convention : `_meta.yaml` dans
 chaque magasin / dossier, `<objet>_meta.yaml` à côté d'un fichier. Deux profils travaillent sur le même
-`PATH_RESULTS` : le second réutilise partiels, refs, catalogue et courts sans recalcul.
+`PATH_RESULTS` : le second réutilise partiels, refs, catalogue et tirable courts sans recalcul.
 
 ---
 
@@ -193,19 +193,23 @@ doctrine et les défauts.
 #   Sys.setenv(SCENARIOS_PMSI_SURCHARGE = "") + Restart R). La surcharge démo n'est pas concernée.
 # Quand : à chaque ouverture de campagne. Quand PAS : campagne en cours (ses paramètres sont figés dans selection/_meta.yaml).
 CAMPAGNE_A_OUVRIR   <- "C2"        # identifiant court ([A-Za-z0-9_-]) : nouveau, jamais inscrit au registre
-NB_CRH_CIBLE_CAMP   <- 500000L     # volume visé (ordre de grandeur, pas un engagement)
+NB_CRH_CIBLE_CAMP   <- 500000L     # volume visé des LONGS (ordre de grandeur, pas un engagement)
 NB_LIGNES_PAR_DP_CAMP <- 1L        # k lignes distinctes par DP, variantes déduites
-REGISTRE_ACTIF_CAMP <- TRUE        # TRUE en production (registre append-only)
+REGISTRE_ACTIF_CAMP <- TRUE        # TRUE en production (registre append-only, deux branches)
+RATIO_COURTS_CAMP   <- 1.0         # courts = RATIO × volume longs attendu — PROVISOIRE, à calibrer avec l'équipe apprentissage
+NB_CRH_CIBLE_COURTS_CAMP <- NULL   # NULL = ratio ; un entier impose un budget courts absolu
 # PLAFONDS_DPEC_CAMP <- list("Accouchement normal mère" = 100L, "Bébé normal" = 100L)   # seulement si ajustés pour cette campagne
 ecrire_surcharge_campagne(CAMPAGNE_A_OUVRIR, NB_CRH_CIBLE_CAMP, NB_LIGNES_PAR_DP_CAMP, REGISTRE_ACTIF_CAMP,
-                          plafonds_dpec = if (exists("PLAFONDS_DPEC_CAMP")) PLAFONDS_DPEC_CAMP else NULL)
+                          plafonds_dpec = if (exists("PLAFONDS_DPEC_CAMP")) PLAFONDS_DPEC_CAMP else NULL,
+                          nb_crh_cible_courts = NB_CRH_CIBLE_COURTS_CAMP, ratio_courts = RATIO_COURTS_CAMP)
 # -> « surcharge campagne écrite — Restart R puis chunk session » : la session affichera la source de chaque paramètre.
 ```
 
 ```{r nouvelle_campagne}
 # Ce que ce chunk touche (SUPPRIME) : les dossiers 40_campagnes/<Cn>/ des campagnes PRÉCÉDENTES (sélection, chunks, habillé).
 # Ce qu'il ne touche JAMAIS : 50_registre/ (append-only), les livrables 60_export_final/ des campagnes passées, les magasins
-#   partagés (partiels, refs, catalogue, courts). Le dossier de la campagne courante est neuf : rien à vider pour elle.
+#   partagés (partiels, refs, catalogue, tirable courts). Le dossier de la campagne courante est neuf : rien à vider pour elle
+#   (chunks_courts/ et habille/courts/ des campagnes précédentes sont vidés avec le reste).
 # Quand : après le chunk ouvrir_campagne + Restart R + §0 (statut « jamais inscrite »), AVANT la sélection.
 # Quand PAS : reprise d'une campagne en cours (les chunks présents sont la reprise) ; campagne déjà finalisée
 #   que l'on veut conserver (son corpus est ailleurs, mais sa sélection/chunks seraient perdus : sans conséquence
@@ -268,9 +272,26 @@ if (palier_actif()) cat("ATTENTION : surcharge de PALIER active (", surcharge_ac
 # session 1 : etape_tirage_das_longs(chunk_range = c(1, 25),  populations = "adulte")
 # session 2 : etape_tirage_das_longs(chunk_range = c(26, 50), populations = "adulte")
 # session 3 : etape_tirage_das_longs(populations = "pediatrie")
+# session 4 : etape_tirage_courts(chunk_range = c(1, 10))   # courts : même mode d'emploi (plages disjointes de chunks_courts/, appel final sans plage)
 nb_chunks <- sapply(names(POPULATIONS), function(p){ f <- file.path(DIR_CHUNKS_POP(p), "longs_chunks_meta.yaml"); if(file.exists(f)) yaml::read_yaml(f)$nb_chunks else NA })
 nb_chunks
 etat_pipeline()
+```
+
+---
+
+# 4b. Tirage des séjours courts DE LA CAMPAGNE (même statut que les longs)
+
+Les courts entrent dans l'économie des campagnes : tirés **par campagne** depuis le tirable `30_courts/`
+(pivots = catalogue des courts), budget = `NB_CRH_CIBLE_COURTS` (absolu) ou `RATIO_COURTS` × volume longs
+attendu de la sélection (ratio **provisoire 1.0**, point ouvert du consortium), réparti sur les pivots au
+poids ; variantes numérotées par pivot après la `variante_max` du registre (recyclage = variantes nouvelles,
+`hash_das` enregistrés exclus, aucun re-tirage). Sorties transitoires `40_campagnes/<C>/chunks_courts/` et
+`habille/courts/`. Bannière : campagne, budget courts et sa source (ratio / absolu). Exige la sélection
+(§3b) pour le ratio ; Restart R avant.
+
+```{r tirage_courts}
+etape_tirage_courts()        # budget = 12345L pour imposer un budget absolu à cet appel ; chunk_range = c(i, j) par session parallèle
 ```
 
 ---
@@ -334,9 +355,11 @@ if (JE_CONFIRME) {
 # 6. Habillage, finalisation, registre, rapport
 
 **Habillage** (flux par lots) : relecture des chunks par lots de `LOT_CHUNKS_FINALISATION`, jointure
-`v_admin_longs.parquet` relu (jamais `prep_data` : frontière tirage / base), slice_sample par lot,
-DPEC/TPEC recalculés (duree = 3, comme le catalogue). Exige un jeu de chunks complet (stop sinon).
-Restart R avant.
+`ref_v_admin_longs.parquet` relu (jamais `prep_data` : frontière tirage / base) sur les **6 clés**
+`CLES_ADMIN_LONGS` (nbda retiré), **repli hiérarchique** (âge exact → cage → mode_hospit × cage × racine,
+`NB_VARIANTES_ADMIN_REPLI` variantes aux niveaux de repli), colonne `repli_admin` tracée jusqu'au corpus, stop
+nominatif si aucun candidat (jamais de NA silencieux) ; DPEC/TPEC recalculés (duree = 3, comme le catalogue).
+Exige un jeu de chunks complet (stop sinon). Restart R avant.
 
 ```{r habillage}
 etape_habillage_longs()      # populations = "adulte" pour une seule population
@@ -345,13 +368,15 @@ etape_habillage_longs()      # populations = "adulte" pour une seule population
 **Finalisation** : relecture des lots en flux, contrôles §8.2 et statistiques agrégés par lot, doublons
 éliminés par DP, puis **UN SEUL LIVRABLE** `<profil>/60_export_final/scenarios_<CAMPAGNE>.parquet` +
 `scenarios_<CAMPAGNE>_meta.yaml` : tous les scénarios de la campagne — longs (toutes populations, colonne
-`population`) **et** courts (relus depuis le magasin `30_courts/`, embarqués : livrable autoportant) — en
-union de schémas, colonne `branche` (`long` / `court`) en tête, NA typés où une colonne ne s'applique pas,
-familles de colonnes documentées au méta. Au-delà de `SEUIL_MONOFICHIER` lignes : parts
+`population`) **et** courts **de la campagne** (§4b, même statut que les longs) — en union de schémas, colonne
+`branche` (`long` / `court`) en tête, NA typés où une colonne ne s'applique pas, familles de colonnes documentées
+au méta ; méta : volumes par branche (lignes et scénarios) et **ratio courts réalisé**. Contrôles §8.2 complétés
+par « zéro NA d'habillage » (durée, modes) et la distribution de `repli_admin` (0 = strate fine, 1 = cage,
+2 = mode_hospit × cage × racine) — habillage robuste, défaut trouvé en revue clinique. Au-delà de `SEUIL_MONOFICHIER` lignes : parts
 `scenarios_<CAMPAGNE>/part_*.parquet` (`lire_corpus_final()` lit les deux formes). Garde-fou : un méta d'une
 **autre** campagne arrête tout (rien n'est écrasé) ; la même campagne est réécrite à l'identique
 (idempotent) ; relancée sans lots habillés, elle les reconstruit depuis les chunks (aucun re-tirage).
-Le **registre** `registre_<CAMPAGNE>.parquet` est écrit automatiquement en fin de finalisation.
+Le **registre** `registre_<CAMPAGNE>.parquet` (deux branches, colonne `branche`) est écrit automatiquement en fin de finalisation.
 
 ```{r finalisation}
 etape_finalisation()         # fusionner = TRUE pour forcer le monofichier
@@ -369,7 +394,7 @@ catalogue par DPEC, 30 DP les plus proches de l'épuisement total ; `registre_<C
 cat(lire_si_present(FICHIER_RAPPORT(), "etape_finalisation()"), sep = "\n")
 reg <- lire_registre(DIR_REGISTRE())
 cat("campagnes :", reg$nb_campagnes, "; scénarios cumulés :", reg$nb_scenarios, "; profils consommés :", nrow(reg$par_profil), "\n")
-reg$par_campagne
+reg$par_campagne   # nb_longs / nb_courts par campagne (registre commun aux deux branches)
 ```
 
 ---
@@ -397,6 +422,21 @@ if (is.null(corpus)) cat("livrable", CAMPAGNE, "absent (", FICHIER_LIVRABLE(), "
 ---
 
 # 8. Outils
+
+**Adoption de C1** (longs + courts historiques, SANS re-tirage) : reconstruit le livrable unifié
+`scenarios_C1.parquet` + méta (`origine = adoption`, sources, dates) depuis l'ancien corpus longs
+(`scenarios_longs_tirage_v8_<AAAAMMJJ>/` avec `adulte/`, `pediatrie/`) et le corpus courts historique
+(`30_courts/scenarios_courts.parquet`, dé-daté par la réorganisation), recalcule les identifiants, inscrit les
+deux branches au registre (extension acceptée si les longs y sont déjà), copie les annexes datées renommées par
+campagne. Plusieurs corpus longs datés ⇒ `source_longs` explicite obligatoire (jamais de choix silencieux) ;
+livrable C1 déjà présent et différent ⇒ stop. Après adoption, les campagnes suivantes tirent leurs propres courts.
+
+```{r adoption_c1, demo=FALSE}
+# Ce que ce chunk touche : 60_export_final/scenarios_C1.parquet (+ méta, annexes), registre_C1.parquet (append-only).
+# Ce qu'il ne touche JAMAIS : les corpus sources, le catalogue, le tirable, les autres campagnes.
+# etape_adopter_campagne("C1", source_longs = "<PATH_RESULTS>/_a_reorganiser/exports/scenarios_longs_tirage_v8_AAAAMMJJ")
+# etape_retro_inscrire_courts("C1")   # variante : registre seul (branche court), sans livrable
+```
 
 **Rétro-inscription** : une campagne tirée AVANT le chantier campagnes (chunks sans id_profil) que l'on
 souhaite conserver au registre : chemins ABSOLUS en clair, identifiant de campagne à choisir (ex. "C0").

@@ -688,7 +688,7 @@ ok("verifier_magasin catalogue : écart de périmètre -> issue (3) aligner ANS_
      verifier_magasin("catalogue", rt, cfg)$ok && { w <- verifier_magasin("catalogue", rt, modifyList(cfg, list(ANS_HISTORIQUE = 22:26))); !w$ok && grepl("aligner ANS_HISTORIQUE", w$message) } })
 ok("meta_magasin : magasin, date, clés du magasin, champs libres", { m <- meta_magasin("courts", cfg, n_lignes = 12L); m$magasin == "courts" && !is.null(m$date) && all(CLES_MAGASINS$courts %in% names(m)) && m$n_lignes == 12L })
 ok("message_catalogue_absent : magasin partagé nommé, etape_catalogue puis repartitionner", { m <- message_catalogue_absent("x", "/r/20_catalogue/"); grepl("magasin partagé /r/20_catalogue", m) && grepl("etape_catalogue\\(\\)", m) && grepl("etape_repartitionner_catalogue", m) })
-ok("message_courts_absent : magasin partagé, se produit une fois, refs", { m <- message_courts_absent("/r/30_courts/"); grepl("magasin partagé /r/30_courts", m) && grepl("etape_tirage_courts", m) && grepl("etape_refs", m) })
+ok("message_courts_absent : scénarios courts DE LA campagne, étape de campagne après la sélection, tirable et refs", { m <- message_courts_absent("/r/production/40_campagnes/C2/habille/courts/"); grepl("campagne absents \\(/r/production/40_campagnes/C2/habille/courts\\)", m) && grepl("etape_tirage_courts\\(\\) — étape DE CAMPAGNE", m) && grepl("etape_selection_longs", m) && grepl("30_courts/ref_pivots_courts", m) && grepl("etape_refs", m) })
 
 cat("\n# réorganisation sur place : planifier_reorganisation (plan pur sur un inventaire ENCOMBRÉ)\n")
 t_old <- as.POSIXct("2026-09-01 10:00:00"); t_new <- as.POSIXct("2026-09-18 10:00:00")
@@ -711,14 +711,14 @@ ok("plan : tout inventorié, rien de non listé (reconnus + ignorés + inconnus 
 ok("plan : partiels -> 00_partiels/, méta convertie", dest("partiels/catalogue_partiel_CHRU_17.parquet") == "00_partiels/catalogue_partiel_CHRU_17.parquet" && dest("partiels/partiels_meta.yaml") == "00_partiels/_meta.yaml")
 ok("plan : refs anciens noms -> ref_* dans 10_references/ ; doublon inter-profils : le plus récent retenu, l'autre ignoré (motif doublon)",
    dest("exports/ref_das_aigu.parquet") == "10_references/ref_das_aigu.parquet" && dest("exports/distribution_e660.parquet") == "10_references/ref_distribution_e660.parquet" &&
-     dest("exports/pivots_courts.parquet") == "10_references/ref_pivots_courts.parquet" && cat_("exports_diagnostic/pivots_courts.parquet") == "ignore" && grepl("doublon", plan$motif[plan$source == "exports_diagnostic/pivots_courts.parquet"]))
+     dest("exports/pivots_courts.parquet") == "30_courts/ref_pivots_courts.parquet" && cat_("exports_diagnostic/pivots_courts.parquet") == "ignore" && grepl("doublon", plan$motif[plan$source == "exports_diagnostic/pivots_courts.parquet"]))
 ok("plan : catalogue parts + sidecar -> 20_catalogue/catalogue_longs_seuil/ (_meta.yaml), méta -> 20_catalogue/, .ancien ignoré, monofichier diagnostic reconnu",
    dest("exports/catalogue_longs_seuil/part_J.parquet") == "20_catalogue/catalogue_longs_seuil/part_J.parquet" && dest("exports/catalogue_longs_seuil/_sidecar.yaml") == "20_catalogue/catalogue_longs_seuil/_meta.yaml" &&
      dest("exports/catalogue_longs_seuil_meta.yaml") == "20_catalogue/catalogue_longs_seuil_meta.yaml" && cat_("exports/catalogue_longs_seuil.parquet.ancien") == "ignore" &&
      dest("exports_diagnostic/catalogue_longs_seuil.parquet") == "20_catalogue/catalogue_longs_seuil.parquet" && cat_("exports_diagnostic/catalogue_longs_seuil_meta.yaml") == "ignore")
-ok("plan : courts -> 30_courts/ (chunks, sidecar, cache dé-daté : le plus récent des deux fichiers datés retenu)",
-   dest("exports/chunks/courts_chunk_0001.parquet") == "30_courts/chunks/courts_chunk_0001.parquet" && dest("exports/chunks/courts_chunks_meta.yaml") == "30_courts/chunks/courts_chunks_meta.yaml" &&
-     dest("exports/scenarios_courts_v8_20260918.parquet") == "30_courts/scenarios_courts.parquet" && cat_("exports/scenarios_courts_v8_20260901.parquet") == "ignore")
+ok("plan : courts -> 30_courts/ (corpus historique dé-daté : le plus récent des deux fichiers datés retenu ; chunks courts de l'ancienne génération ignorés, motif explicite)",
+   cat_("exports/chunks/courts_chunk_0001.parquet") == "ignore" && grepl("ancienne génération", plan$motif[plan$source == "exports/chunks/courts_chunk_0001.parquet"]) && cat_("exports/chunks/courts_chunks_meta.yaml") == "ignore" &&
+     dest("exports/scenarios_courts_v8_20260918.parquet") == "30_courts/scenarios_courts.parquet" && grepl("HISTORIQUE", plan$motif[plan$source == "exports/scenarios_courts_v8_20260918.parquet"]) && cat_("exports/scenarios_courts_v8_20260901.parquet") == "ignore")
 ok("plan : diagnostics -> 90_diagnostics/ (apports : plus récent retenu ; mémoire par profil)",
    dest("exports/diagnostic_apports.csv") == "90_diagnostics/diagnostic_apports.csv" && cat_("exports_diagnostic/diagnostic_apports.csv") == "ignore" && dest("exports/recouvrement.csv") == "90_diagnostics/recouvrement.csv" &&
      dest("exports/diagnostic_memoire.csv") == "90_diagnostics/diagnostic_memoire_production.csv" && dest("exports_diagnostic/diagnostic_memoire.csv") == "90_diagnostics/diagnostic_memoire_diagnostic.csv")
@@ -774,9 +774,12 @@ ok("registre écrit ; réécriture identique -> idempotent", file.exists(f1) && 
 ok("réécriture divergente -> stop (append-only)", grepl("append-only", tryCatch(ecrire_registre_campagne(dplyr::mutate(reg1, hash_das = "x"), "C1", dreg), error = function(e) conditionMessage(e))))
 ecrire_registre_campagne(dplyr::mutate(reg1[1, ], variante = 3L, id_scenario = "p1-003", hash_das = "h4", campagne = "C2"), "C2", dreg)
 lr <- lire_registre(dreg)
-ok("lire_registre : agrégats (variante_max, nb, hash_das, consommations par diag2 / DPEC / campagne)",
+ok("lire_registre : agrégats (variante_max, nb, hash_das, consommations par diag2 / DPEC / campagne) ; registres SANS colonne branche relus avec branche = long implicite (par_branche, par_campagne nb_longs / nb_courts)",
    lr$nb_campagnes == 2 && lr$nb_scenarios == 4 && lr$par_profil$variante_max[lr$par_profil$id_profil == "p1"] == 3 && setequal(lr$par_profil$hash_das[[which(lr$par_profil$id_profil == "p1")]], c("h1", "h2", "h4")) &&
-     lr$par_diag2$nb_scenarios == 4 && lr$par_dpec$nb_profils == 2 && identical(sort(lr$par_campagne$campagne), c("C1", "C2")))
+     lr$par_diag2$nb_scenarios == 4 && lr$par_dpec$nb_profils == 2 && identical(sort(lr$par_campagne$campagne), c("C1", "C2")) &&
+     all(lr$lignes$branche == "long") && lr$par_branche$branche == "long" && lr$par_branche$nb_scenarios == 4 && all(lr$par_campagne$nb_courts == 0) && sum(lr$par_campagne$nb_longs) == 4 &&
+     { d0 <- file.path(tempdir(), "registre_ancien"); unlink(d0, recursive = TRUE); dir.create(d0); arrow::write_parquet(reg1, file.path(d0, "registre_C0.parquet"))   # fichier ANCIEN, sans colonne branche
+       !"branche" %in% names(arrow::read_parquet(file.path(d0, "registre_C0.parquet"))) && all(lire_registre(d0)$lignes$branche == "long") && lire_registre(d0)$par_campagne$nb_longs == 3 })
 ok("registre vide -> tables vides", { v <- lire_registre(file.path(tempdir(), "registre_vide")); v$nb_campagnes == 0 && nrow(v$par_profil) == 0 })
 set.seed(4)
 ch <- choisir_lignes_dp_registre(cat_cl[cat_cl$diag2 == "O800", ], k = 1L, lr$par_profil)
@@ -802,7 +805,7 @@ ok("sans id_profil : aucune colonne d'identifiant (schéma antérieur conservé)
 ok("registre_depuis_chunks : id_profil recalculé sur pivots + graine, hash sur DAS tirés, DPEC par profil",
    { ch <- t1; for(cc in PIVOTS_LONGS) if(!cc %in% names(ch)) ch[[cc]] <- "x"
      r <- registre_depuis_chunks(ch, "C9", "adulte", dpec_par_profil = stats::setNames("DPEC test", id_profil_de(dplyr::mutate(ch, diagnostic_associes = graine))[1]))
-     nrow(r) == nrow(t1) && all(r$campagne == "C9") && all(r$DPEC == "DPEC test") && all(r$hash_das == t1$hash_das) && identical(names(r), COLONNES_REGISTRE) })
+     nrow(r) == nrow(t1) && all(r$campagne == "C9") && all(r$DPEC == "DPEC test") && all(r$hash_das == t1$hash_das) && identical(names(r), COLONNES_REGISTRE) && all(r$branche == "long") })
 
 
 # ================================== lot « notebook campagnes » : identifiants courts, section H ==
@@ -827,7 +830,7 @@ ok("verifier_dossier_final : absent -> creer ; sans méta -> reprise ; même cam
 reg_fx <- list(lignes = tibble::tibble(campagne = c("C1", "C1", "C2"), date = c("2026-09-01", "2026-09-02", "2026-09-03")))
 ok("statut_campagne_registre : inscrite (nb, dernière date) / jamais inscrite / registre vide",
    { s1 <- statut_campagne_registre("C1", reg_fx); s3 <- statut_campagne_registre("C3", reg_fx); s0 <- statut_campagne_registre("C1", NULL)
-     s1$inscrite && s1$nb == 2 && grepl("2 scénarios le 2026-09-02", s1$texte) && grepl("changez d'identifiant", s1$texte) && !s3$inscrite && s3$texte == "jamais inscrite au registre" && !s0$inscrite })
+     s1$inscrite && s1$nb == 2 && grepl("2 scénarios \\(2 longs, 0 courts\\) le 2026-09-02", s1$texte) && grepl("changez d'identifiant", s1$texte) && !s3$inscrite && s3$texte == "jamais inscrite au registre" && !s0$inscrite })
 
 
 # ============================ lot « correctifs post-contrôle » : lecteurs à repli, lecture robuste, extrapolation, gardes notebooks ==
@@ -899,5 +902,123 @@ ok("sources_parametres : défaut config / surcharge campagne (campagne.R) / surc
 cfg_txt <- sub("#.*$", "", readLines(file.path(racine, "config.R"), warn = FALSE))
 ok("frontière de config.R : aucun chemin personnel (~/, /home/, /Users/, commun/), aucun pschema ni identifiant en dur — doctrine et défauts seulement",
    !any(grepl("~/|/home/|/Users/|commun/|rflicoteaux|pschema", cfg_txt)) && any(grepl("^CAMPAGNE\\s*<-", cfg_txt)) && any(grepl("DÉFAUT", readLines(file.path(racine, "config.R"), warn = FALSE))))
+
+
+# ============================ chantier « courts en campagnes + habillage robuste » (helpers K, registre deux branches, plan des besoins) ==
+cat("\n# courts en campagnes : budget, répartition au poids, pivots sous registre, tirage courts à variantes nouvelles\n")
+ok("budget_courts : absolu prime ; sinon ratio × volume longs attendu (arrondi) ; ni l'un ni l'autre -> stop actionnable",
+   { b1 <- budget_courts(500L, 1, 1000); b2 <- budget_courts(NULL, 0.5, 1001); b3 <- budget_courts(NULL, 1, 2200)
+     b1$budget == 500 && b1$source == "absolu" && b2$budget == 500 && b2$source == "ratio" && grepl("RATIO_COURTS 0.5", b2$detail) && b3$budget == 2200 &&
+       grepl("etape_selection_longs", tryCatch(budget_courts(NULL, 1, NULL), error = function(e) conditionMessage(e))) })
+ok("repartir_budget_pivots : somme == budget, au poids (plus forts restes), pivots légers à 0, budget nul -> zéros",
+   { r <- repartir_budget_pivots(100L, c(50, 30, 15, 4, 1)); r2 <- repartir_budget_pivots(3L, c(1, 1, 1, 1, 100))
+     sum(r) == 100 && r[1] == 50 && r[2] == 30 && r[5] <= 1 && sum(r2) == 3 && r2[5] == 3 && all(repartir_budget_pivots(0L, c(1, 2)) == 0L) && is.integer(r) })
+piv <- tibble::tibble(mode_hospit = "HC", sexe = c("1", "2", "1"), cage = "[60-70[", ghm2 = "04M053", diag2 = c("J449", "J449", "I10"), duree = c(2L, 1L, 0L), nb = c(40, 30, 10))
+reg_courts <- tibble::tibble(id_profil = id_profil_courts_de(piv[1, ]), variante_max = 4L, nb_scenarios = 4L, hash_das = list(c("hA", "hB")))
+ps <- pivots_sous_registre(piv, reg_courts)
+ok("pivots_sous_registre : id_profil k… par pivot ; pivot connu = recyclé (variante_debut = variante_max + 1, hash_exclus), sinon vierge ; sans registre tout vierge",
+   all(grepl("^k[0-9a-f]{15}$", ps$id_profil)) && ps$origine_profil[1] == "recycle" && ps$variante_debut[1] == 5L && ps$hash_exclus[1] == "hA hB" && all(ps$origine_profil[2:3] == "vierge") && all(ps$variante_debut[2:3] == 1L) &&
+     all(pivots_sous_registre(piv, NULL)$origine_profil == "vierge") && all(pivots_sous_registre(piv, reg_courts[0, ])$variante_debut == 1L))
+set.seed(11); tc1 <- sample_das_court("HC", "1", "[60-70[", "04M05", "J449", 1, nb = 40, ref_chro = ref_chro_fx, ref_nb_chro = ref_nb_fx, refs = refs_fx, nb_tirages = 4, seuil_ref = 1, dedoublonner = TRUE, id_profil = "kabc", variante_debut = 5L)
+ok("sample_das_court sous registre : variantes numérotées à partir de variante_debut, id_profil / id_scenario / hash_das, nb_variantes_demandees, dédoublonnage souple sans re-tirage",
+   !is.null(tc1) && all(c("id_profil", "id_scenario", "hash_das", "nb_variantes_demandees") %in% names(tc1)) && all(tc1$variante >= 5 & tc1$variante <= 8) && all(tc1$id_scenario == paste0("kabc-", sprintf("%03d", tc1$variante))) &&
+     all(tc1$hash_das == hash_das_de(tc1$diagnostic_associes)) && !anyDuplicated(tc1$hash_das) && all(tc1$nb_variantes_demandees == 4L) && nrow(tc1) <= 4)
+set.seed(11); tc2 <- sample_das_court("HC", "1", "[60-70[", "04M05", "J449", 1, nb = 40, ref_chro = ref_chro_fx, ref_nb_chro = ref_nb_fx, refs = refs_fx, nb_tirages = 4, seuil_ref = 1, dedoublonner = TRUE, id_profil = "kabc", variante_debut = 5L, hash_exclus = paste(tc1$hash_das[1], "zzz"))
+ok("sample_das_court : hash déjà enregistré pour ce pivot (collision volontaire) -> variante éliminée SANS re-tirage ; déterminisme sous seed",
+   nrow(tc2) == nrow(tc1) - 1 && !tc1$hash_das[1] %in% tc2$hash_das && all(tc2$hash_das %in% tc1$hash_das) && identical(tc2$diagnostic_associes, tc1$diagnostic_associes[-1]))
+set.seed(11); tc0 <- sample_das_court("HC", "1", "[60-70[", "04M05", "J449", 1, nb = 40, ref_chro = ref_chro_fx, ref_nb_chro = ref_nb_fx, refs = refs_fx, nb_tirages = 4, seuil_ref = 1)
+ok("sample_das_court sans registre : schéma antérieur conservé (variantes 1..n, aucune colonne d'identifiant), mêmes DAS que sous registre (doctrine de tirage inchangée)",
+   !any(c("id_profil", "id_scenario", "hash_das", "nb_variantes_demandees") %in% names(tc0)) && identical(sort(tc0$variante), 1:4) && identical(sort(unique(tc0$diagnostic_associes)), sort(unique(tc1$diagnostic_associes))))
+
+cat("\n# registre deux branches : colonne branche, extension append-only, statut par branche, registre depuis les courts\n")
+dreg2 <- file.path(tempdir(), "registre_2b"); unlink(dreg2, recursive = TRUE)
+regL <- tibble::tibble(id_profil = c("p1", "p2"), variante = 1L, id_scenario = c("p1-001", "p2-001"), hash_das = c("h1", "h2"), campagne = "C1", population = "adulte", diag2 = "J449", DPEC = "d", date = "2026-09-20")
+regC <- tibble::tibble(id_profil = c("kaaa", "kaaa"), variante = 1:2, id_scenario = c("kaaa-001", "kaaa-002"), hash_das = c("c1", "c2"), campagne = "C1", population = "adulte", diag2 = "J449", DPEC = "dc", date = "2026-09-21", branche = "court")
+fL <- ecrire_registre_campagne(regL, "C1", dreg2)
+ok("registre : lignes sans branche écrites avec branche = long ; réécriture identique idempotente", identical(COLONNES_REGISTRE[10], "branche") && all(arrow::read_parquet(fL)$branche == "long") && identical(ecrire_registre_campagne(regL, "C1", dreg2), fL))
+o_ext <- utils::capture.output(fE <- ecrire_registre_campagne(dplyr::bind_rows(regL, regC), "C1", dreg2))
+lE <- lire_registre(dreg2)
+ok("registre : EXTENSION append-only (lignes existantes intactes + branche absente ajoutée) acceptée ; agrégats par branche et par campagne",
+   any(grepl("étendu \\(append-only\\) — branche court ajoutée : 2", o_ext)) && lE$nb_scenarios == 4 && all(lE$lignes$date[lE$lignes$branche == "long"] == "2026-09-20") && lE$par_branche$nb_scenarios[lE$par_branche$branche == "court"] == 2 &&
+     lE$par_campagne$nb_longs == 2 && lE$par_campagne$nb_courts == 2 && identical(ecrire_registre_campagne(dplyr::bind_rows(regL, regC), "C1", dreg2), fL))
+ok("registre : extension acceptée depuis un df ne portant QUE la branche nouvelle (rétro-inscription des courts seuls) ; refusée si une ligne d'une branche présente manque ou diffère, ou si les ajouts sont d'une branche déjà présente (append-only strict)",
+   identical(ecrire_registre_campagne(regC, "C1", dreg2), fL) && lire_registre(dreg2)$nb_scenarios == 4 &&
+     grepl("append-only", tryCatch(ecrire_registre_campagne(dplyr::bind_rows(regL[1, ], regC), "C1", dreg2), error = function(e) conditionMessage(e))) &&
+     grepl("append-only", tryCatch(ecrire_registre_campagne(dplyr::bind_rows(dplyr::mutate(regL, hash_das = "x"), regC), "C1", dreg2), error = function(e) conditionMessage(e))) &&
+     grepl("append-only", tryCatch(ecrire_registre_campagne(dplyr::bind_rows(regL, regC, dplyr::mutate(regL[1, ], variante = 2L, id_scenario = "p1-002", hash_das = "h9")), "C1", dreg2), error = function(e) conditionMessage(e))) &&
+     lire_registre(dreg2)$nb_scenarios == 4)
+ok("statut_campagne_registre : deux branches (nb longs / courts dans le texte) ; par branche ; jamais inscrite (branche)",
+   { s <- statut_campagne_registre("C1", lE); sc <- statut_campagne_registre("C1", lE, "court"); sl <- statut_campagne_registre("C1", lE, "long"); s2 <- statut_campagne_registre("C2", lE, "court")
+     s$inscrite && s$nb == 4 && s$nb_longs == 2 && s$nb_courts == 2 && grepl("4 scénarios \\(2 longs, 2 courts\\)", s$texte) && grepl("changez d'identifiant", s$texte) &&
+       sc$inscrite && sc$nb == 2 && sc$nb_courts == 2 && sl$nb_longs == 2 && sl$nb_courts == 0 && !s2$inscrite && grepl("jamais inscrite au registre \\(branche court\\)", s2$texte) })
+corpus_c <- tibble::tibble(mode_hospit = "HC", sexe = "1", cage = c("[60-70[", "[60-70[", "[5-10["), ghm2 = "04M053", diag2 = "J449", duree = c(2L, 2L, 1L), variante = c(1L, 1L, 1L), age = c(65L, 65L, 7L),
+                           diagnostic_associes = c("I10 E785", "I10 E785", ""), mode_entree = c("8", "URGENCES", "8"))
+rc <- registre_depuis_courts(corpus_c, "C1")
+ok("registre_depuis_courts : id_profil k… recalculé, hash sur les DAS, UN scénario par id_scenario (variantes d'habillage repliées), population par cage, branche court, DPEC NA sans typologie",
+   nrow(rc) == 2 && all(grepl("^k", rc$id_profil)) && identical(names(rc), COLONNES_REGISTRE) && all(rc$branche == "court") && setequal(rc$population, c("adulte", "pediatrie")) && all(rc$hash_das == hash_das_de(c("I10 E785", ""))) && all(is.na(rc$DPEC)))
+typo_t <- charger_typologie(file.path(racine, "referentiels", "typologie_sejours.yaml"))
+ok("registre_depuis_courts avec typologie : DPEC par la vraie durée et l'âge tiré", { r <- registre_depuis_courts(corpus_c, "C1", typo_t); all(!is.na(r$DPEC)) && all(r$DPEC == "Médecine adultes < 3 nuits") })
+
+cat("\n# habillage admin robuste : nbda hors des clés, repli hiérarchique, jamais de NA silencieux\n")
+ok("clés d'habillage : nbda absent des clés (doctrine config CLES_ADMIN_LONGS), niveau 0 == CLES_ADMIN_LONGS, clé du magasin références",
+   !"nbda" %in% CLES_ADMIN_LONGS && identical(NIVEAUX_REPLI_ADMIN[[1]], CLES_ADMIN_LONGS) && "CLES_ADMIN_LONGS" %in% CLES_MAGASINS$references && "ANS_COURTS" %in% CLES_MAGASINS$references && !"nbda" %in% unlist(NIVEAUX_REPLI_ADMIN))
+v_adm <- tibble::tibble(mode_hospit = "HC", mode_entree = c("8", "URGENCES", "8", "8", "URGENCES"), mode_sortie = "8", sexe = c("1", "1", "2", "1", "1"), age = c("ge_18", "ge_18", "ge_18", "ge_18", "ge_18"),
+                        cage = c("[60-70[", "[60-70[", "[60-70[", "[70-80[", "[70-80["), ghm2 = c("04M053", "04M053", "04M053", "04M053", "05M093"), diag2 = c("J449", "J449", "J449", "I500", "I500"), mdp = "6", duree = c(4, 7, 5, 9, 3))
+d_l <- tibble::tibble(mode_hospit = "HC", sexe = c("1", "2", "1", "1"), age = "ge_18", cage = c("[60-70[", "[60-70[", "[70-80[", "[70-80["), racine = c("04M05", "04M05", "04M05", "05M09"), ghm2 = c("04M053", "04M053", "04M053", "05M093"),
+                      diag2 = c("J449", "J449", "J449", "K802"), nbda = c(3L, 8L, 2L, 4L), variante = 1L, diagnostic_associes = "I10")
+set.seed(3); h <- habiller_admin(d_l, v_adm, NIVEAUX_REPLI_ADMIN, c(COLS_ADMIN, "duree"), NA, 2L)
+ok("habiller_admin : niveau 0 (6 clés, sans nbda) -> TOUTES les variantes admin (nb_variantes = NA) ; sans candidat fin -> repli 1 (cage pour l'âge) puis repli 2 (mode_hospit × cage × racine) ; colonne repli_admin ; zéro NA",
+   sum(h$repli_admin == 0 & h$sexe == "1" & h$cage == "[60-70[") == 2 && all(h$repli_admin[h$sexe == "2"] == 0) && nrow(h[h$sexe == "2", ]) == 1 &&
+     all(h$repli_admin[h$cage == "[70-80[" & h$diag2 == "J449"] == 2) && all(h$repli_admin[h$diag2 == "K802"] == 2) && all(h$duree[h$diag2 == "K802"] == 3) &&
+     !any(is.na(h$mode_entree)) && !any(is.na(h$duree)) && all(c("nbda", "variante", "diagnostic_associes") %in% names(h)) && controle_habillage(h)$na_habillage == 0 &&
+     identical(as.character(controle_habillage(h)$repli$niveau), c("0", "2")))
+v_adm2 <- dplyr::bind_rows(v_adm, tibble::tibble(mode_hospit = "HC", mode_entree = "8", mode_sortie = "9", sexe = "1", age = "lt_18", cage = "[70-80[", ghm2 = "04M053", diag2 = "J449", mdp = "6", duree = 12))
+set.seed(3); h2 <- habiller_admin(d_l[3, ], v_adm2, NIVEAUX_REPLI_ADMIN, c(COLS_ADMIN, "duree"), NA, 2L)
+ok("habiller_admin : premier niveau non vide — âge exact absent mais cage présente -> repli 1 (pas 2), nb_repli variantes au plus", nrow(h2) == 1 && h2$repli_admin == 1 && h2$duree == 12)
+set.seed(4); h3 <- habiller_admin(d_l[1, ], v_adm, NIVEAUX_REPLI_ADMIN, c(COLS_ADMIN, "duree"), 1L, 2L)
+ok("habiller_admin : nb_variantes = 1 au niveau fin -> une ligne tirée parmi les candidats ; déterminisme sous seed", nrow(h3) == 1 && h3$repli_admin == 0 && { set.seed(4); identical(habiller_admin(d_l[1, ], v_adm, NIVEAUX_REPLI_ADMIN, c(COLS_ADMIN, "duree"), 1L, 2L), h3) })
+ok("habiller_admin : tous niveaux vides -> stop NOMINATIF (profil cité), jamais de NA silencieux",
+   { e <- tryCatch(habiller_admin(dplyr::mutate(d_l[1, ], mode_hospit = "HP"), v_adm, NIVEAUX_REPLI_ADMIN, c(COLS_ADMIN, "duree")), error = function(e) conditionMessage(e)); grepl("AUCUN niveau de repli", e) && grepl("HP/\\[60-70\\[/04M05/J449", e) && grepl("Jamais de NA silencieux", e) })
+ok("habiller_admin : courts (une strate = les 6 pivots, colonnes admin seules) ; d vide -> schéma avec repli_admin", { hc <- habiller_admin(tibble::tibble(mode_hospit = "HC", sexe = "1", cage = "[60-70[", ghm2 = "04M053", diag2 = "J449", duree = 4L, variante = 1L), v_adm, list(PIVOTS_COURTS), COLS_ADMIN, 2L, 2L, "courts")
+   nrow(hc) == 1 && hc$repli_admin == 0 && hc$duree == 4L && "repli_admin" %in% names(habiller_admin(d_l[0, ], v_adm)) })
+ok("controle_habillage : NA comptés par ligne (au moins un NA sur les colonnes apportées)", { x <- h; x$duree[1] <- NA; x$mode_entree[2] <- NA; x$mode_entree[1] <- NA; controle_habillage(x)$na_habillage == 2 })
+
+cat("\n# adoption de C1 : choix de la source, préparation des longs et des courts adoptés, vérification livrable / registre\n")
+d_ad <- file.path(tempdir(), "adopt"); unlink(d_ad, recursive = TRUE); dir.create(file.path(d_ad, "scenarios_longs_tirage_v8_20260901", "adulte"), recursive = TRUE); dir.create(file.path(d_ad, "scenarios_longs_tirage_v8_20260918"))
+ok("choisir_source_longs : explicite prime ; candidat unique accepté (message) ; plusieurs -> stop listant, jamais de choix silencieux ; aucun -> stop",
+   { cand <- candidats_corpus_longs(d_ad); length(cand) == 2 && grepl("jamais de choix silencieux", tryCatch(choisir_source_longs(NULL, cand), error = function(e) conditionMessage(e))) &&
+       choisir_source_longs(NULL, cand[1])$source == cand[1] && grepl("candidat unique", choisir_source_longs(NULL, cand[1])$message) && choisir_source_longs(cand[2], cand)$source == cand[2] &&
+       grepl("aucun corpus longs daté", tryCatch(choisir_source_longs(NULL, character(0)), error = function(e) conditionMessage(e))) && grepl("introuvable", tryCatch(choisir_source_longs(file.path(d_ad, "nope")), error = function(e) conditionMessage(e))) &&
+       length(candidats_corpus_longs(file.path(d_ad, "absent"))) == 0 })
+lg_ad <- tibble::tibble(mode_hospit = "HC", sexe = "1", age = "ge_18", cage = c("[60-70[", "[60-70[", "[5-10["), racine = "04M05", ghm2 = "04M053", diabete = "N", hta = "N", diag2 = "J449", nbda = 3L, type_unite = "HC", prep_sc = 0,
+                        graine = c("I10 E785", "I10 E785", "N189"), variante = c(1L, 1L, 2L), diagnostic_associes = c("I10 E785 N189", "I10 E785 N189", "N189 K802"), mode_entree = c("8", "URGENCES", "8"), poids = 12)
+pa <- preparer_longs_adoptes(lg_ad, "C1", typo_t)
+ok("preparer_longs_adoptes : population reconstituée (cage), DPEC/TPEC, id_profil (id_v1 pivots + graine) et hash recalculés, branche long, registre = scénarios distincts",
+   setequal(pa$df$population, c("adulte", "pediatrie")) && all(c("DPEC", "TPEC") %in% names(pa$df)) && all(pa$df$id_profil == id_profil_de(dplyr::mutate(lg_ad, diagnostic_associes = graine))) && all(pa$df$branche == "long") && all(pa$df$campagne == "C1") &&
+     nrow(pa$registre) == 2 && all(pa$registre$branche == "long") && setequal(pa$registre$id_scenario, unique(pa$df$id_scenario)) && grepl("colonnes manquantes", tryCatch(preparer_longs_adoptes(lg_ad[, -1], "C1", typo_t), error = function(e) conditionMessage(e))))
+pcx <- preparer_courts_adoptes(corpus_c, "C1", typo_t)
+ok("preparer_courts_adoptes : ids id_courts_v1, population, DPEC/TPEC (vraie durée), lettre, branche court, registre = scénarios distincts",
+   all(grepl("^k", pcx$df$id_profil)) && all(c("DPEC", "TPEC", "lettre", "population") %in% names(pcx$df)) && all(pcx$df$branche == "court") && nrow(pcx$registre) == 2 && all(pcx$registre$branche == "court"))
+liv_ad <- dplyr::bind_rows(pa$df[, c("branche", "id_scenario")], pcx$df[, c("branche", "id_scenario")])
+ok("verifier_adoption : scénarios distincts par branche == registre ; écart signalé sinon",
+   verifier_adoption(liv_ad, dplyr::bind_rows(pa$registre, pcx$registre))$ok && { v <- verifier_adoption(liv_ad, pa$registre); !v$ok && grepl("court : livrable 2 scénarios distincts / registre 0 \\(ÉCART\\)", v$texte) })
+
+cat("\n# plan des besoins avec ANS_COURTS : années du tirable préparées, prep_das_chronique par année ; paramètres de campagne courts\n")
+pb <- resoudre_besoins("CH", 26L, 26L, character(0), c("ref_das_aigu.parquet", "ref_comp_diabete.parquet", "ref_substitution_imprecis.parquet", "ref_paires_chroniques.parquet", "ref_v_admin_longs.parquet"), FALSE, NOMS_REFS, REFS_CHRONIQUES, ans_courts = c(24L, 25L, 26L), refs_courts = REFS_COURTS)
+ok("resoudre_besoins : refs du tirable manquantes -> prep_data de ANS_COURTS, prep_das_chronique sur ANS_COURTS seulement (paires déjà présente)",
+   identical(pb$annees_a_preparer, c(24L, 25L, 26L)) && pb$prep_das_chronique && identical(pb$annees_das_chronique, c(24L, 25L, 26L)))
+pb2 <- resoudre_besoins("CH", 26L, 26L, character(0), setdiff(nom_ref(NOMS_REFS), "ref_paires_chroniques.parquet"), FALSE, NOMS_REFS, REFS_CHRONIQUES, ans_courts = c(24L, 25L, 26L), refs_courts = REFS_COURTS)
+ok("resoudre_besoins : seule une ref AN_REF manque (paires) -> AN_REF seule préparée, prep_das_chronique(AN_REF)", identical(pb2$annees_a_preparer, 26L) && identical(pb2$annees_das_chronique, 26L))
+pb3 <- resoudre_besoins("CH", 26L, 26L, nom_partiel("CH", 26L), nom_ref(NOMS_REFS), FALSE, NOMS_REFS, REFS_CHRONIQUES, ans_courts = c(24L, 25L, 26L), refs_courts = REFS_COURTS)
+ok("resoudre_besoins : tout présent -> rien à préparer (compatibilité : prep_das_chronique FALSE)", pb3$rien_a_faire && length(pb3$annees_a_preparer) == 0 && !pb3$prep_das_chronique)
+lc2 <- contenu_surcharge_campagne("C3", 500000, 1L, TRUE, nb_crh_cible_courts = 250000, ratio_courts = 0.5)
+ok("contenu_surcharge_campagne : NB_CRH_CIBLE_COURTS (entier L) et RATIO_COURTS écrits seulement s'ils sont posés ; ratio validé ; sources des paramètres courts",
+   any(grepl("^NB_CRH_CIBLE_COURTS <- 250000L", lc2)) && any(grepl("^RATIO_COURTS <- 0.5", lc2)) && !any(grepl("COURTS", contenu_surcharge_campagne("C3", 10L))) &&
+     grepl("RATIO_COURTS", tryCatch(contenu_surcharge_campagne("C3", 10L, ratio_courts = 0), error = function(e) conditionMessage(e))) &&
+     all(c("NB_CRH_CIBLE_COURTS", "RATIO_COURTS") %in% PARAMETRES_CAMPAGNE) && sources_parametres(PARAMETRES_CAMPAGNE, lc2, "/p/campagne.R")[["RATIO_COURTS"]] == "surcharge campagne (campagne.R)")
+ok("notebooks : chunk ouvrir_campagne expose RATIO_COURTS et NB_CRH_CIBLE_COURTS ; chunk tirage_courts en §4b après la sélection ; chunk adoption_c1 (demo=FALSE) ; RUN.Rmd sans tirage des courts",
+   { l <- rmd[[2]]; i2 <- grep("^```\\{r ouvrir_campagne", l); j2 <- i2 + which(grepl("^```\\s*$", l[(i2 + 1):length(l)]))[1]
+     any(grepl("^RATIO_COURTS_CAMP\\s*<-", l[i2:j2])) && any(grepl("^NB_CRH_CIBLE_COURTS_CAMP\\s*<-", l[i2:j2])) && grep("^```\\{r tirage_courts", l) > grep("^```\\{r selection\\}", l) && length(grep("^```\\{r adoption_c1, demo=FALSE", l)) == 1 &&
+       !any(grepl("^etape_tirage_courts\\(", rmd[[1]])) && any(grepl("^```\\{r tirable_courts", rmd[[1]])) })
 
 cat("\nTOUS LES TESTS SONT VERTS :", n_ok, "assertions\n")

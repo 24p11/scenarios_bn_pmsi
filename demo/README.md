@@ -36,7 +36,7 @@ tables produites est affiché.
    `MODE_SELECTION = quota_dp_fixe`, campagne `DEMO`, registre actif, sorties sous `demo/resultats/` ;
 4. exécute `extraction.R` (prep_data → refs → partiels → catalogue), puis
    `etape_repartitionner_catalogue()` (typologie DPEC/TPEC), ferme la connexion et **interdit
-   tout appel base** (`pmsi_mock_interdit`), puis `tirage.R` (courts → sélection →
+   tout appel base** (`pmsi_mock_interdit`), puis `tirage.R` (sélection → courts de la campagne →
    DAS longs → habillage → finalisation) ;
 5. affiche le résumé : nombre de scénarios longs par population, courts, répartition par TPEC,
    chemins des livrables.
@@ -52,7 +52,7 @@ démo. Dans RStudio, ouvrir `RUN.Rmd` puis `RUN_aval.Rmd` et exécuter d'abord l
 projet démo, profil « démo », variable `SCENARIOS_PMSI_DEMO`) ; le chunk `session` affiche alors
 « MODE DÉMO » en évidence. Les chunks non pertinents hors plateforme (migration inter-profils, palier
 de mesure, vidages, tests) le disent dans leur en-tête et portent l'option `demo=FALSE` ; les chunks
-`JE_CONFIRME…` restent à `FALSE`. Ordre : `RUN.Rmd` (amont : prep_data → refs → courts → partiels →
+`JE_CONFIRME…` restent à `FALSE`. Ordre : `RUN.Rmd` (amont : prep_data → refs (dont le tirable courts) → partiels →
 catalogue → repartitionnement) puis `RUN_aval.Rmd` (cycle de campagne : sélection → tirage →
 habillage → finalisation → registre → revue). `demo/resultats/` n'est pas vidé entre les deux
 (sauf `SCENARIOS_PMSI_DEMO_RAZ=1`).
@@ -95,11 +95,11 @@ fusion E669 → E660 : `IDENT_FUSION`, GHM `88M991`), utilisés par les tests.
 | `00_partiels/catalogue_partiel_<etbs>_<an>.parquet` + `_meta.yaml` | comptes par (établissements × millésime) [partagé] |
 | `10_references/ref_*.parquet` + `_meta.yaml` | les 10 références (préfixe unique `ref_`) [partagé] |
 | `20_catalogue/catalogue_longs_seuil/part_<L>.parquet` + `_meta.yaml` ; `catalogue_longs_seuil_meta.yaml` ; `rapport_extraction.txt` | le catalogue par lettre de DP (+ lettre, DPEC, TPEC, id_profil) [partagé] |
-| `30_courts/chunks/`, `30_courts/scenarios_courts.parquet` + `_meta.yaml` | les scénarios courts (id_profil `c…`, id_scenario, hash_das) [partagé] |
+| `30_courts/ref_pivots_courts.parquet` + `_meta.yaml` | le TIRABLE courts (pivots = catalogue des courts, `ANS_COURTS`) [partagé] ; les scénarios courts sont tirés PAR campagne sous `production/40_campagnes/DEMO/chunks_courts/` et `habille/courts/` (id_profil `k…`, id_scenario, hash_das) |
 | `90_diagnostics/diagnostic_apports.csv`, `recouvrement.csv`, `diagnostic_memoire_production.csv` | diagnostics |
 | `production/40_campagnes/DEMO/selection/`, `chunks/`, `habille/` | sélection, tirage des DAS par paquets, habillage (transitoires) |
 | `production/50_registre/registre_tirages/registre_DEMO.parquet` | registre append-only de la campagne |
-| `production/60_export_final/scenarios_DEMO.parquet` + `scenarios_DEMO_meta.yaml` | **le livrable unique** : longs (toutes populations) et courts embarqués, colonne `branche` en tête |
+| `production/60_export_final/scenarios_DEMO.parquet` + `scenarios_DEMO_meta.yaml` | **le livrable unique** : longs (toutes populations) et courts de la campagne, colonne `branche` en tête |
 | `production/60_export_final/echantillon_revue_DEMO.csv`, `top30_das_par_cmd_DEMO.csv`, `rapport_DEMO.txt` | livrables de validation |
 
 Chaque parquet a son méta-fichier yaml à côté : commencer par le lire. Voir

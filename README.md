@@ -63,6 +63,13 @@ Le mode d'emploi opérationnel : **[RUN.md](RUN.md)** et les deux notebooks
   leur prévalence observée sur les séjours longs, mieux codés) ; les codes
   « sans précision » manifestement erronés (E669x) sont convertis selon la
   distribution réelle des codes précis.
+- **Courts et longs, même statut dans le corpus** : les séjours courts sont
+  tirés par campagne depuis leur propre catalogue (les pivots), inscrits au
+  même registre, et leur volume suit un ratio provisoire (1.0) à calibrer avec
+  l'équipe apprentissage.
+- **Jamais de NA silencieux** : l'habillage administratif des scénarios
+  (durée, modes d'entrée / sortie) replie sur des strates plus larges quand la
+  strate fine est vide, trace le niveau de repli, et s'arrête sinon.
 - **Traçabilité totale** : chaque fichier produit porte un méta-fichier
   (paramètres, périmètre, version des doctrines) ; chaque scénario porte un
   identifiant stable recalculable ; un registre append-only mémorise ce qui

@@ -207,9 +207,14 @@ filtre_das_ghm_c <- function(tmp, ghm2_){
 # Cœur de tirage des séjours courts (§6.2). Source : v7.1.2 l.117-164 (sample_das), refondu :
 # nb de DAS tiré dans ref_nb_chro (plus de boucle 2:4), repli de strate, dedup_categorie,
 # diabète/HTA, nb_tirages variantes. Retourne NULL si la strate est vide.
+# Campagnes (chantier « courts en campagnes ») : mêmes mécaniques que sample_das_long — variantes numérotées
+# à partir de variante_debut (variante_max du pivot au registre + 1), dédoublonnage souple des variantes
+# (dedoublonner), exclusion des hash_das déjà enregistrés pour ce pivot (hash_exclus), AUCUN re-tirage ;
+# la doctrine de tirage (saturation, diabète, I10, dedup de catégorie) est inchangée.
 sample_das_court <- function(mode_hospit, sexe, cage, ghm2, diag2, duree, nb = NA,
                              ref_chro, ref_nb_chro, refs,
-                             nb_tirages = 1, seuil_ref = 20, cibles_defaut = list(), age_max = 95){
+                             nb_tirages = 1, seuil_ref = 20, cibles_defaut = list(), age_max = 95,
+                             dedoublonner = FALSE, id_profil = NA_character_, variante_debut = 1L, hash_exclus = "", ...){
   mode_hospit_ = as.character(mode_hospit)
   sexe_ = as.character(sexe)
   cage_ = as.character(cage)
@@ -247,11 +252,26 @@ sample_das_court <- function(mode_hospit, sexe, cage, ghm2, diag2, duree, nb = N
     das_final <- dedup_categorie(c(codes_diabete, ajoute_hta(das_samples, hta_, refs$hta_autres)), refs$paires_exclues)
     
     tibble::tibble(mode_hospit = mode_hospit_, sexe = sexe_, cage = cage_, ghm2 = ghm2_, diag2 = diag,
-                   duree = duree_, poids = poids_, variante = i, age = age_i,
+                   duree = duree_, poids = poids_, variante = as.integer(variante_debut) + i - 1L, age = age_i,
                    source_ref = cand$source, nb_cible = nb_cible, nb_das = length(das_final),
                    diabete_scenario = diabete_, hta_scenario = hta_,
                    diagnostic_associes = paste(das_final, collapse = " ")) |>
       dplyr::bind_rows(df_tmp) -> df_tmp
+  }
+  
+  # Unicité souple (campagnes) : variantes d'un même pivot dédoublonnées sur le jeu complet de DAS ; AUCUN re-tirage.
+  if(isTRUE(dedoublonner) && !is.null(df_tmp)){
+    df_tmp$nb_variantes_demandees <- as.integer(nb_tirages)
+    df_tmp <- dedoublonner_variantes(df_tmp, "diagnostic_associes")
+  }
+  # Identifiants stables (recette id_courts_v1) et exclusion des jeux déjà enregistrés au registre pour ce pivot
+  if(!is.null(df_tmp) && !is.na(id_profil)){
+    df_tmp$id_profil <- as.character(id_profil)
+    df_tmp$hash_das <- hash_das_de(df_tmp$diagnostic_associes)
+    exclus <- strsplit(as.character(hash_exclus), " ", fixed = TRUE)[[1]]; exclus <- exclus[nzchar(exclus)]
+    if(length(exclus) > 0) df_tmp <- df_tmp[!df_tmp$hash_das %in% exclus, , drop = FALSE]
+    df_tmp$id_scenario <- id_scenario_de(df_tmp$id_profil, df_tmp$variante)
+    if(nrow(df_tmp) == 0) return(NULL)
   }
   
   return(df_tmp)
@@ -593,17 +613,23 @@ nom_ref     <- function(nom) nom %+% ".parquet"
 # Fonction pure : à partir des fichiers présents (noms de base), calcule le plan :
 # itérations (etbs, an) à faire, refs à faire, années à préparer (prep_data), besoin de
 # prep_das_chronique. Ordre des itérations = celui des boucles (types × années).
+# ans_courts / refs_courts (chantier « courts en campagnes » §1bis) : les refs du tirable courts exigent prep_data (et
+# prep_das_chronique pour les chroniques) des années ANS_COURTS ; les autres refs, AN_REF seule. La résolution des besoins
+# l'assure : annees_a_preparer et annees_das_chronique.
 resoudre_besoins <- function(types_etbs, ans, an_ref, fichiers_partiels, fichiers_exports,
-                             forcer_refs = FALSE, noms_refs, refs_chroniques){
+                             forcer_refs = FALSE, noms_refs, refs_chroniques, ans_courts = an_ref, refs_courts = character(0)){
   it <- data.frame(etbs = rep(types_etbs, each = length(ans)), an = rep(as.integer(ans), times = length(types_etbs)),
                    stringsAsFactors = FALSE)
   it$fichier <- nom_partiel(it$etbs, it$an)
   it$a_faire <- !(it$fichier %in% basename(fichiers_partiels))
   refs <- data.frame(nom = noms_refs, fichier = nom_ref(noms_refs), stringsAsFactors = FALSE)
   refs$a_faire <- isTRUE(forcer_refs) | !(refs$fichier %in% basename(fichiers_exports))
-  annees <- sort(unique(c(it$an[it$a_faire], if(any(refs$a_faire)) as.integer(an_ref))))
+  courts <- refs$nom %in% refs_courts
+  annees <- sort(unique(c(it$an[it$a_faire], if(any(refs$a_faire & !courts)) as.integer(an_ref), if(any(refs$a_faire & courts)) as.integer(ans_courts))))
+  chro <- refs$a_faire & refs$nom %in% refs_chroniques
+  annees_chro <- sort(unique(c(if(any(chro & !courts)) as.integer(an_ref), if(any(chro & courts)) as.integer(ans_courts))))
   list(iterations = it, refs = refs, annees_a_preparer = as.integer(annees),
-       prep_das_chronique = any(refs$a_faire & refs$nom %in% refs_chroniques),
+       prep_das_chronique = length(annees_chro) > 0, annees_das_chronique = as.integer(annees_chro),
        rien_a_faire = !any(it$a_faire) && !any(refs$a_faire))
 }
 
@@ -615,7 +641,7 @@ imprimer_plan <- function(plan){
   cat(sprintf("Références : %d à faire, %d sautées\n", sum(refs$a_faire), sum(!refs$a_faire)))
   for(i in seq_len(nrow(refs))) cat(sprintf("  %-36s %s\n", refs$nom[i], if(refs$a_faire[i]) "A FAIRE" else "sautée"))
   cat("Années à préparer (prep_data) : ", if(length(plan$annees_a_preparer)) paste(plan$annees_a_preparer, collapse = ", ") else "aucune", "\n")
-  cat("prep_das_chronique(AN_REF)    : ", if(plan$prep_das_chronique) "oui" else "non", "\n")
+  cat("prep_das_chronique            : ", if(plan$prep_das_chronique) paste(plan$annees_das_chronique, collapse = ", ") else "non", "\n")
   if(plan$rien_a_faire) cat("TOUT EST A JOUR : aucune requête base, passage direct à l'agrégation.\n")
   invisible(plan)
 }
@@ -1378,7 +1404,8 @@ seed_campagne <- function(seed, campagne) as.integer(seed + 1000L * (sum(utf8ToI
 # mode_hospit, sexe, cage, ghm2, diag2, duree ; id_profil = "k" + 15 hex (préfixe de domaine HORS alphabet
 # hexadécimal : l'identifiant dit sa branche à lui seul ; les longs restent 16 hex sans préfixe — Q63 résolue,
 # corrigé avant toute circulation). id_scenario = id_profil-variante et hash_das : fonctions communes.
-# Les courts ne sont PAS inscrits au registre (aucune économie inter-campagnes côté courts, porte ouverte).
+# Chantier « courts en campagnes » : les courts s'inscrivent au registre comme les longs (branche = "court"), tirage par
+# campagne à variantes nouvelles ; l'id d'un pivot est un hash de contenu, stable sous extension du tirable (ANS_COURTS).
 RECETTE_ID_COURTS <- "id_courts_v1"
 COLONNES_RECETTE_ID_COURTS <- c("mode_hospit", "sexe", "cage", "ghm2", "diag2", "duree")
 id_profil_courts_de <- function(df, colonnes = COLONNES_RECETTE_ID_COURTS){
@@ -1389,39 +1416,54 @@ id_profil_courts_de <- function(df, colonnes = COLONNES_RECETTE_ID_COURTS){
 }
 
 # --- G2. Registre des tirages (append-only) ------------------------------------------------
-COLONNES_REGISTRE <- c("id_profil", "variante", "id_scenario", "hash_das", "campagne", "population", "diag2", "DPEC", "date")
+# Colonne `branche` AJOUTÉE (chantier « courts en campagnes ») : "long" / "court" ; les registres écrits avant portent
+# branche = "long" implicite à la relecture. Un seul fichier registre_<C>.parquet par campagne, les deux branches.
+COLONNES_REGISTRE <- c("id_profil", "variante", "id_scenario", "hash_das", "campagne", "population", "diag2", "DPEC", "date", "branche")
 nom_registre <- function(campagne) sprintf("registre_%s.parquet", campagne)
-# Écrit registre_<campagne>.parquet ; JAMAIS de réécriture : stop si le fichier existe et diffère,
-# idempotent s'il est identique (comparaison hors colonne date).
+registre_vide <- function(){ v <- tibble::as_tibble(stats::setNames(replicate(length(COLONNES_REGISTRE), character(0), simplify = FALSE), COLONNES_REGISTRE)); v$variante <- integer(0); v }
+normaliser_registre <- function(df){
+  df <- tibble::as_tibble(df)
+  if(!"branche" %in% names(df)) df$branche <- rep("long", nrow(df)) else { df$branche <- as.character(df$branche); df$branche[is.na(df$branche)] <- "long" }
+  df$variante <- as.integer(df$variante)
+  for(cc in setdiff(COLONNES_REGISTRE, "variante")) df[[cc]] <- as.character(df[[cc]])
+  df[, COLONNES_REGISTRE] |> dplyr::arrange(branche, id_profil, variante)
+}
+# Écrit registre_<campagne>.parquet ; APPEND-ONLY : idempotent si le contenu est identique (hors date) ; EXTENSION acceptée
+# seulement si toutes les lignes existantes sont conservées à l'identique et que les ajouts sont d'une branche absente du
+# fichier (ex. courts adoptés après une rétro-inscription des longs) ; toute autre différence -> stop, rien réécrit.
 ecrire_registre_campagne <- function(df, campagne, dir_registre, ecrire = arrow::write_parquet, lire = arrow::read_parquet){
-  stopifnot(all(COLONNES_REGISTRE %in% names(df)))
-  df <- tibble::as_tibble(df[, COLONNES_REGISTRE]) |> dplyr::arrange(id_profil, variante)
+  manq <- setdiff(setdiff(COLONNES_REGISTRE, "branche"), names(df)); if(length(manq)) stop("registre : colonnes manquantes : " %+% paste(manq, collapse = ", "), call. = FALSE)
+  df <- normaliser_registre(df)
   if(!dir.exists(dir_registre)) dir.create(dir_registre, recursive = TRUE)
   f <- file.path(dir_registre, nom_registre(campagne))
   if(file.exists(f)){
-    ex <- tibble::as_tibble(lire(f)) |> dplyr::arrange(id_profil, variante)
-    cols <- setdiff(COLONNES_REGISTRE, "date")
-    if(!identical(as.data.frame(ex[, cols]), as.data.frame(df[, cols])))
+    ex <- normaliser_registre(lire(f)); cols <- setdiff(COLONNES_REGISTRE, "date")
+    cle <- function(x) do.call(paste, c(lapply(cols, function(cc) norm_val(x[[cc]])), sep = "\r"))
+    br_ex <- unique(ex$branche); df_vues <- df[df$branche %in% br_ex, , drop = FALSE]; nouvelles <- df[!df$branche %in% br_ex, , drop = FALSE]
+    # branches déjà présentes : le contenu fourni pour ces branches doit être EXACTEMENT celui du fichier ; branches absentes : ajoutées
+    if(nrow(df_vues) > 0 && !identical(sort(cle(df_vues)), sort(cle(ex[ex$branche %in% unique(df_vues$branche), , drop = FALSE]))))
       stop("registre : " %+% basename(f) %+% " existe déjà avec un contenu DIFFÉRENT (registre append-only, jamais réécrit). Choisissez un autre identifiant de campagne.", call. = FALSE)
+    if(nrow(nouvelles) == 0) return(invisible(f))
+    ecrire(normaliser_registre(dplyr::bind_rows(ex, nouvelles)), f)
+    cat("registre ", basename(f), " : étendu (append-only) — branche ", paste(unique(nouvelles$branche), collapse = ","), " ajoutée : ", nrow(nouvelles), " scénarios ; lignes existantes intactes\n", sep = "")
     return(invisible(f))
   }
   ecrire(df, f); invisible(f)
 }
-# Lecteur unique du registre : lignes + agrégats (par id_profil : variante_max, nb, hash_das ;
-# par diag2 et par DPEC : consommations cumulées). Registre vide -> tables vides.
+# Lecteur unique du registre : lignes + agrégats (par id_profil : variante_max, nb, hash_das ; par diag2, par DPEC,
+# par branche, par campagne × branche). Registre vide -> tables vides. Fichier par fichier (schémas anciens sans
+# `branche` relus avec branche = "long" implicite).
 lire_registre <- function(dir_registre, lire = arrow::read_parquet){
-  vide <- tibble::as_tibble(stats::setNames(replicate(length(COLONNES_REGISTRE), character(0), simplify = FALSE), COLONNES_REGISTRE))
-  vide$variante <- integer(0)
   fichiers <- if(dir.exists(dir_registre)) sort(list.files(dir_registre, pattern = "^registre_.*\\.parquet$", full.names = TRUE)) else character(0)
-  lignes <- if(length(fichiers) == 0) vide else if(arrow_dataset_disponible()) tibble::as_tibble(dplyr::collect(arrow::open_dataset(fichiers))) else purrr::map(fichiers, function(f) tibble::as_tibble(lire(f))) |> purrr::list_rbind()
-  lignes$variante <- as.integer(lignes$variante)
+  lignes <- if(length(fichiers) == 0) registre_vide() else purrr::map(fichiers, function(f) normaliser_registre(lire(f))) |> purrr::list_rbind()
   par_profil <- if(nrow(lignes) == 0) tibble::tibble(id_profil = character(0), variante_max = integer(0), nb_scenarios = integer(0), hash_das = list()) else
     lignes |> dplyr::summarise(variante_max = max(variante), nb_scenarios = dplyr::n(), hash_das = list(unique(hash_das)), .by = id_profil)
   list(lignes = lignes, fichiers = fichiers, nb_campagnes = length(fichiers), nb_scenarios = nrow(lignes),
        par_profil = par_profil,
        par_diag2 = lignes |> dplyr::summarise(nb_scenarios = dplyr::n(), nb_profils = dplyr::n_distinct(id_profil), .by = diag2),
        par_dpec = lignes |> dplyr::summarise(nb_scenarios = dplyr::n(), nb_profils = dplyr::n_distinct(id_profil), .by = DPEC),
-       par_campagne = lignes |> dplyr::summarise(nb_scenarios = dplyr::n(), .by = campagne))
+       par_branche = lignes |> dplyr::summarise(nb_scenarios = dplyr::n(), nb_profils = dplyr::n_distinct(id_profil), .by = branche),
+       par_campagne = lignes |> dplyr::summarise(nb_scenarios = dplyr::n(), nb_longs = sum(branche == "long"), nb_courts = sum(branche == "court"), .by = campagne))
 }
 
 # --- G3. Plafonds de CLASSE DPEC (amendement Q33) -------------------------------------------
@@ -1504,7 +1546,21 @@ registre_depuis_chunks <- function(df_chunks, campagne, population = NA_characte
   d$id_scenario <- id_scenario_de(d$id_profil, d$variante)
   d$campagne <- as.character(campagne); d$population <- if("population" %in% names(d)) as.character(d$population) else as.character(population)
   d$DPEC <- if("DPEC" %in% names(d)) as.character(d$DPEC) else if(!is.null(dpec_par_profil)) unname(dpec_par_profil[d$id_profil]) else if(!is.null(typo)) typologie_sejour(d, typo, col_age = "age", duree_defaut = 3)$DPEC else NA_character_
-  d$date <- as.character(Sys.Date())
+  d$date <- as.character(Sys.Date()); d$branche <- "long"
+  tibble::as_tibble(d[, COLONNES_REGISTRE])
+}
+# Lignes de registre des SÉJOURS COURTS depuis un corpus ou des chunks courts : id_profil recalculé (recette id_courts_v1 sur
+# les pivots), hash_das sur les DAS tirés, variante telle que tirée, UN scénario par id_scenario (les variantes d'habillage
+# admin d'un même scénario sont repliées), population par cage, DPEC par typologie (vraie durée, âge tiré) si absent.
+registre_depuis_courts <- function(df, campagne, typo = NULL, populations = POPULATIONS){
+  if(nrow(df) == 0) return(registre_vide())
+  d <- tibble::as_tibble(df)
+  d$id_profil <- id_profil_courts_de(d); d$hash_das <- hash_das_de(d$diagnostic_associes)
+  d$variante <- as.integer(d$variante); d$id_scenario <- id_scenario_de(d$id_profil, d$variante)
+  d <- d[!duplicated(d$id_scenario), , drop = FALSE]
+  d$campagne <- as.character(campagne); d$population <- population_de(as.character(d$cage), populations)
+  if(!"DPEC" %in% names(d)) d$DPEC <- if(!is.null(typo)) typologie_sejour(d, typo, col_age = "age", col_duree = "duree")$DPEC else NA_character_
+  d$DPEC <- as.character(d$DPEC); d$date <- as.character(Sys.Date()); d$branche <- "court"
   tibble::as_tibble(d[, COLONNES_REGISTRE])
 }
 
@@ -1512,11 +1568,11 @@ registre_depuis_chunks <- function(df_chunks, campagne, population = NA_characte
 if(!exists("%||%")) `%||%` <- function(a, b) if(is.null(a)) b else a
 
 # --- H1. (résolution des fichiers datés RETIRÉE : règle « nom stable, date dans le méta », section 22) ----
-# Message quand scenarios_courts.parquet est introuvable dans le magasin partagé 30_courts/.
-message_courts_absent <- function(dir_courts){
-  paste0("etape_finalisation : scenarios_courts.parquet absent du magasin partagé ", sub("/$", "", dir_courts), ". ",
-         "Lancez etape_tirage_courts() — rapide, sans base : ref_pivots_courts + refs du magasin 10_references/ (le magasin est partagé entre profils : ",
-         "il ne se copie pas, il se produit une fois) ; si les refs manquent aussi : etape_refs() (extraction, RUN.Rmd).")
+# Message quand les scénarios courts DE LA CAMPAGNE sont introuvables (chantier « courts en campagnes » : étape de campagne).
+message_courts_absent <- function(dir_courts_campagne){
+  paste0("etape_finalisation : scénarios courts de la campagne absents (", sub("/$", "", dir_courts_campagne), "). ",
+         "Lancez etape_tirage_courts() — étape DE CAMPAGNE, sans base, après etape_selection_longs() (budget = NB_CRH_CIBLE_COURTS, ou RATIO_COURTS × volume longs attendu) ; ",
+         "le tirable (30_courts/ref_pivots_courts.parquet, magasin partagé) et les refs viennent d'etape_refs() (extraction, RUN.Rmd).")
 }
 
 # --- H2. Corpus final nommé par CAMPAGNE : garde-fou sur le dossier existant --------------------
@@ -1533,10 +1589,14 @@ verifier_dossier_final <- function(meta_existant, campagne, dossier = ""){
 }
 
 # --- H3. Statut d'une campagne au registre (affichage session, stop précoce de la sélection) ------
-statut_campagne_registre <- function(campagne, registre){
+# branche = NULL : les deux branches ; "long" / "court" : statut de cette seule branche (les courts s'inscrivent aussi).
+statut_campagne_registre <- function(campagne, registre, branche = NULL){
   l <- if(is.null(registre) || is.null(registre$lignes)) NULL else registre$lignes[registre$lignes$campagne == campagne, , drop = FALSE]
-  if(is.null(l) || nrow(l) == 0) return(list(inscrite = FALSE, nb = 0L, texte = "jamais inscrite au registre"))
-  list(inscrite = TRUE, nb = nrow(l), date = max(as.character(l$date)), texte = sprintf("déjà inscrite au registre : %d scénarios le %s — changez d'identifiant", nrow(l), max(as.character(l$date))))
+  if(!is.null(l) && !is.null(branche)) l <- l[(if("branche" %in% names(l)) l$branche else rep("long", nrow(l))) %in% branche, , drop = FALSE]
+  if(is.null(l) || nrow(l) == 0) return(list(inscrite = FALSE, nb = 0L, nb_longs = 0L, nb_courts = 0L, texte = "jamais inscrite au registre" %+% (if(is.null(branche)) "" else " (branche " %+% branche %+% ")")))
+  br <- if("branche" %in% names(l)) l$branche else rep("long", nrow(l)); nl <- sum(br == "long"); nc <- sum(br == "court")
+  list(inscrite = TRUE, nb = nrow(l), nb_longs = nl, nb_courts = nc, date = max(as.character(l$date)),
+       texte = sprintf("déjà inscrite au registre : %d scénarios (%d longs, %d courts) le %s — changez d'identifiant", nrow(l), nl, nc, max(as.character(l$date))))
 }
 
 # --- H4. Lecteurs à repli ------------------------------------------------------------------
@@ -1594,9 +1654,9 @@ lire_si_present <- function(chemin, produit_par = "l'étape amont", mode = "auto
 # clés bloquantes historiques ; les références les 6 clés de l'ancienne condition Q13.
 CLES_MAGASINS <- list(
   partiels   = c("K_GRAINE_LONGS", "NBDA_MAX", "DUREE_LONGS", "PIVOTS_LONGS"),
-  references = c("AN_REF", "SEUIL_REF_DAS", "SEUIL_REF_IMPRECIS", "SEUIL_REF_PAIRES", "CONVERSION_E669", "BARE_E669_DEFAUT"),
+  references = c("AN_REF", "ANS_COURTS", "SEUIL_REF_DAS", "SEUIL_REF_IMPRECIS", "SEUIL_REF_PAIRES", "CONVERSION_E669", "BARE_E669_DEFAUT", "CLES_ADMIN_LONGS"),
   catalogue  = c("ANS_HISTORIQUE", "TYPES_ETBS_LONGS", "SEUIL_PIVOT", "CONVERSION_E669", "BARE_E669_DEFAUT", "K_GRAINE_LONGS", "NBDA_MAX", "DUREE_LONGS", "PIVOTS_LONGS"),
-  courts     = c("AN_REF", "SEUIL_PIVOT", "SEUIL_REF_DAS", "NB_TIRAGES_COURTS", "NB_VARIANTES_ADMIN_COURTS", "CONVERSION_E669", "BARE_E669_DEFAUT", "SEED", "NB_CHUNKS_MAX", "CHUNK_SIZE_MIN", "CHUNK_SIZE_FIXE"))
+  courts     = c("ANS_COURTS", "SEUIL_PIVOT", "DUREE_COURTS", "PIVOTS_COURTS", "CONVERSION_E669", "BARE_E669_DEFAUT"))   # 30_courts = le TIRABLE (pivots), plus le tirage
 DRAPEAUX_MAGASINS <- c(partiels = "FORCER_PARTIELS", references = "FORCER_REFS", catalogue = "FORCER_CATALOGUE", courts = "FORCER_COURTS")
 DOSSIERS_MAGASINS <- c(partiels = "00_partiels", references = "10_references", catalogue = "20_catalogue", courts = "30_courts")
 # Méta d'un magasin : les clés qui le définissent, prises dans `config` (valeurs effectives), + date (+ champs libres).
@@ -1645,7 +1705,7 @@ FAMILLES_COLONNES <- list(
   profil_clinique   = c("sexe", "age", "cage", "cage2"),
   contexte_sejour   = c("mode_hospit", "ghm2", "racine", "duree", "nbda", "type_unite", "prep_sc"),
   diagnostics       = c("diag2", "graine", "diagnostic_associes", "nb_das", "diabete", "diabete_scenario", "hta", "hta_scenario"),
-  habillage_admin   = c("mode_entree", "mode_sortie", "mdp"),
+  habillage_admin   = c("mode_entree", "mode_sortie", "mdp", "repli_admin"),
   typologie         = c("lettre", "DPEC", "TPEC"),
   tracabilite       = c("id_profil", "id_scenario", "hash_das", "variante", "origine_profil", "id_selection", "variante_debut"),
   audit             = c("poids", "source_ref", "nb_cible", "nb_variantes_demandees", "hash_exclus"))
@@ -1687,15 +1747,18 @@ planifier_reorganisation <- function(inventaire, migrer_registre = FALSE){
     if(grepl("\\.tmp$", ch[i])){ poser(i, "ignore", NA, "ignorer", "fichier temporaire"); next }
     if(!est_export[i]) next
     r <- reste[i]; b <- base[i]; nom_sans_ext <- sub("\\.parquet$", "", b)
-    if(!grepl("/", r) && grepl("\\.parquet$", b) && nom_sans_ext %in% names(ANCIENS_NOMS_REFS)){ poser(i, "reconnu", "10_references/" %+% ANCIENS_NOMS_REFS[[nom_sans_ext]] %+% ".parquet", "copier + renommer", "référence (ancien nom -> ref_*)"); next }
+    if(!grepl("/", r) && grepl("\\.parquet$", b) && nom_sans_ext %in% names(ANCIENS_NOMS_REFS)){
+      nv <- ANCIENS_NOMS_REFS[[nom_sans_ext]]
+      if(nv == "ref_pivots_courts") poser(i, "reconnu", "30_courts/ref_pivots_courts.parquet", "copier + renommer", "le TIRABLE courts (pivots = catalogue des courts, magasin 30_courts)")
+      else poser(i, "reconnu", "10_references/" %+% nv %+% ".parquet", "copier + renommer", "référence (ancien nom -> ref_*)")
+      next }
     if(grepl("^catalogue_longs_seuil/part_[A-Z]\\.parquet$", r)){ poser(i, "reconnu", "20_catalogue/catalogue_longs_seuil/" %+% b, "copier", "part du catalogue"); next }
     if(r == "catalogue_longs_seuil/_sidecar.yaml"){ poser(i, "reconnu", "20_catalogue/catalogue_longs_seuil/_meta.yaml", "convertir méta", "sidecar du catalogue -> _meta.yaml (+ clés du magasin depuis catalogue_longs_seuil_meta.yaml)"); next }
     if(r == "catalogue_longs_seuil_meta.yaml"){ poser(i, "reconnu", "20_catalogue/catalogue_longs_seuil_meta.yaml", "copier", "méta du catalogue"); next }
     if(r == "catalogue_longs_seuil.parquet"){ poser(i, "reconnu", "20_catalogue/catalogue_longs_seuil.parquet", "copier", "catalogue monofichier (non partitionné)"); next }
     if(r == "catalogue_longs_seuil.parquet.ancien"){ poser(i, "ignore", NA, "ignorer", "monofichier .ancien (les parts font foi)"); next }
-    if(grepl("^chunks/courts_chunk_[0-9]{4}\\.parquet$", r)){ poser(i, "reconnu", "30_courts/chunks/" %+% b, "copier", "chunk courts"); next }
-    if(r == "chunks/courts_chunks_meta.yaml"){ poser(i, "reconnu", "30_courts/chunks/courts_chunks_meta.yaml", "copier", "sidecar des chunks courts"); next }
-    if(grepl("^scenarios_courts_v8_[0-9]{8}\\.parquet$", r)){ poser(i, "reconnu", "30_courts/scenarios_courts.parquet", "copier + dé-dater", "cache courts (méta reconstruit avec la date d'origine)"); next }
+    if(grepl("^chunks/courts_chunk_[0-9]{4}\\.parquet$", r) || r == "chunks/courts_chunks_meta.yaml"){ poser(i, "ignore", NA, "ignorer", "chunks courts de l'ancienne génération (corpus courts FIXE : adopté depuis scenarios_courts_v8_<date>, jamais re-tiré)"); next }
+    if(grepl("^scenarios_courts_v8_[0-9]{8}\\.parquet$", r)){ poser(i, "reconnu", "30_courts/scenarios_courts.parquet", "copier + dé-dater", "corpus courts HISTORIQUE (méta scenarios_courts_meta.yaml avec la date d'origine ; adopté en C1 par etape_adopter_campagne)"); next }
     if(r %in% c("diagnostic_apports.csv", "recouvrement.csv")){ poser(i, "reconnu", "90_diagnostics/" %+% b, "copier", "diagnostic partagé"); next }
     if(r == "diagnostic_memoire.csv"){ poser(i, "reconnu", "90_diagnostics/diagnostic_memoire_" %+% profil_de(dir1[i]) %+% ".csv", "copier + renommer", "diagnostic mémoire par profil"); next }
     if(grepl("^registre_tirages/registre_.*\\.parquet$", r)){
@@ -1736,12 +1799,13 @@ imprimer_plan_reorganisation <- function(plan){
 # La décision d'exploitation d'une campagne ne s'édite plus dans config.R : elle s'écrit dans campagne.R (gitignoré),
 # depuis le notebook (chunk ouvrir_campagne), et s'active par SCENARIOS_PMSI_SURCHARGE — même mécanique que palier.R.
 # Les deux surcharges sont EXCLUSIVES ; la surcharge démo (troisième cas légitime) est hors de cette exclusivité.
-PARAMETRES_CAMPAGNE <- c("CAMPAGNE", "NB_CRH_CIBLE", "NB_LIGNES_PAR_DP", "REGISTRE_ACTIF", "PLAFONDS_DPEC")
+PARAMETRES_CAMPAGNE <- c("CAMPAGNE", "NB_CRH_CIBLE", "NB_LIGNES_PAR_DP", "REGISTRE_ACTIF", "PLAFONDS_DPEC", "NB_CRH_CIBLE_COURTS", "RATIO_COURTS")
 MARQUEUR_CAMPAGNE <- "SURCHARGE_CAMPAGNE_ACTIVE <- TRUE"
 MARQUEUR_PALIER   <- "PALIER_ACTIF <- TRUE"
 entier_R <- function(x, nom){ if(length(x) != 1 || is.na(x) || x != round(x) || x < 1) stop(nom %+% " : entier >= 1 attendu", call. = FALSE); sprintf("%dL", as.integer(x)) }
-contenu_surcharge_campagne <- function(campagne, nb_crh_cible, nb_lignes_par_dp = 1L, registre_actif = TRUE, plafonds_dpec = NULL){
+contenu_surcharge_campagne <- function(campagne, nb_crh_cible, nb_lignes_par_dp = 1L, registre_actif = TRUE, plafonds_dpec = NULL, nb_crh_cible_courts = NULL, ratio_courts = NULL){
   if(!is.character(campagne) || length(campagne) != 1 || !nzchar(campagne) || grepl("[^A-Za-z0-9_-]", campagne)) stop("CAMPAGNE : identifiant court obligatoire ([A-Za-z0-9_-])", call. = FALSE)
+  if(!is.null(ratio_courts) && (!is.numeric(ratio_courts) || length(ratio_courts) != 1 || is.na(ratio_courts) || ratio_courts <= 0)) stop("RATIO_COURTS : nombre > 0 attendu", call. = FALSE)
   c("# campagne.R — DÉCISION D'EXPLOITATION de la campagne (niveau campagne ; gitignoré ; écrit par le chunk ouvrir_campagne de RUN_aval.Rmd).",
     "# Activé par SCENARIOS_PMSI_SURCHARGE ; exclusif du palier (palier.R). Les défauts vivent dans config.R, le poste dans config_locale.R.",
     MARQUEUR_CAMPAGNE,
@@ -1749,7 +1813,9 @@ contenu_surcharge_campagne <- function(campagne, nb_crh_cible, nb_lignes_par_dp 
     "NB_CRH_CIBLE <- " %+% entier_R(nb_crh_cible, "NB_CRH_CIBLE"),
     "NB_LIGNES_PAR_DP <- " %+% entier_R(nb_lignes_par_dp, "NB_LIGNES_PAR_DP"),
     "REGISTRE_ACTIF <- " %+% (if(isTRUE(registre_actif)) "TRUE" else "FALSE"),
-    if(!is.null(plafonds_dpec)) "PLAFONDS_DPEC <- " %+% paste(deparse(plafonds_dpec), collapse = ""))
+    if(!is.null(plafonds_dpec)) "PLAFONDS_DPEC <- " %+% paste(deparse(plafonds_dpec), collapse = ""),
+    if(!is.null(nb_crh_cible_courts)) "NB_CRH_CIBLE_COURTS <- " %+% entier_R(nb_crh_cible_courts, "NB_CRH_CIBLE_COURTS") %+% "   # budget courts ABSOLU (sinon RATIO_COURTS × volume longs)",
+    if(!is.null(ratio_courts)) "RATIO_COURTS <- " %+% format(as.numeric(ratio_courts)) %+% "   # provisoire — à calibrer avec l'équipe apprentissage")
 }
 contenu_surcharge_palier <- function(nb_crh_cible = 100000L){
   c("# palier.R — PALIER DE MESURE (budget réduit, hors registre) ; gitignoré ; écrit par le chunk palier_surcharge de RUN_aval.Rmd.",
@@ -1776,4 +1842,129 @@ verifier_exclusivite_surcharges <- function(type_demande, chemin_actif, lignes_a
 sources_parametres <- function(noms, lignes_surcharge = NULL, chemin = ""){
   type <- type_surcharge(lignes_surcharge); l <- if(is.null(lignes_surcharge)) character(0) else sub("#.*$", "", lignes_surcharge)
   vapply(noms, function(n) if(type != "aucune" && any(grepl("^\\s*" %+% n %+% "\\s*<-", l))) "surcharge " %+% type %+% " (" %+% basename(chemin) %+% ")" else "défaut config", character(1))
+}
+
+## ---- K. Chantier « courts en campagnes + habillage robuste » ----
+# Décisions actées : les séjours courts ont le MÊME STATUT que les longs dans le corpus (leur traitement diffère — saturation
+# des DAS sous-codés en routine — pas leur rôle) ; ils entrent dans l'économie des campagnes (tirage par campagne à
+# variantes nouvelles, registre commun, composition pilotée par RATIO_COURTS provisoire) ; les pivots courts SONT le
+# catalogue des courts (magasin 30_courts = le tirable) ; habillage admin des longs robuste (nbda retiré des clés, repli
+# hiérarchique, jamais de NA silencieux) — défaut trouvé en REVUE CLINIQUE.
+
+# --- K1. Budget courts d'une campagne et répartition sur les pivots -----------------------------
+# budget_courts : NB_CRH_CIBLE_COURTS absolu si posé, sinon RATIO_COURTS × volume longs attendu (sélection de la campagne).
+budget_courts <- function(nb_cible_courts = NULL, ratio = 1, volume_longs = NULL){
+  if(!is.null(nb_cible_courts)) return(list(budget = as.integer(nb_cible_courts), source = "absolu", detail = "NB_CRH_CIBLE_COURTS = " %+% as.integer(nb_cible_courts)))
+  if(is.null(volume_longs) || is.na(volume_longs)) stop("budget courts : NB_CRH_CIBLE_COURTS est NULL et le volume longs attendu de la campagne est inconnu (lancez etape_selection_longs() d'abord, ou posez NB_CRH_CIBLE_COURTS dans campagne.R).", call. = FALSE)
+  b <- as.integer(round(as.numeric(ratio) * as.numeric(volume_longs)))
+  list(budget = b, source = "ratio", detail = sprintf("RATIO_COURTS %s × volume longs attendu %d = %d", format(ratio), as.integer(volume_longs), b))
+}
+# Répartition du budget sur les pivots AU POIDS (n), plus forts restes ; remise au niveau pivot autorisée (un pivot reçoit
+# nb_tirages variantes). Somme == budget ; les pivots à 0 ne sont pas tirés.
+repartir_budget_pivots <- function(budget, poids){
+  if(length(poids) == 0 || is.na(budget) || budget < 1) return(integer(length(poids)))
+  as.integer(repartir_proportionnel(as.integer(budget), as.numeric(poids)))
+}
+# Colonnes de tirage d'un pivot sous registre : variante_debut (variante_max + 1) et hash_exclus du pivot (id k…), sinon vierge.
+pivots_sous_registre <- function(pivots, registre_profil = NULL){
+  p <- tibble::as_tibble(pivots); p$id_profil <- id_profil_courts_de(p)
+  p$origine_profil <- "vierge"; p$variante_debut <- 1L; p$hash_exclus <- ""
+  if(!is.null(registre_profil) && nrow(registre_profil) > 0){
+    m <- match(p$id_profil, registre_profil$id_profil); vu <- !is.na(m)
+    p$origine_profil[vu] <- "recycle"; p$variante_debut[vu] <- as.integer(registre_profil$variante_max[m[vu]]) + 1L
+    p$hash_exclus[vu] <- vapply(registre_profil$hash_das[m[vu]], function(h) paste(unique(h), collapse = " "), character(1))
+  }
+  p
+}
+
+# --- K2. Habillage admin robuste (défaut trouvé en revue clinique : NA durée + modes sur les longs) --------------
+# Cause : jointure naturelle sur 7 clés dont l'âge EXACT et nbda, v_admin photographié sur AN_REF seule -> profils du
+# catalogue multi-années sans candidat -> NA sur les 4 colonnes apportées, ensemble. Décision : nbda SORT des clés
+# (fabrique_v_admin_longs sans nbda) ; repli hiérarchique : (0) strate fine 6 clés -> (1) cage au lieu de l'âge exact ->
+# (2) mode_hospit × cage × racine ; tirage au premier niveau non vide (uniforme entre candidats distincts : v_admin est
+# une table distinct sans effectif — question K-b) ; colonne repli_admin (0/1/2) tracée jusqu'au corpus ; tous niveaux
+# vides -> stop NOMINATIF, jamais de NA silencieux.
+# CLES_ADMIN_LONGS (config, doctrine) = niveau 0 ; niveaux de repli dérivés.
+NIVEAUX_REPLI_ADMIN <- list(c("mode_hospit", "sexe", "age", "cage", "ghm2", "diag2"), c("mode_hospit", "sexe", "cage", "ghm2", "diag2"), c("mode_hospit", "cage", "racine"))
+# d : scénarios ; v_admin : photographie admin (racine dérivée de ghm2 si absente) ; niveau 0 : toutes les variantes
+# (nb_variantes = NA) ou nb_variantes tirées ; niveaux de repli : nb_repli variantes tirées ; cols_apport : colonnes apportées.
+habiller_admin <- function(d, v_admin, niveaux = NIVEAUX_REPLI_ADMIN, cols_apport = c(COLS_ADMIN, "duree"), nb_variantes = NA, nb_repli = 2L, etiquette = "longs"){
+  d <- tibble::as_tibble(d); v <- tibble::as_tibble(v_admin)
+  if(!"racine" %in% names(v) && "ghm2" %in% names(v)) v$racine <- substr(as.character(v$ghm2), 1, 5)
+  if(any(vapply(niveaux, function(k) "racine" %in% k, logical(1))) && !"racine" %in% names(d) && "ghm2" %in% names(d)) d$racine <- substr(as.character(d$ghm2), 1, 5)
+  manq <- setdiff(cols_apport, names(v)); if(length(manq)) stop("habiller_admin : colonnes apportées absentes de v_admin : " %+% paste(manq, collapse = ", "), call. = FALSE)
+  if(nrow(d) == 0){ d$repli_admin <- integer(0); for(cc in setdiff(cols_apport, names(d))) d[[cc]] <- v[[cc]][0]; return(d) }
+  d$.rid <- seq_len(nrow(d)); restants <- d[, setdiff(names(d), cols_apport), drop = FALSE]; out <- list()
+  for(j in seq_along(niveaux)){
+    cles <- niveaux[[j]]
+    manq <- setdiff(cles, c(names(v), names(restants))); if(length(manq)) stop("habiller_admin : clés absentes au niveau " %+% (j - 1) %+% " : " %+% paste(manq, collapse = ", "), call. = FALSE)
+    cand <- dplyr::distinct(v[, c(cles, cols_apport), drop = FALSE])
+    h <- dplyr::inner_join(restants, cand, by = cles, relationship = "many-to-many")
+    n_var <- if(j == 1) nb_variantes else nb_repli
+    if(!is.na(n_var)) h <- h |> dplyr::group_by(.rid) |> dplyr::slice_sample(n = as.integer(n_var)) |> dplyr::ungroup()
+    h$repli_admin <- as.integer(j - 1L); out[[j]] <- h
+    restants <- restants[!restants$.rid %in% h$.rid, , drop = FALSE]
+    if(nrow(restants) == 0) break
+  }
+  if(nrow(restants) > 0){
+    cles <- unique(c(niveaux[[length(niveaux)]], "diag2")); ex <- utils::head(unique(restants[, intersect(cles, names(restants)), drop = FALSE]), 10)
+    stop("habillage " %+% etiquette %+% " : aucun candidat admin à AUCUN niveau de repli pour " %+% nrow(restants) %+% " scénario(s) — profils (" %+% paste(names(ex), collapse = ", ") %+% ") : " %+%
+           paste(apply(as.data.frame(ex), 1, paste, collapse = "/"), collapse = " ; ") %+% ". Jamais de NA silencieux : élargir la photographie v_admin (années) ou les niveaux de repli.", call. = FALSE)
+  }
+  res <- dplyr::bind_rows(out); res <- res[order(res$.rid), , drop = FALSE]; res$.rid <- NULL
+  res
+}
+# Contrôle « zéro NA d'habillage » (contrôles §8.2) : nb de lignes avec au moins un NA sur les colonnes apportées, et distribution du repli.
+controle_habillage <- function(df, cols_apport = c(COLS_ADMIN, "duree")){
+  cols <- intersect(cols_apport, names(df))
+  na_lignes <- if(length(cols) == 0 || nrow(df) == 0) 0L else sum(rowSums(is.na(df[, cols, drop = FALSE])) > 0)
+  repli <- if("repli_admin" %in% names(df) && nrow(df) > 0) as.data.frame(table(niveau = df$repli_admin), responseName = "n") else data.frame(niveau = character(0), n = integer(0))
+  list(na_habillage = as.integer(na_lignes), colonnes = cols, repli = repli)
+}
+
+# --- K3. Adoption de C1 (longs + courts historiques, SANS re-tirage) ---------------------------------------------
+# Candidats : dossiers ou fichiers scenarios_longs_tirage_v8_<AAAAMMJJ> dans un dossier de recherche ; le choix est
+# toujours explicite quand il y a plusieurs candidats (jamais de choix silencieux).
+candidats_corpus_longs <- function(dossier){
+  if(is.null(dossier) || !dir.exists(dossier)) return(character(0))
+  sort(list.files(dossier, pattern = "^scenarios_longs_tirage_v8_[0-9]{8}(\\.parquet)?$", full.names = TRUE))
+}
+choisir_source_longs <- function(explicite = NULL, candidats = character(0)){
+  if(!is.null(explicite)){ if(!file.exists(explicite)) stop("adoption : source longs introuvable : " %+% explicite, call. = FALSE); return(list(source = explicite, message = "source longs (argument explicite) : " %+% explicite)) }
+  if(length(candidats) == 0) stop("adoption : aucun corpus longs daté (scenarios_longs_tirage_v8_<AAAAMMJJ>) trouvé ; passez source_longs = \"<chemin>\" explicitement.", call. = FALSE)
+  if(length(candidats) > 1) stop("adoption : plusieurs corpus longs datés trouvés, jamais de choix silencieux — passez source_longs = l'un de : " %+% paste(candidats, collapse = " ; "), call. = FALSE)
+  list(source = candidats[1], message = "source longs (candidat unique) : " %+% candidats[1])
+}
+# Longs adoptés : population reconstituée (cage) si absente, DPEC/TPEC si absents (duree = 3 comme le catalogue), id_profil
+# (recette id_v1 sur pivots + graine) et hash_das recalculés s'ils manquent, id_scenario = id_profil-variante ; branche "long".
+preparer_longs_adoptes <- function(df, campagne, typo = NULL, populations = POPULATIONS){
+  d <- tibble::as_tibble(df)
+  manq <- setdiff(c(PIVOTS_LONGS, "graine", "variante", "diagnostic_associes"), names(d)); if(length(manq)) stop("adoption longs : colonnes manquantes : " %+% paste(manq, collapse = ", "), call. = FALSE)
+  if(!"population" %in% names(d) || all(is.na(d$population))) d$population <- population_de(as.character(d$cage), populations)
+  if(!all(c("DPEC", "TPEC") %in% names(d))){ if(is.null(typo)) stop("adoption longs : typologie requise pour DPEC/TPEC", call. = FALSE); d <- typologie_sejour(d, typo, col_age = "age", col_duree = ".aucune", duree_defaut = 3) }
+  d$id_profil <- id_profil_de(dplyr::mutate(d, diagnostic_associes = graine)); d$hash_das <- hash_das_de(d$diagnostic_associes)
+  d$variante <- as.integer(d$variante); d$id_scenario <- id_scenario_de(d$id_profil, d$variante)
+  d$branche <- "long"; d$campagne <- as.character(campagne)
+  reg <- registre_depuis_chunks(d[!duplicated(d$id_scenario), , drop = FALSE], campagne, typo = typo)
+  list(df = d, registre = reg)
+}
+# Courts adoptés : ids (recette id_courts_v1), hash, population, DPEC/TPEC (vraie durée, âge tiré) ; branche "court".
+preparer_courts_adoptes <- function(df, campagne, typo = NULL, populations = POPULATIONS){
+  d <- tibble::as_tibble(df)
+  manq <- setdiff(c(PIVOTS_COURTS, "variante", "diagnostic_associes"), names(d)); if(length(manq)) stop("adoption courts : colonnes manquantes : " %+% paste(manq, collapse = ", "), call. = FALSE)
+  d$id_profil <- id_profil_courts_de(d); d$hash_das <- hash_das_de(d$diagnostic_associes)
+  d$variante <- as.integer(d$variante); d$id_scenario <- id_scenario_de(d$id_profil, d$variante)
+  d$population <- population_de(as.character(d$cage), populations)
+  if(!all(c("DPEC", "TPEC") %in% names(d)) && !is.null(typo)) d <- typologie_sejour(d, typo, col_age = "age", col_duree = "duree")
+  if(!"lettre" %in% names(d)) d$lettre <- lettre_de(d$diag2)
+  d$branche <- "court"; d$campagne <- as.character(campagne)
+  list(df = d, registre = registre_depuis_courts(d, campagne, typo, populations))
+}
+# Cohérence livrable / registre d'une campagne adoptée : scénarios distincts par branche du livrable == lignes du registre.
+verifier_adoption <- function(df_livrable, registre_lignes){
+  b <- c("long", "court")
+  liv <- vapply(b, function(x) dplyr::n_distinct(df_livrable$id_scenario[df_livrable$branche == x]), integer(1))
+  reg <- vapply(b, function(x) sum(registre_lignes$branche == x), integer(1))
+  list(ok = all(liv == reg), livrable = liv, registre = reg,
+       texte = paste(sprintf("%s : livrable %d scénarios distincts / registre %d (%s)", b, liv, reg, ifelse(liv == reg, "égaux", "ÉCART")), collapse = " ; "))
 }

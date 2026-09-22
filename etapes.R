@@ -524,7 +524,7 @@ charger_dist_e660 <- function(){
   arrow::read_parquet(f)
 }
 ref_das_chronique_brute <- function(){
-  if(!exists("brute", envir = CACHE_E669)) assign("brute", ref_das_chronique(AN_REF), envir = CACHE_E669)
+  if(!exists("brute", envir = CACHE_E669)) assign("brute", if(un_seul_an_ref(ANS_COURTS)) ref_das_chronique(AN_REF) else ref_das_chronique_cumul(ANS_COURTS), envir = CACHE_E669)
   get("brute", envir = CACHE_E669)
 }
 codes_imprecis_extraction <- function(){
@@ -532,24 +532,40 @@ codes_imprecis_extraction <- function(){
   if(CONVERSION_E669) codes <- codes[!grepl("^E669", codes)]   # E669 traité en amont par la conversion
   codes
 }
-fabrique_pivots_courts <- function(){
-  df_cases_courts <- pRatihque::atihble(conn, 'prep_data_' %+% AN_REF ) |>
+fabrique_pivots_courts <- function(an = AN_REF){   # chantier courts en campagnes : `an` paramétré (défaut AN_REF, chaîne B6 intacte)
+  df_cases_courts <- pRatihque::atihble(conn, 'prep_data_' %+% an ) |>
     dplyr::filter(duree%in%DUREE_COURTS) |> dplyr::summarise(nb=dplyr::n(),.by=dplyr::all_of(PIVOTS_COURTS)) |> dplyr::filter(nb>SEUIL_PIVOT) |> 
     dplyr::collect()
   df_cases_courts
 }
-fabrique_v_admin_courts <- function(){
-  df_v_admin_courts <- pRatihque::atihble(conn, 'prep_data_' %+% AN_REF ) |> 
+fabrique_v_admin_courts <- function(an = AN_REF){   # `an` paramétré (défaut AN_REF, chaîne B7 intacte)
+  df_v_admin_courts <- pRatihque::atihble(conn, 'prep_data_' %+% an ) |> 
     dplyr::distinct(mode_hospit,mode_entree,mode_sortie,sexe,cage,ghm2,diag2,mdp,duree) |> 
     dplyr::collect()
   df_v_admin_courts
 }
+# DÉCISION UTILISATEUR (chantier « habillage robuste », défaut trouvé en revue clinique) : nbda SORT du distinct() de la
+# photographie admin des longs (écart B10 consigné) — la table rétrécit, les variantes se cumulent entre valeurs de nbda ;
+# la jointure d'habillage porte alors 6 clés (CLES_ADMIN_LONGS) avec repli hiérarchique (helpers K2).
 fabrique_v_admin_longs <- function(){
   df_v_admin_longs <- pRatihque::atihble(conn, 'prep_data_' %+% AN_REF ) |> 
-    dplyr::distinct(mode_hospit,mode_entree,mode_sortie,sexe,age,cage,ghm2,diag2,mdp,nbda,duree) |> 
+    dplyr::distinct(mode_hospit,mode_entree,mode_sortie,sexe,age,cage,ghm2,diag2,mdp,duree) |> 
     dplyr::collect()
   df_v_admin_longs
 }
+# TIRABLE COURTS MULTI-ANNÉES (chantier « courts en campagnes » §1bis, symétrie avec le catalogue longs) : ANS_COURTS = AN_REF
+# (défaut) -> chaînes v7 ci-dessus, inchangées ; sinon les pivots sont cumulés EN BASE (comptes des années additionnés par
+# union_all, seuil SEUIL_PIVOT rejugé sur le cumul), les refs de saturation courts (ref_das_chronique -> distribution_e660,
+# ref_nb_chroniques) et v_admin_courts = chaînes v7 par année puis addition / distinct en R (tables agrégées : résultat
+# identique à une addition en base). Les ids des pivots sont des hash de contenu : stables sous extension.
+un_seul_an_ref <- function(ans) length(ans) == 1 && ans[1] == AN_REF
+fabrique_pivots_courts_cumul <- function(ans){
+  parts <- lapply(ans, function(an) pRatihque::atihble(conn, 'prep_data_' %+% an) |> dplyr::filter(duree%in%DUREE_COURTS) |> dplyr::summarise(nb=dplyr::n(),.by=dplyr::all_of(PIVOTS_COURTS)))
+  Reduce(dplyr::union_all, parts) |> dplyr::summarise(nb = sum(nb, na.rm = TRUE), .by = dplyr::all_of(PIVOTS_COURTS)) |> dplyr::filter(nb>SEUIL_PIVOT) |> dplyr::collect()
+}
+fabrique_v_admin_courts_cumul <- function(ans) purrr::map(ans, fabrique_v_admin_courts) |> purrr::list_rbind() |> dplyr::distinct()
+ref_das_chronique_cumul <- function(ans) purrr::map(ans, ref_das_chronique) |> purrr::list_rbind() |> reagreger(c("diag2", "das", "sexe", "cage", "niveau", "type_liste", "caract"), "nb_das")
+ref_nb_chroniques_cumul <- function(ans) purrr::map(ans, ref_nb_chroniques) |> purrr::list_rbind() |> reagreger(c("cage", "sexe", "nb_chro"), "nb")
 FABRIQUES_REFS <- list(
   ref_das_chronique = function(){
     brute <- ref_das_chronique_brute()
@@ -574,18 +590,18 @@ FABRIQUES_REFS <- list(
       convertir_e669_comptes("diag2", c("mode_hospit", "sexe", "cage", "racine", "ghm2", "das"), "n", dist, BARE_E669_DEFAUT) |>
       convertir_e669_comptes("das", c("mode_hospit", "sexe", "cage", "racine", "ghm2", "diag2"), "n", dist, BARE_E669_DEFAUT)
   },
-  ref_nb_chroniques = function() ref_nb_chroniques(AN_REF),                 # aucun code : intact
+  ref_nb_chroniques = function() if(un_seul_an_ref(ANS_COURTS)) ref_nb_chroniques(AN_REF) else ref_nb_chroniques_cumul(ANS_COURTS),   # aucun code : intact ; cumul ANS_COURTS
   ref_comp_diabete  = function() ref_comp_diabete(AN_REF),                  # effectifs bruts ; pénalisation .9 côté tirage
   ref_pivots_courts = function(){
     # Le seuil nb > SEUIL_PIVOT est appliqué EN BASE par la chaîne v7.1.2 (non modifiée) :
     # conversion + ré-agrégation sur le collecté, sans re-seuil (perte conservatrice : classes
     # E669 sous le seuil individuellement ne sont jamais vues ; cf. MODIFICATIONS_V8.md §12).
-    df <- fabrique_pivots_courts()
+    df <- if(un_seul_an_ref(ANS_COURTS)) fabrique_pivots_courts() else fabrique_pivots_courts_cumul(ANS_COURTS)
     if(!CONVERSION_E669) return(df)
     convertir_e669_comptes(df, "diag2", setdiff(PIVOTS_COURTS, "diag2"), "nb", charger_dist_e660(), BARE_E669_DEFAUT)
   },
   ref_v_admin_courts = function(){
-    df <- fabrique_v_admin_courts()
+    df <- if(un_seul_an_ref(ANS_COURTS)) fabrique_v_admin_courts() else fabrique_v_admin_courts_cumul(ANS_COURTS)
     if(!CONVERSION_E669) return(df)
     convertir_e669_distinct(df, "diag2", charger_dist_e660(), BARE_E669_DEFAUT)
   },
@@ -666,13 +682,21 @@ FICHIER_CATALOGUE_META      <- function() file.path(DIR_CATALOGUE(), "_meta.yaml
 MONO_CATALOGUE              <- function() file.path(ns(DIR_CATALOGUE_M), "catalogue_longs_seuil.parquet")   # monofichier transitoire (etape_catalogue -> repartitionner)
 FICHIER_CATALOGUE_MONO_META <- function() file.path(ns(DIR_CATALOGUE_M), "catalogue_longs_seuil_meta.yaml")
 FICHIER_RAPPORT_EXTRACTION  <- function() file.path(ns(DIR_CATALOGUE_M), "rapport_extraction.txt")
-DIR_CHUNKS_COURTS           <- function() file.path(ns(DIR_COURTS), "chunks")
-FICHIER_COURTS              <- function() file.path(ns(DIR_COURTS), "scenarios_courts.parquet")
-FICHIER_COURTS_META         <- function() file.path(ns(DIR_COURTS), "_meta.yaml")
+# Refs : toutes dans 10_references, SAUF le tirable courts (ref_pivots_courts = le catalogue des courts) dans 30_courts
+FICHIER_REF                 <- function(nom) file.path(ns(if(nom == "ref_pivots_courts") DIR_COURTS else DIR_REFERENCES), nom_ref(nom))
+FICHIER_PIVOTS_COURTS       <- function() FICHIER_REF("ref_pivots_courts")
+FICHIER_COURTS_META         <- function() file.path(ns(DIR_COURTS), "_meta.yaml")                       # méta du TIRABLE (ANS_COURTS, seuils)
+FICHIER_COURTS_HISTORIQUE   <- function() file.path(ns(DIR_COURTS), "scenarios_courts.parquet")        # corpus courts FIXE historique (adopté en C1)
+FICHIER_COURTS_HISTORIQUE_META <- function() file.path(ns(DIR_COURTS), "scenarios_courts_meta.yaml")
 FICHIER_APPORTS             <- function() file.path(ns(DIR_DIAGNOSTICS), "diagnostic_apports.csv")
 FICHIER_RECOUVREMENT        <- function() file.path(ns(DIR_DIAGNOSTICS), "recouvrement.csv")
 FICHIER_DIAG_MEMOIRE        <- function() file.path(ns(DIR_DIAGNOSTICS), "diagnostic_memoire_" %+% PROFIL %+% ".csv")
-DIR_CAMPAGNE                <- function() file.path(ns(DIR_CAMPAGNES), CAMPAGNE)
+DIR_CAMPAGNE                <- function(campagne = CAMPAGNE) file.path(ns(DIR_CAMPAGNES), campagne)
+# Courts PAR CAMPAGNE (chantier « courts en campagnes ») : chunks transitoires + scénarios habillés de la campagne
+DIR_CHUNKS_COURTS           <- function(campagne = CAMPAGNE) file.path(DIR_CAMPAGNE(campagne), "chunks_courts")
+DIR_HABILLE_COURTS          <- function(campagne = CAMPAGNE) file.path(DIR_CAMPAGNE(campagne), "habille", "courts")
+FICHIER_COURTS_CAMPAGNE     <- function(campagne = CAMPAGNE) file.path(DIR_HABILLE_COURTS(campagne), "scenarios_courts.parquet")
+FICHIER_COURTS_CAMPAGNE_META <- function(campagne = CAMPAGNE) file.path(DIR_HABILLE_COURTS(campagne), "_meta.yaml")
 DIR_SELECTION               <- function(pop = NULL) if(is.null(pop)) file.path(DIR_CAMPAGNE(), "selection") else file.path(DIR_CAMPAGNE(), "selection", pop)
 FICHIER_SELECTION_META      <- function() file.path(DIR_SELECTION(), "_meta.yaml")                       # ex meta_tirage.yaml
 FICHIER_SELECTION_POP_META  <- function(pop) file.path(DIR_SELECTION(pop), "_meta.yaml")
@@ -680,18 +704,19 @@ DIR_CHUNKS_LONGS            <- function() file.path(DIR_CAMPAGNE(), "chunks")   
 DIR_CHUNKS_POP              <- function(pop) file.path(DIR_CHUNKS_LONGS(), pop)                          # quota_dp_fixe : par population
 DIR_HABILLE                 <- function(pop) file.path(DIR_CAMPAGNE(), "habille", pop)
 DIR_REGISTRE                <- function() file.path(ns(DIR_REGISTRE_M), "registre_tirages")
-FICHIER_LIVRABLE            <- function() file.path(ns(DIR_EXPORT_FINAL), "scenarios_" %+% CAMPAGNE %+% ".parquet")
-DIR_LIVRABLE_PARTS          <- function() file.path(ns(DIR_EXPORT_FINAL), "scenarios_" %+% CAMPAGNE)         # repli au-delà de SEUIL_MONOFICHIER
-FICHIER_LIVRABLE_META       <- function() file.path(ns(DIR_EXPORT_FINAL), "scenarios_" %+% CAMPAGNE %+% "_meta.yaml")
-FICHIER_RAPPORT             <- function() file.path(ns(DIR_EXPORT_FINAL), "rapport_" %+% CAMPAGNE %+% ".txt")
-FICHIER_REVUE               <- function() file.path(ns(DIR_EXPORT_FINAL), "echantillon_revue_" %+% CAMPAGNE %+% ".csv")
-FICHIER_TOP30               <- function() file.path(ns(DIR_EXPORT_FINAL), "top30_das_par_cmd_" %+% CAMPAGNE %+% ".csv")
+FICHIER_LIVRABLE            <- function(campagne = CAMPAGNE) file.path(ns(DIR_EXPORT_FINAL), "scenarios_" %+% campagne %+% ".parquet")
+DIR_LIVRABLE_PARTS          <- function(campagne = CAMPAGNE) file.path(ns(DIR_EXPORT_FINAL), "scenarios_" %+% campagne)         # repli au-delà de SEUIL_MONOFICHIER
+FICHIER_LIVRABLE_META       <- function(campagne = CAMPAGNE) file.path(ns(DIR_EXPORT_FINAL), "scenarios_" %+% campagne %+% "_meta.yaml")
+FICHIER_RAPPORT             <- function(campagne = CAMPAGNE) file.path(ns(DIR_EXPORT_FINAL), "rapport_" %+% campagne %+% ".txt")
+FICHIER_REVUE               <- function(campagne = CAMPAGNE) file.path(ns(DIR_EXPORT_FINAL), "echantillon_revue_" %+% campagne %+% ".csv")
+FICHIER_TOP30               <- function(campagne = CAMPAGNE) file.path(ns(DIR_EXPORT_FINAL), "top30_das_par_cmd_" %+% campagne %+% ".csv")
 creer_dossiers <- function(...) for(d in c(...)) if(!dir.exists(d)) dir.create(d, recursive = TRUE)
 # Seeds : sans registre, base = SEED (comportement antérieur) ; en campagne (REGISTRE_ACTIF), base =
 # seed_campagne(SEED, CAMPAGNE) — deux campagnes de même config et même registre initial sont
 # reproductibles indépendamment.
 seed_base_campagne <- function() if(isTRUE(REGISTRE_ACTIF)) seed_campagne(SEED, CAMPAGNE) else SEED
 seed_population <- function(pop) as.integer(seed_base_campagne() + 1e5 + 1e4 * match(pop, names(POPULATIONS)))   # seed de tirage dérivé par population
+seed_courts     <- function() as.integer(seed_base_campagne() + 2e5)   # seed des courts de la campagne (déterminisme par (campagne, plage))
 # diagnostic_memoire_<profil>.csv : journal mémoire de la session, écrit (idempotent, mêmes lignes) en fin
 # d'etape_refs, d'etape_partiels_longs et d'etape_catalogue ; character(0) si aucune mesure.
 ecrire_diagnostic_memoire <- function(){
@@ -731,12 +756,13 @@ garder_magasin <- function(magasin, f_meta, etape){
   if(!v$ok) stop(etape %+% " : " %+% v$message, call. = FALSE)
   invisible(v)
 }
+fichiers_refs_presents <- function() c(if(dir.exists(DIR_REFERENCES)) list.files(DIR_REFERENCES, pattern = "\\.parquet$"), if(dir.exists(DIR_COURTS)) list.files(DIR_COURTS, pattern = "^ref_pivots_courts\\.parquet$"))
 plan_courant <- function(forcer_refs = FORCER_REFS){
-  creer_dossiers(PATH_RESULTS, DIR_PARTIELS, DIR_REFERENCES, DIR_CATALOGUE_M, DIR_DIAGNOSTICS)
+  creer_dossiers(PATH_RESULTS, DIR_PARTIELS, DIR_REFERENCES, DIR_CATALOGUE_M, DIR_COURTS, DIR_DIAGNOSTICS)
   resoudre_besoins(TYPES_ETBS_LONGS, ANS_HISTORIQUE, AN_REF,
                    fichiers_partiels = list.files(DIR_PARTIELS, pattern = "^catalogue_partiel_.*\\.parquet$"),
-                   fichiers_exports  = list.files(DIR_REFERENCES, pattern = "\\.parquet$"),
-                   forcer_refs = forcer_refs, noms_refs = NOMS_REFS, refs_chroniques = REFS_CHRONIQUES)
+                   fichiers_exports  = fichiers_refs_presents(),
+                   forcer_refs = forcer_refs, noms_refs = NOMS_REFS, refs_chroniques = REFS_CHRONIQUES, ans_courts = ANS_COURTS, refs_courts = REFS_COURTS)
 }
 
 ## ---- 2. Famille EXTRACTION ----
@@ -766,7 +792,7 @@ etape_prep_data <- function(ans = NULL){
     prep_data(an_)
     gc()
   }
-  if(plan$prep_das_chronique){ cat("prep_das_chronique(", AN_REF, ")\n", sep = ""); prep_das_chronique(AN_REF) }
+  for(an_ in plan$annees_das_chronique){ cat("prep_das_chronique(", an_, ")\n", sep = ""); prep_das_chronique(an_) }
   banniere_fin("etape_prep_data", t0, FICHIER_PARTIELS_META())
 }
 
@@ -779,30 +805,43 @@ etape_refs <- function(forcer = FORCER_REFS){
   v <- verifier_magasin("references", lire_meta_si_present(FICHIER_REFERENCES_META()), valeurs_effectives_config())
   if(!v$ok && !isTRUE(forcer)) stop("etape_refs : " %+% v$message, call. = FALSE)
   if(!v$ok) cat("FORCER_REFS : magasin partagé régénéré malgré l'écart (", paste(v$differences, collapse = ", "), ")\n", sep = "")
+  # Garde du TIRABLE courts (magasin 30_courts : ANS_COURTS, seuils) : écart -> stop sauf forcer / FORCER_COURTS (pivots régénérés)
+  v_c <- verifier_magasin("courts", lire_meta_si_present(FICHIER_COURTS_META()), valeurs_effectives_config())
+  if(!v_c$ok && !isTRUE(forcer) && !isTRUE(FORCER_COURTS)) stop("etape_refs : " %+% v_c$message, call. = FALSE)
+  if(!v_c$ok || isTRUE(FORCER_COURTS)){ cat("tirable courts (30_courts) régénéré", if(!v_c$ok) " malgré l'écart (" %+% paste(v_c$differences, collapse = ", ") %+% ")" else " (FORCER_COURTS)", "\n", sep = ""); plan$refs$a_faire[plan$refs$nom == "ref_pivots_courts"] <- TRUE }
   fichiers <- character(0)
   if(any(plan$refs$a_faire)){
     exiger_conn("etape_refs")
-    exiger_table("prep_data_" %+% AN_REF, "etape_refs", "etape_prep_data()")
-    if(any(plan$refs$a_faire & plan$refs$nom %in% REFS_CHRONIQUES) && !table_temporaire_existe("prep_das_chro_" %+% AN_REF)){
-      cat("prep_das_chronique(", AN_REF, ") (ref chronique à calculer)\n", sep = ""); prep_das_chronique(AN_REF)
+    for(an_ in sort(unique(c(AN_REF, if(any(plan$refs$a_faire & plan$refs$nom %in% REFS_COURTS)) ANS_COURTS)))) exiger_table("prep_data_" %+% an_, "etape_refs", "etape_prep_data()")
+    if(any(plan$refs$a_faire & plan$refs$nom %in% REFS_CHRONIQUES)){
+      for(an_ in sort(unique(c(if(any(plan$refs$a_faire & plan$refs$nom %in% REFS_CHRONIQUES & !plan$refs$nom %in% REFS_COURTS)) AN_REF, if(any(plan$refs$a_faire & plan$refs$nom %in% REFS_CHRONIQUES & plan$refs$nom %in% REFS_COURTS)) ANS_COURTS))))
+        if(!table_temporaire_existe("prep_das_chro_" %+% an_)){ cat("prep_das_chronique(", an_, ") (ref chronique à calculer)\n", sep = ""); prep_das_chronique(an_) }
     }
   }
+  n_pivots <- NA_integer_
   for(i in seq_len(nrow(plan$refs))){
     nom <- plan$refs$nom[i]
-    fichier <- file.path(ns(DIR_REFERENCES), plan$refs$fichier[i])
+    fichier <- FICHIER_REF(nom)   # ref_pivots_courts (le tirable) -> 30_courts ; les autres -> 10_references
     if(!plan$refs$a_faire[i]){ cat("ref ", nom, " : présente, sautée\n", sep = ""); next }
-    cat("ref ", nom, " : calcul\n", sep = "")
+    cat("ref ", nom, " : calcul", if(nom %in% REFS_COURTS && !un_seul_an_ref(ANS_COURTS)) " (cumul ANS_COURTS = " %+% paste(ANS_COURTS, collapse = ",") %+% ")" else "", "\n", sep = "")
     df_ref <- FABRIQUES_REFS[[nom]]()
     arrow::write_parquet(df_ref, fichier)
+    if(nom == "ref_pivots_courts") n_pivots <- nrow(df_ref)
     cat("  -> ", nrow(df_ref), " lignes -> ", fichier, "\n", sep = "")
     noter_memoire("ref " %+% nom, df_ref)
     rm(df_ref); gc()   # P3.1 : aucune ref ne reste liée à l'environnement global après son écriture
     fichiers <- c(fichiers, fichier)
   }
   purger_cache_e669()  # P3.2 : au cas où ref_das_chronique a été calculée sans distribution_e660
-  if(length(fichiers) > 0 || !file.exists(FICHIER_REFERENCES_META())){
-    yaml::write_yaml(meta_magasin("references", valeurs_effectives_config(), PROFIL_producteur = PROFIL, refs = as.list(NOMS_REFS)), FICHIER_REFERENCES_META())
+  if(length(setdiff(fichiers, FICHIER_PIVOTS_COURTS())) > 0 || !file.exists(FICHIER_REFERENCES_META())){
+    yaml::write_yaml(meta_magasin("references", valeurs_effectives_config(), PROFIL_producteur = PROFIL, refs = as.list(setdiff(NOMS_REFS, "ref_pivots_courts"))), FICHIER_REFERENCES_META())
     fichiers <- c(fichiers, FICHIER_REFERENCES_META())
+  }
+  if((FICHIER_PIVOTS_COURTS() %in% fichiers || !file.exists(FICHIER_COURTS_META())) && file.exists(FICHIER_PIVOTS_COURTS())){
+    if(is.na(n_pivots)) n_pivots <- nrow(arrow::read_parquet(FICHIER_PIVOTS_COURTS()))
+    yaml::write_yaml(meta_magasin("courts", valeurs_effectives_config(), PROFIL_producteur = PROFIL, n_pivots = as.integer(n_pivots), fichier = basename(FICHIER_PIVOTS_COURTS()),
+                                  note = "le TIRABLE courts (pivots = catalogue des courts), cumul des années ANS_COURTS ; le tirage se fait par campagne (40_campagnes/<C>/chunks_courts)"), FICHIER_COURTS_META())
+    fichiers <- c(fichiers, FICHIER_COURTS_META())
   }
   f_mem <- ecrire_diagnostic_memoire()
   banniere_fin("etape_refs", t0, c(fichiers, f_mem))
@@ -1078,8 +1117,10 @@ charger_contexte_tirage <- function(requis, etape){
       stop(message_catalogue_absent(etape, DIR_CATALOGUE_M), call. = FALSE)
     garder_magasin("catalogue", if(file.exists(FICHIER_CATALOGUE_META())) FICHIER_CATALOGUE_META() else FICHIER_CATALOGUE_MONO_META(), etape)
   }
-  requis <- setdiff(requis, "catalogue_longs_seuil_meta.yaml")
-  if(length(requis)) { exiger_fichiers(file.path(ns(DIR_REFERENCES), requis), etape, "extraction (etape_refs)"); garder_magasin("references", FICHIER_REFERENCES_META(), etape) }
+  requis <- sub("\\.parquet$", "", setdiff(requis, "catalogue_longs_seuil_meta.yaml"))
+  if("ref_pivots_courts" %in% requis){ exiger_fichiers(FICHIER_PIVOTS_COURTS(), etape, "extraction (etape_refs) : le tirable courts, magasin 30_courts"); garder_magasin("courts", FICHIER_COURTS_META(), etape) }
+  autres <- setdiff(requis, "ref_pivots_courts")
+  if(length(autres)) { exiger_fichiers(vapply(autres, FICHIER_REF, character(1)), etape, "extraction (etape_refs)"); garder_magasin("references", FICHIER_REFERENCES_META(), etape) }
   if(!exists("ctx", envir = ETAPES_ENV, inherits = FALSE)){
     f_meta <- if(file.exists(FICHIER_CATALOGUE_META())) FICHIER_CATALOGUE_META() else FICHIER_CATALOGUE_MONO_META()
     meta_catalogue <- if(file.exists(f_meta)) yaml::read_yaml(f_meta) else NULL
@@ -1091,8 +1132,8 @@ charger_contexte_tirage <- function(requis, etape){
     assign("ctx", list(meta_catalogue = meta_catalogue, conversion_e669 = conv, codes_imprecis = codes_imprecis, lib_cim = libelles_cim(cim), paires_exclues = paires), envir = ETAPES_ENV)
   }
   ctx <- get("ctx", envir = ETAPES_ENV, inherits = FALSE)
-  lire <- function(nom) arrow::read_parquet(file.path(ns(DIR_REFERENCES), nom_ref(nom)))
-  if(is.null(ctx$REFS) && all(nom_ref("ref_comp_diabete") %in% requis)){
+  lire <- function(nom) arrow::read_parquet(FICHIER_REF(nom))
+  if(is.null(ctx$REFS) && "ref_comp_diabete" %in% requis){
     ctx$REFS <- construire_refs(comp_diabete = penaliser_comp_diabete(lire("ref_comp_diabete"), CAGE_PED, CAGE_AGES, PENALITE_9_AGES, PENALITE_9_AUTRES),
                                 codes_diab = codes_diab, codes_comp_sat_diab = codes_comp_sat_diab, hta_autres = hta_autres,
                                 code_did = code_did, code_dnid_ins = code_dnid_ins, code_dnid = code_dnid,
@@ -1114,54 +1155,72 @@ stats_branche <- function(df, pivots, codes_imprecis, cols_e669){
        e660 = effectifs_e660(df, c("diag2", "diagnostic_associes")))
 }
 
-# Étape T1 — séjours courts : tirage par chunks (AN_REF UNIQUEMENT : les pivots courts sont
-# extraits sur l'année de référence), habillage admin depuis v_admin_courts.parquet, contrôles,
-# export scenarios_courts. Idempotent : chunks présents sautés ; export réécrit à l'identique.
-# chunk_range = c(i, j) : tirage d'une plage de chunks seulement (parallélisme par sessions sur plages
-# disjointes du même dossier, sidecar partagé — même mode d'emploi que les longs) ; l'assemblage,
-# l'habillage et l'export se font à l'appel final SANS plage (chunks présents sautés). Débit par chunk
-# et extrapolation tous les 10 chunks : pmap_chunks.
-etape_tirage_courts <- function(chunk_range = NULL){
-  t0 <- banniere_debut("etape_tirage_courts", "AN_REF = " %+% AN_REF %+% " uniquement (pivots courts de l'année de référence) ; chunking dynamique (NB_CHUNKS_MAX = " %+% NB_CHUNKS_MAX %+% ", CHUNK_SIZE_MIN = " %+% CHUNK_SIZE_MIN %+% ", CHUNK_SIZE_FIXE = " %+% CHUNK_SIZE_FIXE %+% ")" %+%
+# Étape T1 — séjours courts : ÉTAPE DE CAMPAGNE (chantier « courts en campagnes » : même statut que les longs dans le corpus).
+# Tirable = 30_courts/ref_pivots_courts.parquet (magasin partagé, cumul ANS_COURTS, gardé) ; budget de la campagne =
+# NB_CRH_CIBLE_COURTS (absolu) ou RATIO_COURTS × volume longs attendu (sélection de la campagne, donc APRÈS
+# etape_selection_longs) ; budget réparti sur les pivots AU POIDS (n), variantes numérotées PAR PIVOT après la variante_max
+# du registre (recyclage = variantes nouvelles directement, hash_das enregistrés exclus, aucun re-tirage), dédoublonnage
+# souple ; chunks sous <profil>/40_campagnes/<C>/chunks_courts/ (transitoires) ; typologie DPEC/TPEC (vraie durée, âge tiré),
+# population, habillage admin (v_admin_courts, stop nominatif si aucun candidat), scénarios habillés dans
+# <C>/habille/courts/scenarios_courts.parquet + _meta.yaml. chunk_range = c(i, j) : plage seulement (parallélisme par
+# sessions sur plages disjointes, sidecar partagé), assemblage à l'appel final sans plage ; débit par chunk.
+etape_tirage_courts <- function(chunk_range = NULL, budget = NB_CRH_CIBLE_COURTS, ratio = RATIO_COURTS){
+  mt <- lire_meta_si_present(FICHIER_SELECTION_META())
+  bc <- budget_courts(budget, ratio, if(is.null(mt)) NULL else mt$volume_attendu)
+  cat("\n==== CAMPAGNE = ", CAMPAGNE, " ; budget courts = ", bc$budget, " (source : ", bc$source, " — ", bc$detail, ") ; surcharge active : ", surcharge_active(), "\n", sep = "")
+  t0 <- banniere_debut("etape_tirage_courts", "campagne = " %+% CAMPAGNE %+% " ; budget courts = " %+% bc$budget %+% " (" %+% bc$source %+% ") ; tirable = " %+% FICHIER_PIVOTS_COURTS() %+% " (ANS_COURTS = " %+% paste(ANS_COURTS, collapse = ",") %+%
+                        ") ; chunking dynamique (NB_CHUNKS_MAX = " %+% NB_CHUNKS_MAX %+% ", CHUNK_SIZE_MIN = " %+% CHUNK_SIZE_MIN %+% ", CHUNK_SIZE_FIXE = " %+% CHUNK_SIZE_FIXE %+% ")" %+%
                         if(!is.null(chunk_range)) " ; plage " %+% chunk_range[1] %+% ".." %+% chunk_range[2] %+% " (session parallèle)" else "")
-  ctx <- charger_contexte_tirage(nom_ref(c("ref_pivots_courts", "ref_das_chronique", "ref_nb_chroniques", "ref_comp_diabete", "ref_v_admin_courts")), "etape_tirage_courts")
-  # Garde du magasin partagé 30_courts : méta en écart -> stop sauf FORCER_COURTS (alors chunks + export supprimés, re-tirage)
-  creer_dossiers(DIR_COURTS)
-  v <- verifier_magasin("courts", lire_meta_si_present(FICHIER_COURTS_META()), valeurs_effectives_config())
-  if(!v$ok && !isTRUE(FORCER_COURTS)) stop("etape_tirage_courts : " %+% v$message, call. = FALSE)
-  if(isTRUE(FORCER_COURTS) && file.exists(FICHIER_COURTS_META())){ cat("FORCER_COURTS : magasin partagé ", DIR_COURTS, " vidé et re-tiré (il sert tous les profils)\n", sep = ""); unlink(DIR_CHUNKS_COURTS(), recursive = TRUE); unlink(c(FICHIER_COURTS(), FICHIER_COURTS_META())) }
-  lire <- function(nom) arrow::read_parquet(file.path(ns(DIR_REFERENCES), nom_ref(nom)))
-  df_pivots_courts <- lire("ref_pivots_courts"); df_nb_chroniques <- lire("ref_nb_chroniques")
+  ctx <- charger_contexte_tirage(c("ref_pivots_courts", "ref_das_chronique", "ref_nb_chroniques", "ref_comp_diabete", "ref_v_admin_courts"), "etape_tirage_courts")
+  registre <- if(isTRUE(REGISTRE_ACTIF)) lire_registre(DIR_REGISTRE()) else NULL
+  f_side <- file.path(DIR_CHUNKS_COURTS(), "courts_chunks_meta.yaml")
+  if(!is.null(registre)){
+    st <- statut_campagne_registre(CAMPAGNE, registre, "court")
+    if(st$inscrite && !file.exists(f_side)) stop("etape_tirage_courts : campagne " %+% CAMPAGNE %+% " " %+% sub(" — changez d'identifiant$", "", st$texte) %+% " : campagne CLOSE côté courts (aucun chunk courts sur disque). Aucun re-tirage possible ; ouvrez une nouvelle campagne (RUN_aval.Rmd §3). Le registre ne se vide jamais.", call. = FALSE)
+    if(st$inscrite) cat("campagne ", CAMPAGNE, " : courts déjà inscrits au registre (", st$nb_courts, " scénarios) ; chunks présents relus, aucun nouveau tirage (reprise sûre)\n", sep = "")
+    else cat("campagne ", CAMPAGNE, " (courts) : ", st$texte, " ; registre : ", registre$nb_campagnes, " campagne(s), ", sum(registre$lignes$branche == "court"), " scénarios courts, ", sum(grepl("^k", registre$par_profil$id_profil)), " pivots consommés\n", sep = "")
+  }
+  lire <- function(nom) arrow::read_parquet(FICHIER_REF(nom))
+  df_pivots <- lire("ref_pivots_courts"); df_nb_chroniques <- lire("ref_nb_chroniques")
   ref_chro <- prep_ref_chronique(lire("ref_das_chronique")); df_v_admin_courts <- lire("ref_v_admin_courts")
-  cat("== Séjours courts : tirage par chunks (", nrow(df_pivots_courts), " pivots) ==\n", sep = "")
-  df_tirage <- pmap_chunks(df_pivots_courts[, c(PIVOTS_COURTS, "nb")], sample_das_court,
-                           chunk_size = NULL, dossier = DIR_CHUNKS_COURTS(), prefixe = "courts", seed_base = SEED,
-                           garder_chunks = GARDER_CHUNKS, chunk_range = chunk_range,
-                           ref_chro = ref_chro, ref_nb_chro = df_nb_chroniques, refs = ctx$REFS,
-                           nb_tirages = NB_TIRAGES_COURTS, seuil_ref = SEUIL_REF_DAS,
-                           cibles_defaut = CIBLES_NB_CHRONIQUES, age_max = AGE_MAX_OUVERT)
+  p <- pivots_sous_registre(df_pivots[, c(PIVOTS_COURTS, "nb")], if(is.null(registre)) NULL else registre$par_profil)
+  p$nb_tirages <- repartir_budget_pivots(bc$budget, p$nb)
+  p <- p[p$nb_tirages > 0, , drop = FALSE]
+  cat(sprintf("== Séjours courts %s : tirable %d pivots, %d tirés (budget %d réparti au poids ; vierges = %d, recyclés = %d) ; seed_base = %d ==\n",
+              CAMPAGNE, nrow(df_pivots), nrow(p), bc$budget, sum(p$origine_profil == "vierge"), sum(p$origine_profil == "recycle"), seed_courts()))
+  df_tirage <- pmap_chunks(p[, c(PIVOTS_COURTS, "nb", "nb_tirages", "id_profil", "variante_debut", "hash_exclus")], sample_das_court,
+                           chunk_size = NULL, dossier = DIR_CHUNKS_COURTS(), prefixe = "courts", seed_base = seed_courts(),
+                           garder_chunks = TRUE, chunk_range = chunk_range,
+                           ref_chro = ref_chro, ref_nb_chro = df_nb_chroniques, refs = ctx$REFS, seuil_ref = SEUIL_REF_DAS,
+                           cibles_defaut = CIBLES_NB_CHRONIQUES, age_max = AGE_MAX_OUVERT, dedoublonner = TRUE)
   if(!is.null(chunk_range)){
-    cat("plage ", chunk_range[1], "..", chunk_range[2], " tirée ; assemblage, habillage et export à la fin : relancer etape_tirage_courts() sans plage (chunks présents sautés)\n", sep = "")
+    cat("plage ", chunk_range[1], "..", chunk_range[2], " tirée ; assemblage, habillage et écriture à la fin : relancer etape_tirage_courts() sans plage (chunks présents sautés)\n", sep = "")
     return(banniere_fin("etape_tirage_courts", t0, list.files(DIR_CHUNKS_COURTS(), pattern = "^courts_chunk_.*\\.parquet$", full.names = TRUE)))
   }
-  # Identifiants stables des courts (recette id_courts_v1, helpers G1) : id_profil "c" + 15 hex, id_scenario, hash_das
-  df_tirage$id_profil <- id_profil_courts_de(df_tirage); df_tirage$id_scenario <- id_scenario_de(df_tirage$id_profil, df_tirage$variante); df_tirage$hash_das <- hash_das_de(df_tirage$diagnostic_associes)
-  n_tirage <- nrow(df_tirage)
-  # Habillage admin : NB_VARIANTES_ADMIN_COURTS variantes tirées au sort par scénario (§5.9b)
-  set.seed(SEED + 1e6)
-  df_scenarios <- df_tirage |> 
-    dplyr::left_join(df_v_admin_courts,relationship = "many-to-many") |> 
-    dplyr::group_by(dplyr::across(-dplyr::any_of(COLS_ADMIN))) |> 
-    dplyr::slice_sample(n = NB_VARIANTES_ADMIN_COURTS) |> 
-    dplyr::ungroup()
+  n_gardes <- nrow(df_tirage)
+  if(n_gardes == 0) stop("etape_tirage_courts : aucun scénario court produit (strates de référence vides ou tout exclu par le registre).", call. = FALSE)
+  # Typologie (vraie durée, âge tiré), population, lettre, campagne — parité avec les longs
+  typo <- charger_typo()
+  df_tirage <- typologie_sejour(df_tirage, typo, col_age = "age", col_duree = "duree")
+  df_tirage$population <- population_de(as.character(df_tirage$cage), POPULATIONS); df_tirage$lettre <- lettre_de(df_tirage$diag2); df_tirage$campagne <- CAMPAGNE
+  # Habillage admin : NB_VARIANTES_ADMIN_COURTS variantes par scénario, strate = les 6 pivots (même périmètre ANS_COURTS que v_admin_courts) ; jamais de NA silencieux
+  set.seed(seed_courts() + 1e6)
+  df_scenarios <- habiller_admin(df_tirage, df_v_admin_courts, niveaux = list(PIVOTS_COURTS), cols_apport = COLS_ADMIN, nb_variantes = NB_VARIANTES_ADMIN_COURTS, etiquette = "courts")
   rm(df_tirage)
-  f_out <- FICHIER_COURTS()
+  creer_dossiers(DIR_HABILLE_COURTS()); f_out <- FICHIER_COURTS_CAMPAGNE()
   arrow::write_parquet(df_scenarios, f_out)
-  yaml::write_yaml(meta_magasin("courts", valeurs_effectives_config(), PROFIL_producteur = PROFIL, n_pivots = nrow(df_pivots_courts), n_tirage = n_tirage, n_lignes = nrow(df_scenarios),
-                                recette_id_courts = RECETTE_ID_COURTS, fichier = basename(f_out)), FICHIER_COURTS_META())
-  cat("- Séjours courts : ", nrow(df_scenarios), " lignes -> ", f_out, " (+ _meta.yaml ; magasin partagé, embarqué dans chaque livrable)\n", sep = "")
+  meta <- list(campagne = CAMPAGNE, PROFIL = PROFIL, date = as.character(Sys.Date()), budget = bc$budget, source_budget = bc$source, detail_budget = bc$detail,
+               RATIO_COURTS = ratio, NB_CRH_CIBLE_COURTS = budget, volume_longs_attendu = if(is.null(mt)) NA else mt$volume_attendu,
+               n_pivots_tirable = nrow(df_pivots), n_pivots_tires = nrow(p), n_pivots_vierges = sum(p$origine_profil == "vierge"), n_pivots_recycles = sum(p$origine_profil == "recycle"),
+               scenarios_demandes = bc$budget, scenarios_gardes = n_gardes, scenarios_elimines = bc$budget - n_gardes, n_lignes = nrow(df_scenarios),
+               ANS_COURTS = as.integer(ANS_COURTS), recette_id_courts = RECETTE_ID_COURTS, REGISTRE_ACTIF = isTRUE(REGISTRE_ACTIF), seed_base = seed_courts(),
+               NB_VARIANTES_ADMIN_COURTS = NB_VARIANTES_ADMIN_COURTS, fichier = basename(f_out))
+  yaml::write_yaml(meta, FICHIER_COURTS_CAMPAGNE_META())
+  cat(sprintf("- Séjours courts %s : %d scénarios gardés / %d demandés (éliminés : doublons, hash du registre, strates vides = %d) -> %d lignes habillées -> %s (+ _meta.yaml)\n",
+              CAMPAGNE, n_gardes, bc$budget, bc$budget - n_gardes, nrow(df_scenarios), f_out))
+  rapport <- etat_tirage("rapport", list()); rapport$courts_meta <- meta; poser_tirage("rapport", rapport)
   rm(df_scenarios); gc()
-  banniere_fin("etape_tirage_courts", t0, c(f_out, FICHIER_COURTS_META()))
+  banniere_fin("etape_tirage_courts", t0, c(f_out, FICHIER_COURTS_CAMPAGNE_META()))
 }
 
 # Étape T2 — sélection des séjours longs, figée sous seed AVANT le premier chunk.
@@ -1376,7 +1435,7 @@ relire_selection_longs <- function(etape){
 etape_tirage_das_longs <- function(chunk_range = NULL, populations = names(POPULATIONS)){
   cat("\n==== CAMPAGNE = ", CAMPAGNE, " ; NB_CRH_CIBLE effectif = ", NB_CRH_CIBLE, " ; surcharge active : ", surcharge_active(), "\n", sep = "")
   t0 <- banniere_debut("etape_tirage_das_longs", "chunks = " %+% DIR_CHUNKS_LONGS() %+% " ; chunking dynamique (NB_CHUNKS_MAX = " %+% NB_CHUNKS_MAX %+% ", CHUNK_SIZE_MIN = " %+% CHUNK_SIZE_MIN %+% ", CHUNK_SIZE_FIXE = " %+% CHUNK_SIZE_FIXE %+% ")" %+% if(!is.null(chunk_range)) " ; plage " %+% paste(chunk_range, collapse = "..") else "")
-  ctx <- charger_contexte_tirage(nom_ref(c("ref_das_aigu", "ref_comp_diabete")), "etape_tirage_das_longs")
+  ctx <- charger_contexte_tirage(c("ref_das_aigu", "ref_comp_diabete"), "etape_tirage_das_longs")
   if(is.null(etat_tirage("mode_tirage"))) relire_selection_longs("etape_tirage_das_longs")
   mode <- etat_tirage("mode_tirage")
   t_idx <- Sys.time()
@@ -1414,11 +1473,13 @@ etape_tirage_das_longs <- function(chunk_range = NULL, populations = names(POPUL
 }
 
 # Étape T4 — habillage admin des séjours longs depuis v_admin_longs.parquet (relu, jamais
-# prep_data en direct : frontière tirage / base) + slice_sample des variantes. Résultat en
-# mémoire de session ; relit les chunks si l'étape T3 n'a pas tourné dans cette session.
+# prep_data en direct : frontière tirage / base). HABILLAGE ROBUSTE (défaut trouvé en revue clinique : NA durée + modes) :
+# jointure sur les 6 clés CLES_ADMIN_LONGS (nbda retiré), repli hiérarchique helpers K2 (age -> cage -> mode_hospit × cage
+# × racine), colonne repli_admin tracée, stop nominatif si aucun candidat — jamais de NA silencieux. Résultat en
+# mémoire de session (modes historiques) ; relit les chunks si l'étape T3 n'a pas tourné dans cette session.
 etape_habillage_longs <- function(populations = names(POPULATIONS)){
-  t0 <- banniere_debut("etape_habillage_longs", "NB_VARIANTES_ADMIN_LONGS = " %+% NB_VARIANTES_ADMIN_LONGS)
-  charger_contexte_tirage(nom_ref("ref_v_admin_longs"), "etape_habillage_longs")
+  t0 <- banniere_debut("etape_habillage_longs", "NB_VARIANTES_ADMIN_LONGS = " %+% NB_VARIANTES_ADMIN_LONGS %+% " ; clés = " %+% paste(CLES_ADMIN_LONGS, collapse = ",") %+% " ; repli (cage, puis mode_hospit × cage × racine) : " %+% NB_VARIANTES_ADMIN_REPLI %+% " variantes")
+  charger_contexte_tirage("ref_v_admin_longs", "etape_habillage_longs")
   if(is.null(etat_tirage("mode_tirage")) && file.exists(FICHIER_SELECTION_META())) relire_selection_longs("etape_habillage_longs")
   if(identical(etat_tirage("mode_tirage"), "quota_dp_fixe")){
     # Flux par lots de chunks : jointure v_admin_longs.parquet relu, slice_sample par lot (seed dérivé),
@@ -1435,10 +1496,10 @@ etape_habillage_longs <- function(populations = names(POPULATIONS)){
       lire_chunks_par_lots(dir_ch, "longs", LOT_CHUNKS_FINALISATION, function(d, i_lot){
         d <- typologie_sejour(d, typo, col_age = "age", col_duree = "duree", duree_defaut = 3); d$population <- pop
         set.seed(SEED + 4e6 + 1e4 * ipop + i_lot)
-        h <- d |> dplyr::left_join(df_v_admin_longs, relationship = "many-to-many")
-        if(!is.na(NB_VARIANTES_ADMIN_LONGS)) h <- h |> dplyr::group_by(dplyr::across(-dplyr::any_of(c(COLS_ADMIN, "duree")))) |> dplyr::slice_sample(n = NB_VARIANTES_ADMIN_LONGS) |> dplyr::ungroup()
+        h <- habiller_admin(d, df_v_admin_longs, NIVEAUX_REPLI_ADMIN, c(COLS_ADMIN, "duree"), NB_VARIANTES_ADMIN_LONGS, NB_VARIANTES_ADMIN_REPLI, "longs " %+% pop)
         f <- file.path(dir_h, sprintf("lot_%04d.parquet", i_lot)); arrow::write_parquet(h, f)
-        cat(sprintf("  %s lot %04d : %d scénarios -> %d lignes habillées\n", pop, i_lot, nrow(d), nrow(h)))
+        rp <- table(h$repli_admin)
+        cat(sprintf("  %s lot %04d : %d scénarios -> %d lignes habillées (repli_admin : %s)\n", pop, i_lot, nrow(d), nrow(h), paste(names(rp), rp, sep = "=", collapse = ", ")))
       })
       fichiers <- c(fichiers, list.files(dir_h, full.names = TRUE))
     }
@@ -1448,15 +1509,9 @@ etape_habillage_longs <- function(populations = names(POPULATIONS)){
   if(is.null(etat_tirage("df_tirage_longs"))){ cat("df_tirage_longs absent de la session : relecture des chunks via etape_tirage_das_longs()\n"); etape_tirage_das_longs() }
   df_tirage <- etat_tirage("df_tirage_longs")
   df_v_admin_longs <- arrow::read_parquet(file.path(ns(DIR_REFERENCES), nom_ref("ref_v_admin_longs")))
-  # Habillage admin (v7.2 l.555)
+  # Habillage admin (v7.2 l.555) — robuste : 6 clés, repli hiérarchique, jamais de NA silencieux
   set.seed(SEED + 4e6)
-  df_scenarios <- df_tirage |> dplyr::left_join(df_v_admin_longs,relationship = "many-to-many")
-  if(!is.na(NB_VARIANTES_ADMIN_LONGS)){
-    df_scenarios <- df_scenarios |>
-      dplyr::group_by(dplyr::across(-dplyr::any_of(c(COLS_ADMIN, "duree")))) |>
-      dplyr::slice_sample(n = NB_VARIANTES_ADMIN_LONGS) |>
-      dplyr::ungroup()
-  }
+  df_scenarios <- habiller_admin(df_tirage, df_v_admin_longs, NIVEAUX_REPLI_ADMIN, c(COLS_ADMIN, "duree"), NB_VARIANTES_ADMIN_LONGS, NB_VARIANTES_ADMIN_REPLI, "longs")
   rm(df_tirage, df_v_admin_longs)
   poser_tirage("df_scenarios_longs", df_scenarios)
   if(exists("df_tirage_longs", envir = ETAPES_ENV, inherits = FALSE)) rm("df_tirage_longs", envir = ETAPES_ENV)
@@ -1467,32 +1522,37 @@ etape_habillage_longs <- function(populations = names(POPULATIONS)){
 
 # Étape T5 — finalisation : UN SEUL LIVRABLE par campagne (<profil>/60_export_final/scenarios_<CAMPAGNE>.parquet +
 # scenarios_<CAMPAGNE>_meta.yaml) : TOUS les scénarios de la campagne — longs (toutes populations, colonne population)
-# ET courts (relus depuis le magasin partagé 30_courts, embarqués : livrable autoportant, duplication entre campagnes
-# assumée) — en union de schémas (colonne branche = "long" / "court" en tête, NA typés, familles de colonnes au méta).
+# ET courts DE LA CAMPAGNE (tirés par etape_tirage_courts sous 40_campagnes/<C>/, même statut que les longs) — en union
+# de schémas (colonne branche = "long" / "court" en tête, NA typés, familles de colonnes au méta) ; méta : volumes par
+# branche, ratio réalisé ; contrôles §8.2 + « zéro NA d'habillage » et distribution de repli_admin.
 # Au-delà de SEUIL_MONOFICHIER lignes : parts scenarios_<CAMPAGNE>/part_XXXX.parquet (lire_corpus_final lit les deux
 # formes). Contrôles §8.2, rapport_<C>.txt, echantillon_revue_<C>.csv (tiré du livrable unifié, PART_REVUE_COURTS),
 # top30_das_par_cmd_<C>.csv, registre (quota_dp_fixe sous REGISTRE_ACTIF). Garde-fous : méta d'une autre campagne ->
 # stop ; même campagne -> réécriture idempotente. Relancée : reconstruit depuis les chunks présents (aucun re-tirage).
-charger_courts_magasin <- function(etape){
-  if(!file.exists(FICHIER_COURTS())) stop(message_courts_absent(DIR_COURTS), call. = FALSE)
-  meta <- lire_meta_si_present(FICHIER_COURTS_META())
-  garder_magasin("courts", FICHIER_COURTS_META(), etape)
-  list(df = tibble::as_tibble(arrow::read_parquet(FICHIER_COURTS())), meta = meta)
+# Courts DE LA CAMPAGNE : scénarios habillés (<C>/habille/courts/) ; absents mais chunks présents -> reconstruction via
+# etape_tirage_courts() (chunks sautés, aucun re-tirage) ; rien -> message actionnable.
+charger_courts_campagne <- function(etape){
+  f <- FICHIER_COURTS_CAMPAGNE()
+  if(!file.exists(f)){
+    if(file.exists(file.path(DIR_CHUNKS_COURTS(), "courts_chunks_meta.yaml"))){ cat("scénarios courts habillés absents, chunks courts présents : reconstruction via etape_tirage_courts() (aucun re-tirage)\n"); etape_tirage_courts() }
+    else stop(message_courts_absent(DIR_HABILLE_COURTS()), call. = FALSE)
+  }
+  list(df = tibble::as_tibble(arrow::read_parquet(f)), meta = lire_meta_si_present(FICHIER_COURTS_CAMPAGNE_META()))
 }
 # Écrit le livrable (monofichier ou parts) depuis les courts et la liste des lots longs ; schéma = union ordonnée par familles.
-ecrire_livrable <- function(df_courts, lots, fusionner = NULL){
+ecrire_livrable <- function(df_courts, lots, fusionner = NULL, campagne = CAMPAGNE){
   modele <- do.call(modele_schema, c(list(df_courts), lots))
   ordre <- unlist(familles_colonnes(names(modele)), use.names = FALSE); modele <- modele[, ordre, drop = FALSE]
   total <- nrow(df_courts) + sum(vapply(lots, nrow, integer(1)))
   if(is.null(fusionner)) fusionner <- total <= SEUIL_MONOFICHIER
   creer_dossiers(DIR_EXPORT_FINAL)
-  unlink(FICHIER_LIVRABLE()); unlink(DIR_LIVRABLE_PARTS(), recursive = TRUE)   # réécriture idempotente (même campagne, garde-fou amont)
+  unlink(FICHIER_LIVRABLE(campagne)); unlink(DIR_LIVRABLE_PARTS(campagne), recursive = TRUE)   # réécriture idempotente (même campagne, garde-fou amont)
   if(isTRUE(fusionner)){
     d <- dplyr::bind_rows(c(list(harmoniser(df_courts, modele)), lapply(lots, harmoniser, modele = modele)))
-    arrow::write_parquet(d, FICHIER_LIVRABLE()); fichiers <- FICHIER_LIVRABLE(); rm(d); gc()
+    arrow::write_parquet(d, FICHIER_LIVRABLE(campagne)); fichiers <- FICHIER_LIVRABLE(campagne); rm(d); gc()
   } else {
-    dir.create(DIR_LIVRABLE_PARTS(), recursive = TRUE); fichiers <- character(0); k <- 0L
-    for(d in c(list(df_courts), lots)){ k <- k + 1L; f <- file.path(DIR_LIVRABLE_PARTS(), sprintf("part_%04d.parquet", k)); arrow::write_parquet(harmoniser(d, modele), f); fichiers <- c(fichiers, f) }
+    dir.create(DIR_LIVRABLE_PARTS(campagne), recursive = TRUE); fichiers <- character(0); k <- 0L
+    for(d in c(list(df_courts), lots)){ k <- k + 1L; f <- file.path(DIR_LIVRABLE_PARTS(campagne), sprintf("part_%04d.parquet", k)); arrow::write_parquet(harmoniser(d, modele), f); fichiers <- c(fichiers, f) }
   }
   list(fichiers = fichiers, total = total, n_court = nrow(df_courts), n_long = total - nrow(df_courts), forme = if(isTRUE(fusionner)) "monofichier" else "parts",
        colonnes = names(modele), types = vapply(modele, function(x) class(x)[1], character(1)), familles = familles_colonnes(names(modele)))
@@ -1508,12 +1568,14 @@ etape_finalisation <- function(fusionner = NULL, populations = names(POPULATIONS
   v <- verifier_dossier_final(if(file.exists(FICHIER_LIVRABLE_META())) yaml::read_yaml(FICHIER_LIVRABLE_META()) else if(file.exists(FICHIER_LIVRABLE()) || dir.exists(DIR_LIVRABLE_PARTS())) list() else NULL, CAMPAGNE, FICHIER_LIVRABLE())
   if(v$action == "stop") stop(v$message, call. = FALSE)
   cat(v$message, "\n", sep = "")
-  # Courts : magasin partagé, gardé, relus et embarqués
-  cs <- charger_courts_magasin("etape_finalisation"); df_c <- cs$df; df_c$branche <- "court"
+  # Courts DE LA CAMPAGNE (tirés sous 40_campagnes/<C>/ : même statut que les longs)
+  cs <- charger_courts_campagne("etape_finalisation"); df_c <- cs$df; df_c$branche <- "court"
   rapport <- etat_tirage("rapport", list())
-  rapport$courts_tirage_n <- if(!is.null(cs$meta$n_tirage)) cs$meta$n_tirage else NA
+  rapport$courts_tirage_n <- if(!is.null(cs$meta$scenarios_gardes)) cs$meta$scenarios_gardes else NA
+  rapport$courts_meta <- cs$meta
   rapport$courts <- stats_branche(df_c, PIVOTS_COURTS, ctx$codes_imprecis, c("diag2", "diagnostic_associes"))
-  cat("- Séjours courts relus depuis le magasin ", FICHIER_COURTS(), " : ", nrow(df_c), " lignes (embarqués)\n", sep = "")
+  rapport$courts$habillage <- controle_habillage(df_c, COLS_ADMIN); rapport$courts$scenarios <- dplyr::n_distinct(df_c$id_scenario)
+  cat("- Séjours courts de la campagne ", CAMPAGNE, " relus depuis ", FICHIER_COURTS_CAMPAGNE(), " : ", nrow(df_c), " lignes, ", rapport$courts$scenarios, " scénarios\n", sep = "")
   # Longs : lots habillés par population (quota_dp_fixe) ou résultat de session (modes historiques)
   lots <- list(); resultats <- list()
   if(fixe){
@@ -1524,24 +1586,26 @@ etape_finalisation <- function(fusionner = NULL, populations = names(POPULATIONS
           cat("population ", pop, " : lots habillés absents, chunks présents : reconstruction via etape_habillage_longs() (aucun re-tirage)\n", sep = ""); etape_habillage_longs(pop)
         } else { cat("population ", pop, " : aucun chunk ni lot habillé, sautée (lancez etape_tirage_das_longs())\n", sep = ""); next }
       }
-      acc <- acc_stats_init(); doublons <- NULL; n_lot <- 0L
+      acc <- acc_stats_init(); doublons <- NULL; n_lot <- 0L; hab_na <- 0L; hab_repli <- NULL; n_scen <- 0L
       for(f in sort(list.files(dir_h, pattern = "^lot_[0-9]{4}\\.parquet$", full.names = TRUE))){
         n_lot <- n_lot + 1L
         d <- tibble::as_tibble(arrow::read_parquet(f))
         acc <- acc_stats_ajouter(acc, d, PIVOTS_LONGS, ctx$codes_imprecis, hta_autres, SEUIL_PIVOT, c("diag2", "graine", "diagnostic_associes"))
+        ch <- controle_habillage(d); hab_na <- hab_na + ch$na_habillage; hab_repli <- dplyr::bind_rows(hab_repli, ch$repli); if("id_scenario" %in% names(d)) n_scen <- n_scen + dplyr::n_distinct(d$id_scenario)
         if("nb_variantes_demandees" %in% names(d)){
           dd <- d |> dplyr::distinct(dplyr::across(dplyr::all_of(c(PIVOTS_LONGS, "graine", "variante", "nb_variantes_demandees")))) |>
             dplyr::summarise(demandees = dplyr::first(nb_variantes_demandees), gardees = dplyr::n(), .by = dplyr::all_of(c(PIVOTS_LONGS, "graine"))) |>
             dplyr::summarise(demandees = sum(demandees), gardees = sum(gardees), .by = diag2)
           doublons <- dplyr::bind_rows(doublons, dd) |> dplyr::summarise(demandees = sum(demandees), gardees = sum(gardees), .by = diag2)
         }
-        d$branche <- "long"; if(!"population" %in% names(d)) d$population <- pop
+        d$branche <- "long"; if(!"population" %in% names(d)) d$population <- pop; if(!"campagne" %in% names(d)) d$campagne <- CAMPAGNE
         lots[[length(lots) + 1L]] <- d
         cat(sprintf("  %s lot %04d : %d lignes\n", pop, n_lot, nrow(d))); rm(d)
       }
       st <- acc_stats_final(acc)
       scen_gardes <- if(is.null(doublons)) NA_integer_ else sum(doublons$gardees); scen_demandes <- if(is.null(doublons)) NA_integer_ else sum(doublons$demandees)
-      resultats[[pop]] <- list(stats = st, doublons = doublons, scenarios_gardes = scen_gardes, scenarios_demandes = scen_demandes, lignes_finales = st$n)
+      resultats[[pop]] <- list(stats = st, doublons = doublons, scenarios_gardes = scen_gardes, scenarios_demandes = scen_demandes, lignes_finales = st$n, scenarios = n_scen,
+                               habillage = list(na_habillage = hab_na, repli = if(is.null(hab_repli)) data.frame(niveau = character(0), n = integer(0)) else hab_repli |> dplyr::summarise(n = sum(n), .by = niveau)))
       cat(sprintf("== %s : %s scénarios gardés / %s demandés (cible population %s) ; %d lignes finales (habillage)\n", pop, format(scen_gardes), format(scen_demandes),
                   format(meta_tirage$par_population[[pop]]$budget_population), st$n))
     }
@@ -1549,8 +1613,9 @@ etape_finalisation <- function(fusionner = NULL, populations = names(POPULATIONS
   } else {
     if(is.null(etat_tirage("df_scenarios_longs"))){ cat("df_scenarios_longs absent de la session : reconstruction via etape_habillage_longs()\n"); etape_habillage_longs() }
     if(is.null(rapport$longs_tirage_n)) rapport$longs_tirage_n <- NA
-    d <- tibble::as_tibble(etat_tirage("df_scenarios_longs")); d$branche <- "long"
+    d <- tibble::as_tibble(etat_tirage("df_scenarios_longs")); d$branche <- "long"; if(!"campagne" %in% names(d)) d$campagne <- CAMPAGNE
     rapport$longs <- stats_branche(d, PIVOTS_LONGS, ctx$codes_imprecis, c("diag2", "graine", "diagnostic_associes"))
+    rapport$longs$habillage <- controle_habillage(d); rapport$longs$scenarios <- if("id_scenario" %in% names(d)) dplyr::n_distinct(d$id_scenario) else NA_integer_
     lots[[1L]] <- d; rm(d); rm("df_scenarios_longs", envir = ETAPES_ENV); gc()
   }
   ## Livrable unique
@@ -1570,14 +1635,19 @@ etape_finalisation <- function(fusionner = NULL, populations = names(POPULATIONS
   f_revue <- FICHIER_REVUE(); readr::write_excel_csv2(df_revue, f_revue)
   f_top <- FICHIER_TOP30()
   utils::write.csv(dplyr::bind_rows(c(list(court = rapport$courts$top_das), if(fixe) lapply(resultats, function(r) r$stats$top_das) else list(long = rapport$longs$top_das)), .id = "branche"), f_top, row.names = FALSE)
+  scen_long <- if(fixe) sum(vapply(resultats, function(r) r$scenarios, integer(1))) else rapport$longs$scenarios
+  na_hab_longs <- if(fixe) sum(vapply(resultats, function(r) r$habillage$na_habillage, integer(1))) else rapport$longs$habillage$na_habillage
   meta_liv <- list(livrable = basename(if(liv$forme == "monofichier") FICHIER_LIVRABLE() else DIR_LIVRABLE_PARTS()), forme = liv$forme, campagne = CAMPAGNE, date = as.character(Sys.Date()), PROFIL = PROFIL,
                    MODE_SELECTION = mode, total = liv$total, n_long = liv$n_long, n_court = liv$n_court,
+                   volumes = list(long = list(lignes = liv$n_long, scenarios = scen_long), court = list(lignes = liv$n_court, scenarios = rapport$courts$scenarios)),
+                   ratio_courts_realise = if(!is.na(scen_long) && scen_long > 0) round(rapport$courts$scenarios / scen_long, 4) else NA, ratio_courts_cible = if(!is.null(cs$meta$RATIO_COURTS)) cs$meta$RATIO_COURTS else RATIO_COURTS,
+                   habillage_longs = list(na_habillage = na_hab_longs, repli_admin = if(fixe) lapply(resultats, function(r) stats::setNames(as.list(r$habillage$repli$n), r$habillage$repli$niveau)) else stats::setNames(as.list(rapport$longs$habillage$repli$n), rapport$longs$habillage$repli$niveau)),
                    populations = if(fixe) names(resultats) else NA, lignes_finales_longs = if(fixe) lapply(resultats, function(r) r$lignes_finales) else list(long = liv$n_long),
                    REGISTRE_ACTIF = isTRUE(REGISTRE_ACTIF) && fixe, version_recette_id = RECETTE_ID, version_recette_id_courts = RECETTE_ID_COURTS,
-                   courts = list(source = FICHIER_COURTS(), n = liv$n_court, meta = cs$meta),
+                   courts = list(source = FICHIER_COURTS_CAMPAGNE(), n = liv$n_court, meta = cs$meta),
                    selection = list(NB_CRH_CIBLE = meta_tirage$NB_CRH_CIBLE, BUDGET_TOTAL_LONGS = meta_tirage$BUDGET_TOTAL_LONGS, volume_attendu = meta_tirage$volume_attendu, date_selection = meta_tirage$date),
                    colonnes = as.list(liv$colonnes), types = as.list(liv$types), familles_colonnes = liv$familles,
-                   note = "branche = long / court en tête ; NA typés où une colonne ne s'applique pas ; types unifiés par colonne (integer/numeric -> numeric, sinon texte : `age` est un entier chez les courts et une classe lt_18/ge_18 chez les longs) ; livrable autoportant (courts embarqués)")
+                   note = "branche = long / court en tête ; NA typés où une colonne ne s'applique pas ; types unifiés par colonne (integer/numeric -> numeric, sinon texte : `age` est un entier chez les courts et une classe lt_18/ge_18 chez les longs) ; courts DE LA campagne (même statut que les longs) ; repli_admin = niveau de repli de l'habillage (0 = strate fine)")
   yaml::write_yaml(meta_liv, FICHIER_LIVRABLE_META())
   lignes <- rapport_finalisation(fixe, rapport, resultats, meta_tirage, ctx, liv, df_revue, f_reg, conv)
   f_rapport <- FICHIER_RAPPORT()
@@ -1587,9 +1657,15 @@ etape_finalisation <- function(fusionner = NULL, populations = names(POPULATIONS
 }
 # Rapport de contrôle (les deux modes) : livrable, volumétrie, distributions, top 30, imprécis, §8.2, campagne.
 rapport_finalisation <- function(fixe, rapport, resultats, meta_tirage, ctx, liv, df_revue, f_reg, conv){
+  cm <- rapport$courts_meta
+  scen_long <- if(fixe) sum(vapply(resultats, function(r) r$scenarios, integer(1))) else rapport$longs$scenarios
   lignes <- c("RAPPORT DE CONTROLE — etape_finalisation — campagne " %+% CAMPAGNE %+% " — " %+% as.character(Sys.Date()) %+% " — PROFIL = " %+% PROFIL,
               "", "== L. Livrable unique (" %+% liv$forme %+% ") ==",
-              sprintf("fichier : %s ; total = %d lignes ; branche long = %d ; branche court = %d (relus depuis %s)", basename(if(liv$forme == "monofichier") FICHIER_LIVRABLE() else DIR_LIVRABLE_PARTS()), liv$total, liv$n_long, liv$n_court, FICHIER_COURTS()),
+              sprintf("fichier : %s ; total = %d lignes ; branche long = %d ; branche court = %d (courts DE LA campagne, relus depuis %s)", basename(if(liv$forme == "monofichier") FICHIER_LIVRABLE() else DIR_LIVRABLE_PARTS()), liv$total, liv$n_long, liv$n_court, FICHIER_COURTS_CAMPAGNE()),
+              sprintf("scénarios distincts : long = %s ; court = %s ; ratio courts réalisé = %s (cible RATIO_COURTS = %s, provisoire)", format(scen_long), format(rapport$courts$scenarios), if(!is.na(scen_long) && scen_long > 0) format(round(rapport$courts$scenarios / scen_long, 4)) else "NA", format(if(!is.null(cm$RATIO_COURTS)) cm$RATIO_COURTS else RATIO_COURTS)),
+              "", "== C. Séjours courts de la campagne (étape de campagne, registre commun) ==",
+              if(is.null(cm)) "   (méta du tirage courts absent)" else c(sprintf("budget = %s (source : %s — %s) ; tirable %s pivots (ANS_COURTS = %s), %s tirés (vierges %s, recyclés %s)", format(cm$budget), cm$source_budget, cm$detail_budget, format(cm$n_pivots_tirable), paste(unlist(cm$ANS_COURTS), collapse = ","), format(cm$n_pivots_tires), format(cm$n_pivots_vierges), format(cm$n_pivots_recycles)),
+                                                                     sprintf("scénarios gardés = %s / demandés = %s (éliminés = %s : doublons souples, hash du registre, strates vides) ; lignes habillées = %s", format(cm$scenarios_gardes), format(cm$scenarios_demandes), format(cm$scenarios_elimines), format(cm$n_lignes))),
               "familles de colonnes : " %+% paste(vapply(names(liv$familles), function(f) f %+% " (" %+% paste(liv$familles[[f]], collapse = ", ") %+% ")", character(1)), collapse = " ; "),
               "", "== 0. Meta du catalogue ==", "   " %+% strsplit(yaml::as.yaml(ctx$meta_catalogue), "\n")[[1]],
               "", "== 0b. Meta de la sélection (selection/_meta.yaml) ==", "   " %+% strsplit(yaml::as.yaml(meta_tirage), "\n")[[1]], "")
@@ -1642,6 +1718,12 @@ rapport_finalisation <- function(fixe, rapport, resultats, meta_tirage, ctx, liv
       anomalies <- anomalies + sum(unlist(st$controles), na.rm = TRUE) + if(conv) st$e669_residuels else 0 }
     lignes <- c(lignes, "-- effectifs E660x par classe :", "   courts :", fmt_df(rapport$courts$e660))
     for(pop in names(resultats)) lignes <- c(lignes, "   longs " %+% pop %+% " :", fmt_df(resultats[[pop]]$stats$e660))
+    lignes <- c(lignes, "", "== 5b. Habillage admin : zéro NA attendu (durée, modes) ; distribution du repli (0 = strate fine 6 clés, 1 = cage, 2 = mode_hospit × cage × racine) ==")
+    for(pop in names(resultats)){ hb <- resultats[[pop]]$habillage
+      lignes <- c(lignes, sprintf("longs %-8s na_habillage = %d%s ; repli_admin : %s", pop, hb$na_habillage, if(hb$na_habillage > 0) "  <- ANOMALIE" else "", if(nrow(hb$repli)) paste(hb$repli$niveau, hb$repli$n, sep = " = ", collapse = " ; ") else "(aucune ligne)"))
+      anomalies <- anomalies + hb$na_habillage }
+    lignes <- c(lignes, sprintf("sejours_courts   na_habillage = %d%s", rapport$courts$habillage$na_habillage, if(rapport$courts$habillage$na_habillage > 0) "  <- ANOMALIE" else ""))
+    anomalies <- anomalies + rapport$courts$habillage$na_habillage
   } else {
     lignes <- c(lignes, "== 1. Volumétrie ==",
                 sprintf("sejours_courts : tirage = %s ; final = %d ; pivots distincts = %d", format(rapport$courts_tirage_n), rapport$courts$n, rapport$courts$pivots),
@@ -1677,14 +1759,20 @@ rapport_finalisation <- function(fixe, rapport, resultats, meta_tirage, ctx, liv
                 sprintf("sejours_longs   e669_residuels = %d%s", rapport$longs$e669_residuels, if(conv && rapport$longs$e669_residuels > 0) "  <- ANOMALIE" else ""))
     if(conv) anomalies <- anomalies + rapport$courts$e669_residuels + rapport$longs$e669_residuels
     lignes <- c(lignes, "-- effectifs E660x par classe (diag2 + DAS) :", "   courts :", fmt_df(rapport$courts$e660), "   longs :", fmt_df(rapport$longs$e660))
+    hb <- rapport$longs$habillage
+    lignes <- c(lignes, "== 5b. Habillage admin : zéro NA attendu (durée, modes) ; distribution du repli (0 = strate fine 6 clés, 1 = cage, 2 = mode_hospit × cage × racine) ==",
+                sprintf("sejours_longs   na_habillage = %d%s ; repli_admin : %s", hb$na_habillage, if(hb$na_habillage > 0) "  <- ANOMALIE" else "", if(nrow(hb$repli)) paste(hb$repli$niveau, hb$repli$n, sep = " = ", collapse = " ; ") else "(aucune ligne)"),
+                sprintf("sejours_courts  na_habillage = %d%s", rapport$courts$habillage$na_habillage, if(rapport$courts$habillage$na_habillage > 0) "  <- ANOMALIE" else ""))
+    anomalies <- anomalies + hb$na_habillage + rapport$courts$habillage$na_habillage
   }
   c(lignes, "TOTAL anomalies = " %+% anomalies, "",
     "Livrables : " %+% basename(if(liv$forme == "monofichier") FICHIER_LIVRABLE() else DIR_LIVRABLE_PARTS()) %+% " (+ " %+% basename(FICHIER_LIVRABLE_META()) %+% ") ; " %+% basename(FICHIER_REVUE()) %+% " (" %+% nrow(df_revue) %+% " scénarios) ; " %+%
       basename(FICHIER_TOP30()) %+% (if(length(f_reg)) " ; " %+% basename(f_reg) else "") %+% " — dans " %+% DIR_EXPORT_FINAL)
 }
 
-# Étape R — registre de campagne : écrit registre_<campagne>.parquet (append-only) depuis les chunks
-# tirés (id_scenario réellement PRODUITS, après dédoublonnage) et la sélection (population, DPEC).
+# Étape R — registre de campagne : écrit registre_<campagne>.parquet (append-only) depuis les chunks longs
+# tirés (id_scenario réellement PRODUITS, après dédoublonnage) et la sélection (population, DPEC), ET depuis les
+# scénarios courts de la campagne (branche = "court", même fichier). Une branche absente est signalée, pas bloquante.
 etape_registre_campagne <- function(campagne = CAMPAGNE, populations = names(POPULATIONS)){
   # Q53 ACTÉE : une mesure de palier n'écrit JAMAIS dans la mémoire permanente (défense en profondeur ; palier.R impose
   # aussi REGISTRE_ACTIF <- FALSE). La protection vit dans le mécanisme, pas dans la discipline.
@@ -1697,14 +1785,21 @@ etape_registre_campagne <- function(campagne = CAMPAGNE, populations = names(POP
     dpec_par_profil <- stats::setNames(sel$DPEC, sel$id_profil)
     lire_chunks_par_lots(dir_ch, "longs", LOT_CHUNKS_FINALISATION, function(d, i){
       if(!"id_profil" %in% names(d)) stop("etape_registre_campagne : les chunks de " %+% pop %+% " ne portent pas id_profil (tirés sans identifiants) : utilisez etape_retro_inscrire().", call. = FALSE)
-      d$campagne <- campagne; d$population <- pop; d$DPEC <- unname(dpec_par_profil[d$id_profil]); d$date <- as.character(Sys.Date())
+      d$campagne <- campagne; d$population <- pop; d$DPEC <- unname(dpec_par_profil[d$id_profil]); d$date <- as.character(Sys.Date()); d$branche <- "long"
       lignes <<- dplyr::bind_rows(lignes, tibble::as_tibble(d[, COLONNES_REGISTRE]))
     })
   }
-  if(is.null(lignes) || nrow(lignes) == 0) stop("etape_registre_campagne : aucun scénario tiré à inscrire (lancez etape_tirage_das_longs()).", call. = FALSE)
+  n_longs <- if(is.null(lignes)) 0L else nrow(lignes)
+  f_c <- FICHIER_COURTS_CAMPAGNE(campagne)
+  if(file.exists(f_c)){
+    lc <- registre_depuis_courts(arrow::read_parquet(f_c), campagne, charger_typo())
+    lignes <- dplyr::bind_rows(lignes, lc)
+  } else cat("courts de la campagne absents (", f_c, ") : branche court non inscrite (etape_tirage_courts() puis relancer)\n", sep = "")
+  if(is.null(lignes) || nrow(lignes) == 0) stop("etape_registre_campagne : aucun scénario tiré à inscrire (lancez etape_tirage_das_longs() et etape_tirage_courts()).", call. = FALSE)
+  if(n_longs == 0) cat("chunks longs absents : branche long non inscrite (etape_tirage_das_longs() puis relancer)\n")
   if(anyDuplicated(lignes$id_scenario)) stop("etape_registre_campagne : id_scenario dupliqué dans la campagne.", call. = FALSE)
   f <- ecrire_registre_campagne(lignes, campagne, DIR_REGISTRE())
-  cat(sprintf("registre %s : %d scénarios, %d profils, %d DP -> %s\n", campagne, nrow(lignes), dplyr::n_distinct(lignes$id_profil), dplyr::n_distinct(lignes$diag2), f))
+  cat(sprintf("registre %s : %d scénarios (%d longs, %d courts), %d profils, %d DP -> %s\n", campagne, nrow(lignes), sum(lignes$branche == "long"), sum(lignes$branche == "court"), dplyr::n_distinct(lignes$id_profil), dplyr::n_distinct(lignes$diag2), f))
   banniere_fin("etape_registre_campagne", t0, f)
 }
 
@@ -1732,6 +1827,89 @@ etape_retro_inscrire <- function(dossier_selection, dossier_chunks, campagne, po
               nrow(lignes), nb_chunks_lignes, if(nrow(lignes) == nb_chunks_lignes) "égaux" else "DIFFÉRENTS", dplyr::n_distinct(lignes$diag2), dplyr::n_distinct(lignes$id_profil), sum(!is.na(lignes$DPEC)), nrow(lignes)))
   banniere_fin("etape_retro_inscrire", t0, f)
 }
+# Rétro-inscription des SÉJOURS COURTS historiques (corpus courts FIXE, post-réorganisation 30_courts/scenarios_courts.parquet ;
+# argument de secours sinon) : id_profil (k + 15 hex sur les pivots) et hash_das recalculés, variantes telles que tirées,
+# inscrits sous `campagne`, branche "court". AUCUN re-tirage. Idempotente (registre append-only, extension par branche).
+# Vérification : scénarios inscrits == scénarios distincts du corpus (une ligne du corpus par variante d'habillage admin).
+etape_retro_inscrire_courts <- function(campagne = "C1", fichier_courts = FICHIER_COURTS_HISTORIQUE()){
+  t0 <- banniere_debut("etape_retro_inscrire_courts", "campagne = " %+% campagne %+% " ; corpus courts = " %+% fichier_courts)
+  if(!file.exists(fichier_courts)) stop("etape_retro_inscrire_courts : corpus courts introuvable : " %+% fichier_courts %+% " (réorganisation : scenarios_courts_v8_<date>.parquet -> 30_courts/scenarios_courts.parquet ; sinon passez fichier_courts).", call. = FALSE)
+  df <- tibble::as_tibble(arrow::read_parquet(fichier_courts))
+  lignes <- registre_depuis_courts(df, campagne, charger_typo())
+  n_scen <- dplyr::n_distinct(id_scenario_de(id_profil_courts_de(df), df$variante))
+  f <- ecrire_registre_campagne(lignes, campagne, DIR_REGISTRE())
+  cat(sprintf("vérifications : scénarios courts inscrits = %d ; scénarios distincts du corpus = %d (%s) ; lignes du corpus = %d (variantes d'habillage admin) ; pivots = %d ; DPEC renseignés = %d / %d\n",
+              nrow(lignes), n_scen, if(nrow(lignes) == n_scen) "égaux" else "DIFFÉRENTS", nrow(df), dplyr::n_distinct(lignes$id_profil), sum(!is.na(lignes$DPEC)), nrow(lignes)))
+  banniere_fin("etape_retro_inscrire_courts", t0, f)
+}
+
+# Lecture d'un corpus longs historique : dossier scenarios_longs_tirage_v8_<AAAAMMJJ>/ (sous-dossiers <population>/ lus
+# récursivement, population posée ; sinon tous les parquets, population reconstituée par cage) ou fichier .parquet.
+lire_corpus_longs_historique <- function(source, populations = names(POPULATIONS)){
+  lire_tous <- function(fs){ d <- purrr::map(fs, function(f) tibble::as_tibble(arrow::read_parquet(f))) |> purrr::list_rbind(); if(".chunk_vide" %in% names(d)) d$.chunk_vide <- NULL; d }
+  if(dir.exists(source)){
+    sous <- populations[dir.exists(file.path(source, populations))]
+    if(length(sous)) return(purrr::map(sous, function(pp){ fs <- list.files(file.path(source, pp), pattern = "\\.parquet$", recursive = TRUE, full.names = TRUE); d <- lire_tous(fs); if(nrow(d)) d$population <- pp; d }) |> purrr::list_rbind())
+    return(lire_tous(list.files(source, pattern = "\\.parquet$", recursive = TRUE, full.names = TRUE)))
+  }
+  tibble::as_tibble(arrow::read_parquet(source))
+}
+# ADOPTION DE C1 (chantier « courts en campagnes » §4) : campagne = longs + courts historiques, SANS re-tirage.
+# Reconstruit le livrable unifié depuis l'ancien corpus longs (scenarios_longs_tirage_v8_<AAAAMMJJ>/, sous-dossiers
+# adulte/ et pediatrie/, population reconstituée si absente) et le corpus courts historique (30_courts/scenarios_courts.parquet),
+# recalcule les identifiants (id_v1 / id_courts_v1) et hash_das, inscrit les deux branches au registre (append-only ;
+# extension acceptée si les longs y sont déjà par rétro-inscription), écrit scenarios_<C>.parquet + méta (origine =
+# "adoption", chemins sources, dates) dans <profil>/60_export_final/ ; annexes datées copiées et renommées par campagne
+# si présentes. Garde-fous : livrable de la même campagne déjà présent et différent -> stop ; plusieurs corpus longs
+# datés -> source_longs explicite obligatoire ; cohérence livrable / registre vérifiée (écart signalé). Idempotente.
+etape_adopter_campagne <- function(campagne = "C1", source_longs = NULL, fichier_courts = FICHIER_COURTS_HISTORIQUE(),
+                                   dossier_recherche = file.path(PATH_RESULTS, "_a_reorganiser", "exports"), annexes = TRUE, populations = names(POPULATIONS)){
+  if(palier_actif()) stop("etape_adopter_campagne : surcharge de PALIER active : une mesure n'écrit jamais au registre.", call. = FALSE)
+  t0 <- banniere_debut("etape_adopter_campagne", "campagne = " %+% campagne %+% " ; courts = " %+% fichier_courts)
+  ch <- choisir_source_longs(source_longs, candidats_corpus_longs(dossier_recherche)); cat(ch$message, "\n", sep = "")
+  if(!file.exists(fichier_courts)) stop("etape_adopter_campagne : corpus courts historique introuvable : " %+% fichier_courts %+% " (réorganisation : scenarios_courts_v8_<date>.parquet -> 30_courts/scenarios_courts.parquet ; sinon passez fichier_courts).", call. = FALSE)
+  ml <- lire_meta_si_present(FICHIER_LIVRABLE_META(campagne)); present <- file.exists(FICHIER_LIVRABLE(campagne)) || dir.exists(DIR_LIVRABLE_PARTS(campagne))
+  if(!is.null(ml) || present){
+    if(is.null(ml) || !identical(ml$origine, "adoption")) stop("etape_adopter_campagne : un livrable de la campagne " %+% campagne %+% " existe déjà (" %+% FICHIER_LIVRABLE(campagne) %+% ") et n'est pas une adoption : différent, rien n'est écrasé.", call. = FALSE)
+    if(!identical(as.character(ml$sources$longs), as.character(ch$source)) || !identical(as.character(ml$sources$courts), as.character(fichier_courts)))
+      stop("etape_adopter_campagne : la campagne " %+% campagne %+% " a déjà été adoptée depuis d'autres sources (longs : " %+% ml$sources$longs %+% " ; courts : " %+% ml$sources$courts %+% ") : différent, rien n'est écrasé.", call. = FALSE)
+    cat("livrable ", campagne, " déjà adopté depuis les mêmes sources : réécriture idempotente\n", sep = "")
+  }
+  typo <- charger_typo()
+  pl <- preparer_longs_adoptes(lire_corpus_longs_historique(ch$source, populations), campagne, typo)
+  cat(sprintf("longs adoptés : %d lignes, %d scénarios distincts, populations %s\n", nrow(pl$df), nrow(pl$registre), paste(sort(unique(pl$df$population)), collapse = ",")))
+  pc <- preparer_courts_adoptes(arrow::read_parquet(fichier_courts), campagne, typo)
+  cat(sprintf("courts adoptés : %d lignes, %d scénarios distincts (variantes d'habillage admin repliées)\n", nrow(pc$df), nrow(pc$registre)))
+  reg <- dplyr::bind_rows(pl$registre, pc$registre)
+  if(anyDuplicated(reg$id_scenario)) stop("etape_adopter_campagne : id_scenario dupliqué dans la campagne adoptée.", call. = FALSE)
+  f_reg <- ecrire_registre_campagne(reg, campagne, DIR_REGISTRE())
+  liv <- ecrire_livrable(pc$df, list(pl$df), NULL, campagne)
+  reg_l <- lire_registre(DIR_REGISTRE())$lignes; reg_l <- reg_l[reg_l$campagne == campagne, , drop = FALSE]
+  v <- verifier_adoption(lire_corpus_final(campagne), reg_l)
+  cat("vérifications livrable / registre : ", v$texte, if(v$ok) "" else "  <- ÉCART (registre préexistant différent ? voir registre_" %+% campagne %+% ".parquet)", "\n", sep = "")
+  mh <- lire_meta_si_present(FICHIER_COURTS_HISTORIQUE_META())
+  meta_liv <- list(livrable = basename(if(liv$forme == "monofichier") FICHIER_LIVRABLE(campagne) else DIR_LIVRABLE_PARTS(campagne)), forme = liv$forme, campagne = campagne, date = as.character(Sys.Date()), PROFIL = PROFIL,
+                   origine = "adoption", sources = list(longs = ch$source, longs_date = as.character(as.Date(file.info(ch$source)$mtime)), courts = fichier_courts, courts_date = as.character(as.Date(file.info(fichier_courts)$mtime)),
+                                                        courts_date_origine = if(!is.null(mh$date_origine)) as.character(mh$date_origine) else NA),
+                   total = liv$total, n_long = liv$n_long, n_court = liv$n_court,
+                   volumes = list(long = list(lignes = liv$n_long, scenarios = nrow(pl$registre)), court = list(lignes = liv$n_court, scenarios = nrow(pc$registre))),
+                   ratio_courts_realise = if(nrow(pl$registre) > 0) round(nrow(pc$registre) / nrow(pl$registre), 4) else NA,
+                   verification_registre = list(ok = v$ok, livrable = as.list(v$livrable), registre = as.list(v$registre)),
+                   populations = sort(unique(pl$df$population)), REGISTRE_ACTIF = TRUE, version_recette_id = RECETTE_ID, version_recette_id_courts = RECETTE_ID_COURTS,
+                   colonnes = as.list(liv$colonnes), types = as.list(liv$types), familles_colonnes = liv$familles,
+                   note = "campagne ADOPTÉE (longs + courts historiques, aucun re-tirage) ; branche en tête, union de schémas ; les campagnes suivantes tirent leurs propres courts sous 40_campagnes/")
+  yaml::write_yaml(meta_liv, FICHIER_LIVRABLE_META(campagne))
+  copies <- character(0)
+  if(isTRUE(annexes)){
+    d_src <- dirname(ch$source); tag <- sub("^scenarios_longs_tirage_v8_([0-9]{8}).*$", "\\1", basename(ch$source))
+    for(a in list(c("^rapport_v8_" %+% tag %+% "\\.txt$", FICHIER_RAPPORT(campagne)), c("^echantillon_revue(_v8)?_" %+% tag %+% "\\.csv$", FICHIER_REVUE(campagne)), c("^top30_das_par_cmd(_v8)?_" %+% tag %+% "\\.csv$", FICHIER_TOP30(campagne)))){
+      f <- list.files(d_src, pattern = a[1], full.names = TRUE)
+      if(length(f) == 1 && file.copy(f[1], a[2], overwrite = TRUE)){ copies <- c(copies, a[2]); cat("annexe copiée et renommée : ", basename(f[1]), " -> ", basename(a[2]), "\n", sep = "") }
+    }
+  }
+  cat("livrable adopté ", liv$forme, " : ", liv$total, " lignes (longs = ", liv$n_long, ", courts = ", liv$n_court, ") -> ", FICHIER_LIVRABLE(campagne), "\n", sep = "")
+  banniere_fin("etape_adopter_campagne", t0, c(liv$fichiers, FICHIER_LIVRABLE_META(campagne), f_reg, copies))
+}
 
 ## ---- 4. Tableau de bord ----
 # Statut FAIT / PARTIEL / À FAIRE par étape et pour le profil courant, avec preuves (fichiers seulement : aucune
@@ -1739,8 +1917,8 @@ etape_retro_inscrire <- function(dossier_selection, dossier_chunks, campagne, po
 etat_pipeline <- function(){
   plan <- resoudre_besoins(TYPES_ETBS_LONGS, ANS_HISTORIQUE, AN_REF,
                            fichiers_partiels = if(dir.exists(DIR_PARTIELS)) list.files(DIR_PARTIELS, pattern = "^catalogue_partiel_.*\\.parquet$") else character(0),
-                           fichiers_exports = if(dir.exists(DIR_REFERENCES)) list.files(DIR_REFERENCES, pattern = "\\.parquet$") else character(0),
-                           forcer_refs = FALSE, noms_refs = NOMS_REFS, refs_chroniques = REFS_CHRONIQUES)
+                           fichiers_exports = fichiers_refs_presents(),
+                           forcer_refs = FALSE, noms_refs = NOMS_REFS, refs_chroniques = REFS_CHRONIQUES, ans_courts = ANS_COURTS, refs_courts = REFS_COURTS)
   statut3 <- function(n, total) if(total == 0) "À FAIRE" else if(n >= total) "FAIT" else if(n > 0) "PARTIEL" else "À FAIRE"
   lire_yaml <- function(f) if(file.exists(f)) yaml::read_yaml(f) else NULL
   rel <- function(p) sub("^" %+% gsub("([.|()\\^{}+$*?\\[\\]\\\\])", "\\\\\\1", PATH_RESULTS), "", sub("/*$", "", p))
@@ -1773,13 +1951,11 @@ etat_pipeline <- function(){
   ajouter("etape_repartitionner_catalogue", if(ds_ok && !is.null(side)) "FAIT" else "À FAIRE",
           if(ds_ok && !is.null(side)) sprintf("%d parts par lettre ; %s lignes ; typologie %s ; recette %s ; %s", length(side$nb_lignes_par_part), side$nb_lignes_total, side$version_typologie, side$version_recette_id, side$date)
           else if(file.exists(MONO_CATALOGUE())) "monofichier présent, non partitionné" else "absent", "[partagé]")
-  # 5. courts (magasin 30_courts)
-  f_pc <- file.path(ns(DIR_REFERENCES), nom_ref("ref_pivots_courts"))
-  n_courts_att <- if(file.exists(f_pc)){ nc <- nrow(arrow::read_parquet(f_pc)); as.integer(ceiling(nc / taille_chunk(nc))) } else NA
-  n_courts <- if(dir.exists(DIR_CHUNKS_COURTS())) length(list.files(DIR_CHUNKS_COURTS(), pattern = "^courts_chunk_")) else 0L
+  # 5. tirable courts (magasin 30_courts : pivots = catalogue des courts)
   mc <- lire_yaml(FICHIER_COURTS_META())
-  ajouter("etape_tirage_courts", if(file.exists(FICHIER_COURTS())) "FAIT" else if(n_courts > 0) "PARTIEL" else "À FAIRE",
-          sprintf("chunks courts %d / %s ; %s : %s%s", n_courts, format(n_courts_att), rel(FICHIER_COURTS()), if(file.exists(FICHIER_COURTS())) sprintf("présent (%s lignes, %s)", format(mc$n_lignes), mc$date) else "absent", garde("courts", FICHIER_COURTS_META())), "[partagé]")
+  ajouter("tirable_courts", if(file.exists(FICHIER_PIVOTS_COURTS())) "FAIT" else "À FAIRE",
+          if(file.exists(FICHIER_PIVOTS_COURTS())) sprintf("%s : %s pivots (ANS_COURTS = %s, %s)%s", rel(FICHIER_PIVOTS_COURTS()), format(if(!is.null(mc$n_pivots)) mc$n_pivots else nrow(arrow::read_parquet(FICHIER_PIVOTS_COURTS(), as_data_frame = FALSE))), paste(unlist(if(!is.null(mc$ANS_COURTS)) mc$ANS_COURTS else ANS_COURTS), collapse = ","), if(!is.null(mc$date)) mc$date else "méta absent", garde("courts", FICHIER_COURTS_META()))
+          else "ref_pivots_courts.parquet absent de " %+% rel(DIR_COURTS) %+% " (etape_refs())" %+% if(file.exists(FICHIER_COURTS_HISTORIQUE())) " ; corpus courts historique présent (adoption)" else "", "[partagé]")
   # 6. sélection (campagne courante)
   mt <- lire_yaml(FICHIER_SELECTION_META())
   fixe <- !is.null(mt) && identical(mt$MODE_SELECTION, "quota_dp_fixe")
@@ -1803,10 +1979,16 @@ etat_pipeline <- function(){
     ajouter("etape_tirage_das_longs", if(!is.na(n_longs_att)) statut3(n_longs, n_longs_att) else if(n_longs > 0) "PARTIEL" else "À FAIRE", sprintf("chunks longs %d / %s (%s)", n_longs, format(n_longs_att), rel(DIR_CHUNKS_LONGS())), "[profil]")
     ajouter("etape_habillage_longs", if(!is.null(etat_tirage("df_scenarios_longs"))) "FAIT (session)" else "(session)", "résultat en mémoire de session uniquement", "[session]")
   }
+  # 7b. courts de la campagne courante (étape de campagne)
+  sdc <- lire_yaml(file.path(DIR_CHUNKS_COURTS(), "courts_chunks_meta.yaml")); ncc <- if(dir.exists(DIR_CHUNKS_COURTS())) length(list.files(DIR_CHUNKS_COURTS(), pattern = "^courts_chunk_[0-9]{4}\\.parquet$")) else 0L
+  mcc <- lire_yaml(FICHIER_COURTS_CAMPAGNE_META())
+  ajouter("etape_tirage_courts", if(file.exists(FICHIER_COURTS_CAMPAGNE())) "FAIT" else if(ncc > 0) "PARTIEL" else "À FAIRE",
+          sprintf("campagne %s : chunks courts %d / %s (%s) ; scénarios courts : %s", CAMPAGNE, ncc, format(if(is.null(sdc)) NA else sdc$nb_chunks), rel(DIR_CHUNKS_COURTS()),
+                  if(file.exists(FICHIER_COURTS_CAMPAGNE())) sprintf("%s lignes, %s scénarios, budget %s (%s), %s", format(mcc$n_lignes), format(mcc$scenarios_gardes), format(mcc$budget), mcc$source_budget, mcc$date) else "absents (après la sélection : etape_tirage_courts())"), "[profil]")
   # 8. registre et livrable (profil)
   reg <- tryCatch(lire_registre(DIR_REGISTRE()), error = function(e) NULL)
   ajouter("registre_tirages", if(!is.null(reg) && reg$nb_campagnes > 0) "FAIT" else "À FAIRE",
-          if(is.null(reg) || reg$nb_campagnes == 0) "aucune campagne inscrite (" %+% rel(DIR_REGISTRE()) %+% ")" else sprintf("%d campagne(s) : %s ; %d scénarios cumulés ; %d profils", reg$nb_campagnes, paste(sub("^registre_(.*)\\.parquet$", "\\1", basename(reg$fichiers)), collapse = ", "), reg$nb_scenarios, nrow(reg$par_profil)), "[profil]")
+          if(is.null(reg) || reg$nb_campagnes == 0) "aucune campagne inscrite (" %+% rel(DIR_REGISTRE()) %+% ")" else sprintf("%d campagne(s) : %s ; %d scénarios cumulés (%d longs, %d courts) ; %d profils", reg$nb_campagnes, paste(sub("^registre_(.*)\\.parquet$", "\\1", basename(reg$fichiers)), collapse = ", "), reg$nb_scenarios, sum(reg$lignes$branche == "long"), sum(reg$lignes$branche == "court"), nrow(reg$par_profil)), "[profil]")
   livrables <- if(dir.exists(DIR_EXPORT_FINAL)) sub("^scenarios_(.*)_meta\\.yaml$", "\\1", list.files(DIR_EXPORT_FINAL, pattern = "^scenarios_.*_meta\\.yaml$")) else character(0)
   ml <- lire_yaml(FICHIER_LIVRABLE_META())
   ajouter("etape_finalisation", if(!is.null(ml) && (file.exists(FICHIER_LIVRABLE()) || dir.exists(DIR_LIVRABLE_PARTS()))) "FAIT" else "À FAIRE",
@@ -1863,20 +2045,23 @@ etape_reorganiser <- function(dossier = file.path(PATH_RESULTS, "_a_reorganiser"
   cfg_refs <- if(length(f_cm_src)){ cm <- yaml::read_yaml(file.path(dossier, f_cm_src[1])); modifyList(cfg, cm[intersect(CLES_MAGASINS$references, names(cm))]) } else cfg
   if(any(startsWith(rec$destination, "10_references/")) && !file.exists(FICHIER_REFERENCES_META())){
     yaml::write_yaml(meta_magasin("references", cfg_refs, provenance = "reorganisation (clés reprises du méta du catalogue d'origine, sinon config)", refs = as.list(NOMS_REFS)), FICHIER_REFERENCES_META()); copies <- copies + 1L }
+  if(any(rec$destination == "30_courts/ref_pivots_courts.parquet") && !file.exists(FICHIER_COURTS_META())){
+    yaml::write_yaml(meta_magasin("courts", cfg_refs, provenance = "reorganisation (clés = config courante)", n_pivots = nrow(arrow::read_parquet(FICHIER_PIVOTS_COURTS(), as_data_frame = FALSE)), fichier = basename(FICHIER_PIVOTS_COURTS()),
+                                  note = "le TIRABLE courts (pivots = catalogue des courts) ; méta reconstruit à la réorganisation"), FICHIER_COURTS_META()); copies <- copies + 1L }
   src_courts <- rec$source[rec$destination == "30_courts/scenarios_courts.parquet"]
-  if(length(src_courts) && !file.exists(FICHIER_COURTS_META())){
+  if(length(src_courts) && !file.exists(FICHIER_COURTS_HISTORIQUE_META())){
     d_orig <- sub("^.*scenarios_courts_v8_([0-9]{8})\\.parquet$", "\\1", src_courts[1])
-    yaml::write_yaml(meta_magasin("courts", cfg, provenance = src_courts[1], date_origine = d_orig, n_lignes = nrow(arrow::read_parquet(FICHIER_COURTS(), as_data_frame = FALSE)),
-                                  note = "méta reconstruit à la réorganisation (clés = config courante)"), FICHIER_COURTS_META()); copies <- copies + 1L }
+    yaml::write_yaml(list(objet = "corpus courts historique (fixe)", provenance = src_courts[1], date_origine = d_orig, date = as.character(Sys.Date()), n_lignes = nrow(arrow::read_parquet(FICHIER_COURTS_HISTORIQUE(), as_data_frame = FALSE)),
+                          note = "corpus courts de l'ancienne génération, dé-daté ; à adopter en C1 avec les longs (etape_adopter_campagne), jamais re-tiré"), FICHIER_COURTS_HISTORIQUE_META()); copies <- copies + 1L }
   # vérifications
   cat(sprintf("\nexécuté : %d fichiers copiés / convertis, %d déjà présents (identiques)\n", copies, deja))
   n_part <- length(list.files(DIR_PARTIELS, pattern = "^catalogue_partiel_.*\\.parquet$")); cat("  partiels dans ", DIR_PARTIELS, " : ", n_part, "\n", sep = "")
-  refs_pres <- file.exists(file.path(ns(DIR_REFERENCES), nom_ref(NOMS_REFS))); cat("  références : ", sum(refs_pres), " / ", length(NOMS_REFS), if(!all(refs_pres)) " ; manquantes : " %+% paste(NOMS_REFS[!refs_pres], collapse = ", ") else "", "\n", sep = "")
+  refs_pres <- file.exists(vapply(NOMS_REFS, FICHIER_REF, character(1))); cat("  références : ", sum(refs_pres), " / ", length(NOMS_REFS), " (tirable courts dans 30_courts)", if(!all(refs_pres)) " ; manquantes : " %+% paste(NOMS_REFS[!refs_pres], collapse = ", ") else "", "\n", sep = "")
   if(file.exists(FICHIER_CATALOGUE_META())){ side <- yaml::read_yaml(FICHIER_CATALOGUE_META()); parts <- list.files(DIR_CATALOGUE(), pattern = "^part_.*\\.parquet$", full.names = TRUE)
     n_lig <- sum(vapply(parts, function(f) nrow(arrow::read_parquet(f, as_data_frame = FALSE)), integer(1)))
     cat("  catalogue : ", length(parts), " parts, ", n_lig, " lignes (", if(n_lig == side$nb_lignes_total) "== méta" else "DIFFÉRENT du méta " %+% side$nb_lignes_total, ")\n", sep = "")
     if(n_lig != side$nb_lignes_total) stop("etape_reorganiser : lignes du catalogue != méta.", call. = FALSE) }
-  if(file.exists(FICHIER_COURTS())) cat("  courts : ", FICHIER_COURTS(), " (", nrow(arrow::read_parquet(FICHIER_COURTS(), as_data_frame = FALSE)), " lignes)\n", sep = "")
+  if(file.exists(FICHIER_COURTS_HISTORIQUE())) cat("  corpus courts historique : ", FICHIER_COURTS_HISTORIQUE(), " (", nrow(arrow::read_parquet(FICHIER_COURTS_HISTORIQUE(), as_data_frame = FALSE)), " lignes ; à adopter : etape_adopter_campagne)\n", sep = "")
   if(migrer_registre && dir.exists(file.path(PATH_RESULTS, "production", "50_registre", "registre_tirages"))){
     reg <- lire_registre(file.path(PATH_RESULTS, "production", "50_registre", "registre_tirages"))
     cat("  registre migré (production) : ", reg$nb_campagnes, " campagne(s) ; ", reg$nb_scenarios, " scénarios\n", sep = "") }

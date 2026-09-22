@@ -57,6 +57,7 @@ prep_data_<an>   table TEMPORAIRE en base — UNE ligne par séjour,
    │             indicateurs diabète / HTA
    │
    ├── etape_refs() ───────────► 10_references/ref_*.parquet + _meta.yaml   [partagé] (§5b)
+   │                              30_courts/ref_pivots_courts.parquet + _meta.yaml  LE TIRABLE COURTS [partagé]
    │
    │  etape_partiels_longs()     [prep_scenarios2 : pour chaque séjour long,
    ▼                              les 2 DAS les plus sévères = la « graine »]
@@ -73,22 +74,47 @@ prep_data_<an>   table TEMPORAIRE en base — UNE ligne par séjour,
    │  etape_selection_longs()    [quota par DP, k lignes, variantes ;
    ▼                              plafonds de classe ; registre]
 <profil>/40_campagnes/<C>/selection/<population>/  (+ _meta.yaml : le contrat du tirage)
+   │  etape_tirage_courts()      [COURTS DE LA CAMPAGNE : budget = ratio × volume longs,
+   ▼                              variantes nouvelles par pivot, registre]
+<profil>/40_campagnes/<C>/chunks_courts/ + habille/courts/scenarios_courts.parquet
    │  etape_tirage_das_longs()   [ajout des DAS de complétion, par paquets]
    ▼
 <profil>/40_campagnes/<C>/chunks/<population>/longs_chunk_XXXX.parquet  (reprise fichier par fichier)
-   │  etape_habillage_longs()    [modes d'entrée/sortie, depuis le parquet
-   ▼                              ref_v_admin_longs — jamais depuis la base]
+   │  etape_habillage_longs()    [modes d'entrée/sortie et durée, depuis le parquet
+   ▼                              ref_v_admin_longs — 6 clés, repli hiérarchique, jamais de NA]
    │  etape_finalisation()       [contrôles, rapport, échantillon de revue ;
-   ▼                              courts relus depuis 30_courts/ et embarqués]
+   ▼                              courts DE LA campagne relus depuis 40_campagnes/<C>/]
 <profil>/60_export_final/scenarios_<C>.parquet + scenarios_<C>_meta.yaml   UN LIVRABLE PAR CAMPAGNE
-   +  <profil>/50_registre/registre_tirages/registre_<C>.parquet
+   +  <profil>/50_registre/registre_tirages/registre_<C>.parquet   (deux branches : long / court)
 ```
 
-La branche **séjours courts** est parallèle et plus simple : `ref_pivots_courts`
-(seuil appliqué en base) → `etape_tirage_courts()` (nombre de pathologies
-chroniques tiré dans la distribution observée chez les séjours longs — voir
-§5b) → habillage → `30_courts/scenarios_courts.parquet` + `_meta.yaml`, magasin
-partagé embarqué dans chaque livrable.
+La branche **séjours courts** a le **même statut** que les longs dans le corpus
+(décision actée : leur traitement diffère — saturation des DAS sous-codés en
+routine — pas leur rôle). **Les pivots courts sont le catalogue des courts** :
+`30_courts/ref_pivots_courts.parquet` (seuil appliqué en base, cumul des années
+`ANS_COURTS`) est le *tirable*, magasin partagé ; chaque campagne y puise son
+tirage — `etape_tirage_courts()` : budget = `RATIO_COURTS` × volume longs attendu
+(ratio provisoire 1.0) ou `NB_CRH_CIBLE_COURTS`, réparti sur les pivots au poids,
+nombre de pathologies chroniques tiré dans la distribution observée chez les
+séjours longs (§5b), variantes numérotées par pivot après celles déjà au
+registre (recyclage = variantes nouvelles, aucun re-tirage) → typologie →
+habillage → `40_campagnes/<C>/habille/courts/scenarios_courts.parquet`, embarqué
+dans le livrable de la campagne et inscrit au registre (branche `court`).
+
+### Les objets intermédiaires (ce que chaque étape laisse derrière elle)
+
+| Objet | Produit par | Ce que c'est | Consommé par |
+|---|---|---|---|
+| `prep_data_<an>` (table temporaire) | `etape_prep_data` | une ligne par séjour : unité prioritaire, DP, GHM, âge, indicateurs diabète / HTA, modes | refs, partiels, photographies admin |
+| `00_partiels/catalogue_partiel_<etbs>_<an>.parquet` | `etape_partiels_longs` | les **comptes** par profil × graine d'UNE catégorie d'établissements × UNE année, codes bruts | catalogue |
+| `20_catalogue/catalogue_longs_seuil/` | `etape_catalogue` puis `etape_repartitionner_catalogue` | le catalogue des longs : **concaténation** des partiels du périmètre, puis **fusion** (ré-agrégation des comptes des mêmes profils entre années et catégories, conversion E669 avant, seuil de confidentialité après — voir §5a) ; parts par lettre du DP, typologie, `id_profil` | sélection, rétro-inscription |
+| `30_courts/ref_pivots_courts.parquet` | `etape_refs` | le catalogue des courts : les pivots (6 clés) et leur effectif, cumul de `ANS_COURTS`, seuil en base | tirage courts de chaque campagne |
+| `10_references/ref_*.parquet` | `etape_refs` | les dix tables de référence moins le tirable (§5b) ; `ref_v_admin_longs` sans `nbda` | tirage, habillage |
+| `40_campagnes/<C>/selection/` | `etape_selection_longs` | le contrat du tirage : lignes retenues, variantes attendues, origine (vierge / recyclée) | tirage des DAS, registre |
+| `40_campagnes/<C>/chunks/`, `chunks_courts/` | tirages | les scénarios (DAS complets) par paquets, reprise fichier par fichier | habillage, registre |
+| `40_campagnes/<C>/habille/` | `etape_habillage_longs`, `etape_tirage_courts` | les lignes habillées (modes, durée, `repli_admin`) | finalisation |
+| `60_export_final/scenarios_<C>.parquet` | `etape_finalisation`, `etape_adopter_campagne` | LE livrable de la campagne, deux branches, union de schémas | livraison, revue |
+| `50_registre/registre_<C>.parquet` | finalisation, rétro-inscription, adoption | la mémoire : un scénario par ligne, deux branches | sélection et tirage courts des campagnes suivantes |
 
 ### Où vit quoi : la carte des dossiers
 
@@ -102,12 +128,14 @@ détourner son chemin pour ce profil, soupape prévue mais non utilisée).
 - **Partagé** — `00_partiels/` (cache d'extraction), `10_references/` (les dix
   `ref_*`), `20_catalogue/` (le catalogue en parts, avec son méta : périmètre,
   seuil, conversion, versions de typologie et de recette d'identifiant),
-  `30_courts/` (les scénarios courts et leurs paquets), `90_diagnostics/`
-  (apports, recouvrement ; mémoire par profil).
+  `30_courts/` (le TIRABLE courts : les pivots + leur méta ; et le corpus courts
+  historique, adopté en C1), `90_diagnostics/` (apports, recouvrement ; mémoire
+  par profil).
 - **Par profil** (`production/`, `diagnostic/`) — `40_campagnes/<C>/` (sélection,
-  paquets, habillé : transitoires, un dossier par campagne), `50_registre/` (le
-  registre, jamais vidé ; en pratique production seule), `60_export_final/` (un
-  livrable par campagne : `scenarios_<C>.parquet` + méta, rapport, revue, top 30).
+  paquets longs et courts, habillé : transitoires, un dossier par campagne),
+  `50_registre/` (le registre, deux branches, jamais vidé ; en pratique
+  production seule), `60_export_final/` (un livrable par campagne :
+  `scenarios_<C>.parquet` + méta, rapport, revue, top 30).
 
 Règle de nommage : nom stable, date dans le méta. Aucun fichier daté, aucune
 migration entre profils : deux profils travaillent sur le même répertoire et se
@@ -385,11 +413,16 @@ maladies chroniques appartiennent au patient, pas au séjour, et le
 sous-codage des séjours courts ne doit pas être reproduit),
 `ref_comp_diabete` (complications du diabète, .9 pénalisés),
 `distribution_e660` (les classes d'IMC observées, pour répartir les E669
-nus), `pivots_courts`, `v_admin_courts` / `v_admin_longs` (modes d'entrée,
-de sortie, mode de prise en charge), et deux référentiels de mesure pour
-l'aval Python : `referentiel_substitution_imprecis` (la future substitution
-des codes « sans précision » — elle ne se fait PAS ici) et
-`referentiel_paires_chroniques`.
+nus), `pivots_courts` — **le tirable, rangé dans `30_courts/`** —,
+`v_admin_courts` / `v_admin_longs` (modes d'entrée, de sortie, mode de prise en
+charge, durée ; `v_admin_longs` photographié SANS `nbda` depuis le chantier
+« habillage robuste »), et deux référentiels de mesure pour l'aval Python :
+`referentiel_substitution_imprecis` (la future substitution des codes « sans
+précision » — elle ne se fait PAS ici) et `referentiel_paires_chroniques`.
+Le tirable courts et ses refs de saturation (`ref_das_chronique`,
+`ref_nb_chroniques`, `v_admin_courts`) se construisent sur le cumul des années
+`ANS_COURTS` (défaut : l'année de référence) — même périmètre, cohérence du
+magasin.
 
 ### 5c. La sélection de campagne (quota_dp_fixe)
 Priorité de doctrine : **la représentativité des diagnostics passe avant
@@ -411,6 +444,22 @@ Les variantes d'une même ligne doivent porter des jeux de DAS différents. On
 grandeur, pas un engagement — le réalisé peut être en dessous, et le rapport
 le chiffre. Conséquence pratique : une ligne et toutes ses variantes vivent
 dans le MÊME paquet de tirage (le découpage se fait par lignes de sélection).
+
+### 5e. L'habillage admin robuste (un défaut trouvé en revue clinique)
+La revue humaine de l'échantillon a détecté des scénarios longs sans durée ni
+modes d'entrée / sortie — ce que les contrôles automatiques auraient dû voir.
+Cause : la jointure d'habillage était « naturelle », sur 7 clés dont l'âge
+exact et `nbda`, contre une photographie `v_admin` prise sur l'année de
+référence seule ; un profil du catalogue multi-années sans candidat recevait
+NA sur les 4 colonnes apportées, ensemble, en silence. Décisions : `nbda` sort
+des clés (la photographie rétrécit, les variantes se cumulent entre valeurs
+de `nbda`) ; jointure explicite sur 6 clés ; **repli hiérarchique** — strate
+fine → la classe d'âge à la place de l'âge exact → mode d'hospitalisation ×
+classe d'âge × racine de GHM —, tirage au premier niveau non vide, colonne
+`repli_admin` (0 / 1 / 2) tracée jusqu'au corpus ; tous niveaux vides ⇒ arrêt
+nominatif. Le rapport ajoute le contrôle « zéro NA d'habillage » et la
+distribution du repli. La leçon de processus : la revue clinique a validé son
+rôle, et le contrôle qui manquait existe désormais.
 
 ## 6. La robustesse : pourquoi « relancer la même commande » marche toujours
 
@@ -450,6 +499,15 @@ avant/après au journal. Tout le code **neuf** vit dans les helpers, testés.
 - **Changer de répertoire de travail** → `config_locale.R` (`PATH_RESULTS`), copie
   manuelle des trois anciens dossiers dans `_a_reorganiser/`, `etape_reorganiser()`
   (plan puis executer) — procédure complète dans RUN.md.
+- **Les courts d'une campagne** → `etape_tirage_courts()` après la sélection
+  (`RUN_aval.Rmd` §4b) ; budget en bannière (ratio / absolu) ; méta dans
+  `40_campagnes/<C>/habille/courts/_meta.yaml`.
+- **Adopter C1** (longs + courts historiques, sans re-tirage) →
+  `etape_adopter_campagne("C1", source_longs = …)` une fois ; plusieurs corpus
+  datés ⇒ le chemin est obligatoire.
+- **« aucun candidat admin à AUCUN niveau »** → la photographie `v_admin` ne
+  couvre pas ce profil : élargir les années (`ANS`) ou les niveaux de repli ;
+  jamais de NA silencieux.
 - **Qui définit ce paramètre ?** → le chunk `session` affiche la source de chaque
   paramètre de campagne (`défaut config` / `surcharge campagne (campagne.R)` /
   `surcharge palier (palier.R)`) ; pour le reste, `grep -n "NOM_PARAM" config.R`
@@ -487,8 +545,9 @@ catalogue en parts, quota par DP, index de tirage) → 10. finitions
 exploitation → 11. campagnes (identifiants, registre, plafonds de classe,
 recyclage) → 12. packaging GitHub + mode démo → 13. notebook campagnes, config
 locale, démo dans les notebooks → 14. correctifs post-contrôle (lecture robuste,
-parité courts) → 15. livrable unique, nommage, arborescence par étapes. Chaque
-chantier = une section du journal, avec ses questions.
+parité courts) → 15. livrable unique, nommage, arborescence par étapes → 16. trois
+niveaux de paramètres, préfixe `k` → 17. courts en campagnes + habillage robuste.
+Chaque chantier = une section du journal, avec ses questions.
 
 ### I. Livrable unique, nommage, arborescence par étapes
 
@@ -503,3 +562,17 @@ maximal entre profils gardé par `verifier_magasin` ; et `etape_reorganiser`,
 qui range un ancien `results/` copié à la main dans `_a_reorganiser/` — d'abord
 un plan (trois tables : reconnus, ignorés, non reconnus), puis l'exécution
 derrière confirmation, jamais un fichier déplacé en silence.
+
+### K. Courts en campagnes, habillage robuste
+
+Décisions actées : les séjours courts ont le même statut que les longs dans le
+corpus et entrent dans l'économie des campagnes — tirage par campagne à
+variantes nouvelles (`repartir_budget_pivots`, `pivots_sous_registre`,
+`sample_das_court` sous registre), registre commun (colonne `branche`,
+`registre_depuis_courts`, extension append-only par branche), composition
+pilotée par un ratio provisoire ; les pivots courts sont le catalogue des
+courts (`30_courts/`, cumul `ANS_COURTS`) ; adoption de C1 = longs + courts
+historiques sans re-tirage (`preparer_longs_adoptes`, `preparer_courts_adoptes`,
+`verifier_adoption`, `etape_adopter_campagne`) ; et l'habillage robuste
+(`habiller_admin`, `controle_habillage`) né d'un défaut trouvé en revue
+clinique (§5e).

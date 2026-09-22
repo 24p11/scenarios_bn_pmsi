@@ -38,15 +38,17 @@ actionnable (« lancez etape_X d'abord », « fichier Y manquant ») si elle est
 | Étape | Famille | Produit | Relancer quand | Cache |
 |---|---|---|---|---|
 | `etape_prep_data(ans = NULL)` | extraction (base) | tables temporaires `prep_data_<an>` (et `prep_das_chro_<AN_REF>` si une ref chronique manque) ; `00_partiels/_meta.yaml` | à chaque nouvelle session avant refs / partiels (les tables temporaires disparaissent à la déconnexion) ; `ans` force des années | plan = partiels et refs manquants ; garde du magasin `00_partiels` (K, NBDA_MAX, DUREE_LONGS, PIVOTS_LONGS ; `FORCER_PARTIELS`) |
-| `etape_refs(forcer = FORCER_REFS)` | extraction (base) | 10 `ref_*.parquet` + `_meta.yaml` dans `10_references/` **[partagé]** | après changement d'`AN_REF`, des seuils de refs, de `CONVERSION_E669` (`forcer = TRUE`, seul moyen de régénérer un magasin en écart) | ref sautée si son parquet existe ; garde du magasin à chaque chargement |
+| `etape_refs(forcer = FORCER_REFS)` | extraction (base) | 9 `ref_*.parquet` + `_meta.yaml` dans `10_references/` **[partagé]** ; **le TIRABLE courts** `ref_pivots_courts.parquet` + `_meta.yaml` dans `30_courts/` (pivots = catalogue des courts, cumul `ANS_COURTS`) **[partagé]** | après changement d'`AN_REF` / `ANS_COURTS`, des seuils de refs, de `CONVERSION_E669`, ou magasin photographié AVANT le retrait de `nbda` de `ref_v_admin_longs` (le méta l'impose : `forcer = TRUE`, une requête distinct, quelques minutes) ; `FORCER_COURTS` régénère le seul tirable | ref sautée si son parquet existe ; gardes des magasins à chaque chargement |
 | `etape_partiels_longs(iterations = NULL)` | extraction (base) | `00_partiels/catalogue_partiel_<etbs>_<an>.parquet` manquants **[partagé]** ; `90_diagnostics/diagnostic_apports.csv`, `recouvrement.csv` | ajout d'années / de catégories au plan ; `iterations = data.frame(etbs, an)` pour une itération isolée (supprimer son partiel pour le recalculer) | partiel sauté s'il existe ; partiels en codes bruts |
 | `etape_catalogue(ans = ANS_HISTORIQUE, etbs = TYPES_ETBS_LONGS)` | extraction (**sans base**) | `20_catalogue/catalogue_longs_seuil.parquet` + `catalogue_longs_seuil_meta.yaml` (trace du périmètre passé), `rapport_extraction.txt`, `90_diagnostics/diagnostic_memoire_<profil>.csv` | **décision de périmètre** : relancer avec les `ans`/`etbs` retenus. Magasin existant avec les mêmes paramètres ⇒ **sauté** ; en écart ⇒ stop sauf `FORCER_CATALOGUE`. **Le catalogue de production (21,6 M lignes) existe : ne JAMAIS le reconstruire sur ce périmètre** | agrégation deux étages hors RAM depuis les partiels du périmètre ; conversion E669 puis seuil |
 | `etape_repartitionner_catalogue()` | aval (**sans base**) | `20_catalogue/catalogue_longs_seuil/part_<L>.parquet` (par lettre de DP, + `lettre`, `DPEC`, `TPEC`, `id_profil`) + `_meta.yaml` (clés du magasin + typologie + recette d'id) **[partagé]** ; monofichier renommé `.ancien` | une fois par catalogue, et après changement de version de `typologie_sejours.yaml` (le garde-fou l'impose) | idempotente ; lecture par morceaux de lettres |
-| `etape_tirage_courts(chunk_range = NULL)` | tirage | `30_courts/chunks/courts_chunk_*.parquet` (+ sidecar), `30_courts/scenarios_courts.parquet` + `_meta.yaml` **[partagé]** | une fois par jeu de refs (AN_REF uniquement) ; magasin en écart ⇒ `FORCER_COURTS` | chunks présents sautés (reprise bit à bit, mêmes paramètres de découpage exigés) |
+| `etape_tirage_courts(chunk_range = NULL, budget = NB_CRH_CIBLE_COURTS, ratio = RATIO_COURTS)` | tirage (**étape DE CAMPAGNE**, après la sélection) | `40_campagnes/<C>/chunks_courts/courts_chunk_*.parquet` (+ sidecar), `40_campagnes/<C>/habille/courts/scenarios_courts.parquet` + `_meta.yaml` (budget, source ratio / absolu, gardés / demandés) **[profil]** | à chaque campagne : budget = `NB_CRH_CIBLE_COURTS` (absolu) ou `RATIO_COURTS` × volume longs attendu (ratio provisoire 1.0), réparti sur les pivots au poids ; sous registre : variantes numérotées après la `variante_max` du pivot, `hash_das` enregistrés exclus (aucun re-tirage) ; campagne inscrite côté courts sans chunks ⇒ close | chunks présents sautés (reprise bit à bit) ; parallélisme par plages disjointes puis appel final sans plage |
 | `etape_selection_longs(budget = NB_CRH_CIBLE, mode = MODE_SELECTION, k = NB_LIGNES_PAR_DP)` | tirage | `<profil>/40_campagnes/<C>/selection/` : **quota_dp_fixe** (production) `<population>/part_<L>.parquet`, `selection_longs_effectifs.csv`, `selection_longs_stats_dp.csv`, `_meta.yaml` par population + global ; quota_dp (diagnostic) : `selection_longs.parquet` | changement de budget / mode / k : ouvrir une nouvelle campagne ou vider `40_campagnes/<C>/` (garde-fou `selection/_meta.yaml`) | sélection relue si présente, jamais re-tirée ; `catalogue_complet` retiré (stop si budget < catalogue) |
 | `etape_tirage_das_longs(chunk_range = NULL, populations = …)` | tirage | `40_campagnes/<C>/chunks/<population>/longs_chunk_*.parquet` (+ sidecar) ; rien en RAM (fixe) | reprise : relancer telle quelle ; **parallélisme** : une session par plage `chunk_range = c(i, j)` disjointe, même dossier | chunks présents sautés ; écriture atomique (.tmp) ; `ref_das_aigu` indexé une fois ; débit imprimé par chunk |
-| `etape_habillage_longs(populations = …)` | tirage | `40_campagnes/<C>/habille/<population>/lot_*.parquet` (jointure `ref_v_admin_longs.parquet` relu par lots de `LOT_CHUNKS_FINALISATION` chunks, DPEC/TPEC recalculés) | après un jeu de chunks complet (stop sinon) | réécrit les lots |
-| `etape_finalisation(fusionner = NULL, populations = …)` | tirage | **UN livrable** `<profil>/60_export_final/scenarios_<C>.parquet` + `scenarios_<C>_meta.yaml` (longs de toutes les populations ET courts embarqués, colonne `branche` en tête, union de schémas ; parts `scenarios_<C>/` au-delà de `SEUIL_MONOFICHIER`), `rapport_<C>.txt`, `echantillon_revue_<C>.csv`, `top30_das_par_cmd_<C>.csv` ; garde-fou : méta d'une autre campagne ⇒ stop, même campagne ⇒ réécriture idempotente | après habillage ; relancée sans lots habillés, reconstruit depuis les chunks | — |
+| `etape_habillage_longs(populations = …)` | tirage | `40_campagnes/<C>/habille/<population>/lot_*.parquet` (jointure `ref_v_admin_longs.parquet` relu par lots sur les **6 clés** `CLES_ADMIN_LONGS` — nbda retiré —, **repli hiérarchique** âge → cage → mode_hospit × cage × racine, colonne `repli_admin`, stop nominatif si aucun candidat ; DPEC/TPEC recalculés) | après un jeu de chunks complet (stop sinon) | réécrit les lots |
+| `etape_finalisation(fusionner = NULL, populations = …)` | tirage | **UN livrable** `<profil>/60_export_final/scenarios_<C>.parquet` + `scenarios_<C>_meta.yaml` (longs de toutes les populations ET courts **de la campagne**, colonne `branche` en tête, union de schémas ; méta : volumes par branche, ratio courts réalisé ; parts `scenarios_<C>/` au-delà de `SEUIL_MONOFICHIER`), `rapport_<C>.txt` (§8.2 + « zéro NA d'habillage », distribution de `repli_admin`), `echantillon_revue_<C>.csv`, `top30_das_par_cmd_<C>.csv`, registre des deux branches ; garde-fou : méta d'une autre campagne ⇒ stop, même campagne ⇒ réécriture idempotente | après habillage ; relancée sans lots habillés / sans courts habillés, reconstruit depuis les chunks des deux branches | — |
+| `etape_adopter_campagne(campagne = "C1", source_longs = NULL, fichier_courts = 30_courts/scenarios_courts.parquet)` | outil (**sans base**) | `scenarios_<C>.parquet` + méta (`origine = adoption`, sources, dates) reconstruits depuis l'ancien corpus longs daté (`scenarios_longs_tirage_v8_<AAAAMMJJ>/` avec `adulte/`, `pediatrie/`, population reconstituée si absente) et le corpus courts historique ; `registre_<C>.parquet` deux branches ; annexes datées renommées | une fois : adoption de C1 = longs + courts historiques SANS re-tirage | idempotente ; plusieurs corpus datés ⇒ `source_longs` explicite ; livrable présent et différent ⇒ stop ; volumes livrable == registre vérifiés |
+| `etape_retro_inscrire_courts(campagne, fichier_courts)` | outil (**sans base**) | branche `court` de `registre_<C>.parquet` depuis un corpus courts (ids `k…` recalculés, variantes telles que tirées) | rétro-inscription seule (sans livrable) | idempotente ; extension append-only si les longs y sont déjà |
 | `etape_reorganiser(dossier, mode = "plan" / "executer", migrer_registre = FALSE)` | outil (**sans base**) | mode plan : trois tables (reconnus → destination, ignorés, non reconnus), rien déplacé ; executer : copie de `_a_reorganiser/` vers l'arborescence par étapes, métas convertis, vérifications | une fois, au changement de répertoire de travail (procédure ci-dessous) | idempotente ; garde-fou : magasin différent déjà présent ⇒ stop |
 
 `memoire_session()` : objets par taille (Mo) dans globalenv, `ETAPES_ENV` et `CACHE_E669`, triés,
@@ -58,10 +60,11 @@ avec preuves (partiels présents / attendus, refs / 10, catalogue + date + péri
 budget, chunks n / attendus, exports finaux + dates). Fichiers seulement : appelable partout, sans
 connexion (les tables temporaires affichent « inconnu hors connexion »).
 
-Scripts bout-en-bout : `Rscript extraction.R` = prep_data → refs →
-partiels → catalogue ; `Rscript tirage.R` = courts → sélection → DAS longs →
-habillage → finalisation. Comportement identique à l'ancien flux monolithique (identité bit à
-bit prouvée par `tests/test_chaines_sqlite.R`).
+Scripts bout-en-bout : `Rscript extraction.R` = prep_data → refs (dont le tirable courts) →
+partiels → catalogue ; `Rscript tirage.R` = sélection → courts de la campagne → DAS longs →
+habillage → finalisation. Identité avec l'ancien flux monolithique prouvée par `tests/test_chaines_sqlite.R`
+pour l'extraction, le tirable, la sélection et le tirage des DAS longs ; l'habillage (nbda retiré, repli) et les
+courts (par campagne) divergent par décision (chantier « courts en campagnes + habillage robuste »).
 
 Aucune table n'est persistée en base.
 
@@ -78,16 +81,21 @@ d'un bloc unique de `config.R` (accesseurs `DIR_*()` / `FICHIER_*()` dans `etape
 ```
 <PATH_RESULTS>/
   00_partiels/                     cache d'extraction + _meta.yaml (clés bloquantes)           [PARTAGÉ]
-  10_references/                   les 10 ref_*.parquet + _meta.yaml (6 clés ex-Q13)          [PARTAGÉ]
+  10_references/                   9 ref_*.parquet + _meta.yaml (clés ex-Q13 + ANS_COURTS,
+                                   CLES_ADMIN_LONGS)                                            [PARTAGÉ]
   20_catalogue/                    catalogue_longs_seuil/ (parts + _meta.yaml : périmètre, seuil,
                                    conversion, clés amont, typologie, recette id) ; monofichier
                                    transitoire + méta ; rapport_extraction.txt                  [PARTAGÉ]
-  30_courts/                       chunks/ + scenarios_courts.parquet + _meta.yaml             [PARTAGÉ]
+  30_courts/                       le TIRABLE courts : ref_pivots_courts.parquet + _meta.yaml
+                                   (ANS_COURTS, seuils) ; scenarios_courts.parquet = corpus
+                                   courts historique (adoption C1) + scenarios_courts_meta.yaml  [PARTAGÉ]
   90_diagnostics/                  diagnostic_apports.csv, recouvrement.csv [partagés] ;
                                    diagnostic_memoire_<profil>.csv
   <profil>/                        production/ ou diagnostic/
-    40_campagnes/<CAMPAGNE>/       selection/ (+ _meta.yaml), chunks/, habille/ (transitoires)
-    50_registre/registre_tirages/  registre_<C>.parquet (permanent, JAMAIS vidé)
+    40_campagnes/<CAMPAGNE>/       selection/ (+ _meta.yaml), chunks/<population>/, chunks_courts/,
+                                   habille/<population>/, habille/courts/ (transitoires)
+    50_registre/registre_tirages/  registre_<C>.parquet (deux branches, colonne branche ;
+                                   permanent, JAMAIS vidé)
     60_export_final/               scenarios_<C>.parquet + scenarios_<C>_meta.yaml,
                                    rapport_<C>.txt, echantillon_revue_<C>.csv, top30_das_par_cmd_<C>.csv
 ```
@@ -95,7 +103,7 @@ d'un bloc unique de `config.R` (accesseurs `DIR_*()` / `FICHIER_*()` dans `etape
 Règle de nommage : **nom stable, date dans le méta** (aucun nom daté ; la date vit dans les `_meta.yaml`
 ou en première ligne des `.txt`). Convention : `_meta.yaml` colocalisé dans chaque magasin / dossier,
 `<objet>_meta.yaml` à côté d'un fichier. Deux profils sur le même `PATH_RESULTS` : le second réutilise
-partiels, refs, catalogue et courts sans recalcul. Le registre n'existe en pratique que côté production
+partiels, refs, catalogue et tirable courts sans recalcul. Le registre n'existe en pratique que côté production
 (`REGISTRE_ACTIF <- FALSE` en diagnostic). Migration inter-profils : sans objet (retirée).
 
 ## Changement de répertoire de travail (réorganisation SUR PLACE d'un ancien `results/`)
@@ -130,12 +138,16 @@ SCENARIOS_PMSI_PROFIL=diagnostic ; conn <- pRatihque::connection_database() ; et
 Le plan imprimé dit ce qui manque (itérations, refs) et donc quelles années sont préparées.
 Critère : aucune erreur SQL (`ROW_NUMBER()` / `COUNT() OVER` sont le dialecte du run), plan cohérent.
 
-## Étape 2 — séjours courts (une année : AN_REF)
+## Étape 2 — références et TIRABLE courts (`30_courts/`)
 
-`etape_refs()` (si les refs manquent) puis `etape_tirage_courts()`. Produit `30_courts/scenarios_courts.parquet` + `_meta.yaml`
-(magasin partagé : embarqué dans chaque livrable).
-Critères : chunks courts complets (`etat_pipeline()`), export présent. Les contrôles §8.2 des
-courts sont repris dans le rapport de `etape_finalisation()`.
+`etape_refs()` produit les neuf `ref_*` de `10_references/` et le tirable courts `30_courts/ref_pivots_courts.parquet`
++ `_meta.yaml` (**les pivots courts sont le catalogue des courts** ; magasin partagé, clés `ANS_COURTS`, `SEUIL_PIVOT`,
+`DUREE_COURTS`, `PIVOTS_COURTS`, conversion). `ANS_COURTS` (défaut `AN_REF`) étend le tirable ET les refs de saturation
+courts (`ref_das_chronique`, `ref_nb_chroniques`, `ref_v_admin_courts`) sur le **cumul** des années (comptes additionnés,
+seuils rejugés sur le cumul ; `prep_data` des années concernées assuré par la résolution des besoins) ; les ids des pivots
+sont des hash de contenu : stables sous extension (pivots existants inchangés au registre, nouveaux pivots vierges).
+Le **tirage** des courts est une étape **de campagne** (Étape 3, point 4b). Critère : ligne `tirable_courts` FAIT
+(`etat_pipeline()`).
 
 ## Étape 3 — séjours longs
 
@@ -153,8 +165,12 @@ courts sont repris dans le rapport de `etape_finalisation()`.
 4. **Sélection** : `etape_selection_longs(budget = 1000, mode = "quota_dp")` (diagnostic) ou
    `etape_selection_longs()` (production : `catalogue_complet`, 10 000 000 ; palier 100 000 conseillé
    d'abord). Changer de budget/mode impose d'ouvrir une autre campagne ou de vider `40_campagnes/<C>/`.
+4b. **Séjours courts de la campagne** : `etape_tirage_courts()` — même statut que les longs dans le corpus ;
+   budget = `NB_CRH_CIBLE_COURTS` (absolu) ou `RATIO_COURTS` × volume longs attendu (ratio **provisoire 1.0**,
+   à calibrer avec l'équipe apprentissage), réparti sur les pivots au poids ; variantes numérotées par pivot
+   après la `variante_max` du registre (recyclage = variantes nouvelles, aucun re-tirage).
 5. **Tirage DAS par chunks** : `etape_tirage_das_longs()` (reprise : relancer telle quelle).
-6. **Habillage admin** : `etape_habillage_longs()`.
+6. **Habillage admin** : `etape_habillage_longs()` (6 clés, repli hiérarchique, `repli_admin` tracé).
 7. **Livrable** : `etape_finalisation()` → `<profil>/60_export_final/scenarios_<C>.parquet` (longs + courts,
    `branche` en tête) + méta, `rapport_<C>.txt` (critère : « TOTAL anomalies = 0 », dont ^E669 résiduels),
    `echantillon_revue_<C>.csv` (`NB_REVUE` scénarios des deux branches, revue humaine DIM avant production),
@@ -199,10 +215,11 @@ inférieur (doublons éliminés, chiffrés au rapport).
    écriture atomique. Puis `etape_habillage_longs()` et `etape_finalisation()` (flux par lots).
    Restart R entre chaque étape. **Branche courts, même mode d'emploi** (parité) :
    `etape_tirage_courts(chunk_range = c(i, j))` par session sur des plages **disjointes** du même
-   dossier `chunks/` (jamais deux sessions sur la même plage ; sidecar `courts_chunks_meta.yaml`
-   partagé), puis un appel final `etape_tirage_courts()` sans plage qui saute les chunks présents,
-   assemble, habille et exporte. Débit (scénarios/s) imprimé par chunk sur les deux branches ;
-   extrapolation du restant en bannière tous les 10 chunks traités.
+   dossier `40_campagnes/<C>/chunks_courts/` (jamais deux sessions sur la même plage ; sidecar
+   `courts_chunks_meta.yaml` partagé), puis un appel final `etape_tirage_courts()` sans plage qui saute
+   les chunks présents, assemble, type, habille et écrit `habille/courts/scenarios_courts.parquet`. Débit
+   (scénarios/s) imprimé par chunk sur les deux branches ; extrapolation du restant en bannière tous les
+   10 chunks traités.
 
 5. **Cycle de campagne** (registre des tirages, `RUN_aval.Rmd` §3 « ouvrir une campagne ») : (0) `etape_retro_inscrire(dossier_selection,
    dossier_chunks, campagne)` pour une campagne tirée avant le chantier campagnes ; (1) chunk `ouvrir_campagne` :
@@ -214,14 +231,17 @@ inférieur (doublons éliminés, chiffrés au rapport).
    (2) `etape_selection_longs()` sous registre (stop précoce, avant tout calcul, si `CAMPAGNE` est déjà inscrite) : chaque DP reçoit au moins 1 scénario
    (plancher automatique : X ≥ 1 et règle de classe), lignes VIERGES d'abord (id_profil absent du registre),
    sinon RECYCLAGE à variantes nouvelles (numérotation après variante_max, hash_das déjà enregistrés exclus,
-   sans re-tirage), colonne `origine_profil` ; (3) tirage / habillage / finalisation ; (4)
-   `etape_registre_campagne()` (automatique en fin de finalisation) ; (5) rapport de consommation.
+   sans re-tirage), colonne `origine_profil` ; (2b) `etape_tirage_courts()` (courts de la campagne, recyclage
+   des pivots à variantes nouvelles) ; (3) tirage / habillage / finalisation ; (4)
+   `etape_registre_campagne()` (automatique en fin de finalisation : les DEUX branches) ; (5) rapport de
+   consommation. **Adoption de C1** (longs + courts historiques, sans re-tirage) : `etape_adopter_campagne("C1",
+   source_longs = …)` une fois, après la réorganisation ; les campagnes suivantes tirent leurs propres courts.
    Plafonds DPEC = plafond du TOTAL de la classe par population, 1 représentant par DP prime (dépassement consigné).
 
 Passage diagnostic → production : éditer le bloc `production` de `config.R` (ANS_HISTORIQUE,
 TYPES_ETBS_LONGS) d'après apports + recouvrement — aligné sur le périmètre du catalogue —, puis
 `SCENARIOS_PMSI_PROFIL=production` et les mêmes étapes sur le MÊME `PATH_RESULTS` : partiels, refs,
-catalogue et courts sont relus sans recalcul (magasins partagés) ; seuls `40_campagnes/`, `50_registre/`
+catalogue et tirable courts sont relus sans recalcul (magasins partagés) ; seuls `40_campagnes/`, `50_registre/`
 et `60_export_final/` sont propres au profil.
 
 ---
@@ -239,10 +259,13 @@ et `60_export_final/` sont propres au profil.
   `etape_repartitionner_catalogue()`). `diagnostic_memoire_<profil>.csv` est écrit en fin
   d'`etape_refs`, d'`etape_partiels_longs` et d'`etape_catalogue` (idempotent).
 - `10_references/` : ref sautée si son parquet existe ; `etape_refs(forcer = TRUE)` après changement
-  d'`AN_REF`, d'un `SEUIL_REF_*`, de `CONVERSION_E669` / `BARE_E669_DEFAUT` ou correction amont.
+  d'`AN_REF` / `ANS_COURTS`, d'un `SEUIL_REF_*`, de `CONVERSION_E669` / `BARE_E669_DEFAUT` ou correction amont.
+  `ref_v_admin_longs` est photographié SANS `nbda` (clé du magasin `CLES_ADMIN_LONGS`) : un magasin antérieur
+  est en écart, le méta l'impose de lui-même ⇒ `FORCER_REFS` (une requête distinct, quelques minutes).
 - `20_catalogue/` : mêmes paramètres ⇒ `etape_catalogue()` sautée ; en écart (périmètre, seuil, conversion,
   clés amont) ⇒ `FORCER_CATALOGUE` (parts, monofichier et `.ancien` supprimés, repartitionnement à relancer).
-  `30_courts/` : `FORCER_COURTS`.
+  `30_courts/` (le tirable : `ANS_COURTS`, `SEUIL_PIVOT`, `DUREE_COURTS`, `PIVOTS_COURTS`, conversion) : `FORCER_COURTS`
+  régénère les pivots ; le corpus courts historique `scenarios_courts.parquet` n'est jamais re-tiré (adoption).
 - `40_campagnes/<C>/` (sélection + `selection/_meta.yaml`, chunks, habillé) : reprise après plantage telle
   quelle (identité bit à bit par seed par chunk) ; un dossier par campagne ; à vider après changement de
   `MODE_SELECTION`, `NB_CRH_CIBLE`, `NB_LIGNES_PAR_DP`, `QUOTA_MIN_PAR_UNITE`, `SEED`, de la version de
@@ -266,14 +289,19 @@ et `60_export_final/` sont propres au profil.
   dans les notebooks : `lire_si_present(chemin, produit_par)` / `dernier_fichier(dossier, motif)` — fichier absent
   = message « produit par <étape>, pas encore exécutée », jamais d'erreur R brute.
 - Livrable : `<profil>/60_export_final/scenarios_<C>.parquet` + `scenarios_<C>_meta.yaml` (longs de toutes les
-  populations ET courts embarqués, `branche` en tête, union de schémas typée, familles de colonnes au méta ;
+  populations ET courts de la campagne, `branche` en tête, union de schémas typée, familles de colonnes au méta ;
   parts `scenarios_<C>/` au-delà de `SEUIL_MONOFICHIER`, lues par `lire_corpus_final`) ; un livrable par campagne,
   jamais écrasé par une autre (méta d'une autre campagne ⇒ stop) ; même campagne ⇒ réécriture idempotente.
 - Nommage : aucun fichier daté (règle « nom stable, date dans le méta ») ; la résolution de fichiers datés
   inter-sessions est retirée (sans objet).
 - Identifiants des séjours courts : recette `id_courts_v1` figée (sha256 des `PIVOTS_COURTS`, `id_profil` = `k` + 15 hex —
   `k` hors alphabet hexadécimal, aucun identifiant long ne peut commencer par `k` (Q63 résolue, corrigé avant toute circulation),
-  `id_scenario` = `id_profil-variante`, `hash_das`) ; pas d'inscription au registre.
+  `id_scenario` = `id_profil-variante`, `hash_das`) ; **inscrits au registre** comme les longs (colonne `branche`,
+  registres antérieurs relus avec `long` implicite ; append-only, extension acceptée seulement pour une branche absente).
+- Courts par campagne : `40_campagnes/<C>/chunks_courts/` et `habille/courts/` sont transitoires (vidés à l'ouverture de la
+  campagne suivante comme le reste) ; le registre, jamais. Campagne inscrite côté courts sans chunks ⇒ close (stop).
+- Habillage admin des longs : 6 clés (`CLES_ADMIN_LONGS`, nbda retiré), repli hiérarchique, colonne `repli_admin`
+  (0 / 1 / 2) jusqu'au corpus, contrôle « zéro NA » au rapport, stop nominatif sinon — jamais de NA silencieux.
 - **Chunking dynamique** : la taille des chunks est calculée par les données,
   `taille_chunk(n) = max(CHUNK_SIZE_MIN, ceiling(n / NB_CHUNKS_MAX))` — au plus `NB_CHUNKS_MAX` (50)
   chunks par tirage, plancher `CHUNK_SIZE_MIN` (500) ; `CHUNK_SIZE_FIXE` (NA par défaut) impose une

@@ -43,7 +43,10 @@ PATH_TYPOLOGIE      <- paste0(PATH_PROJET, "referentiels/typologie_sejours.yaml"
 PROFIL <- Sys.getenv("SCENARIOS_PMSI_PROFIL", unset = "diagnostic")
 if(!PROFIL %in% c("diagnostic", "production")) stop("PROFIL inconnu : " %+% PROFIL)
 
-AN_REF         <- 26L               # année de référence (tables de référence, pivots courts)
+AN_REF         <- 26L               # année de référence (tables de référence des longs, photographie v_admin)
+ANS_COURTS     <- NULL              # années du TIRABLE courts (pivots + refs de saturation courts + v_admin_courts, CUMUL des comptes) ;
+                                    # NULL = AN_REF (comportement historique) ; ex. surcharge ANS_COURTS <- c(24L, 25L, 26L) — les ids des
+                                    # pivots sont des hash de contenu : stables sous extension (pivots existants inchangés au registre)
 SEED           <- 20260907
 VERSION_SCRIPT <- "v8-industrialisation-1"   # écrit dans 00_partiels/_meta.yaml et les métas
 
@@ -58,9 +61,12 @@ DUREE_MIN_REF   <- 3                # tables de référence DAS : séjours de du
 NBDA_MAX        <- 25               # nbda %in% 1:NBDA_MAX pour les séjours longs
 K_GRAINE_LONGS  <- 2                # nb de DAS réels en graine (§2.1)
 
-NB_TIRAGES_COURTS         <- 3      # nb de variantes de DAS par pivot (séjours courts, ex-boucle nb_min:nb_max)
+NB_TIRAGES_COURTS         <- 3      # héritage v7 (corpus courts FIXE : 3 variantes par pivot, adopté en C1) ; le tirage courts PAR CAMPAGNE
+                                    # est piloté par le budget (NB_CRH_CIBLE_COURTS / RATIO_COURTS), réparti sur les pivots au poids
 NB_VARIANTES_ADMIN_COURTS <- 2      # variantes d'habillage admin par scénario court (ex slice(1:2))
-NB_VARIANTES_ADMIN_LONGS  <- NA     # NA = toutes les variantes (comportement v7.2)
+NB_VARIANTES_ADMIN_LONGS  <- NA     # NA = toutes les variantes (comportement v7.2) — au niveau fin de l'habillage (6 clés, nbda retiré)
+NB_VARIANTES_ADMIN_REPLI  <- 2L     # habillage longs : variantes admin tirées aux niveaux de REPLI (1 : cage au lieu de l'âge exact ;
+                                    # 2 : mode_hospit × cage × racine) quand la strate fine est vide — jamais de NA silencieux
 AGE_MAX_OUVERT            <- 95     # borne haute de la classe ouverte "[80-[" pour le tirage d'âge
 # (NB_TIRAGES_LONGS et MAX_SCENARIOS_LONGS supprimés : remplacés par MODE_SELECTION /
 #  BUDGET_TOTAL_LONGS du bloc PROFIL.)
@@ -114,6 +120,11 @@ PIVOTS_LONGS       <- c("mode_hospit", "sexe", "age", "cage", "racine", "ghm2", 
                         "diag2", "nbda", "type_unite", "prep_sc")                       # v7.2 l.483 + §2.8
 PIVOTS_LONGS_SEUIL <- setdiff(PIVOTS_LONGS, "nbda")                                     # v7.2 l.528-529
 COLS_ADMIN         <- c("mode_entree", "mode_sortie", "mdp")                            # colonnes d'habillage
+# Clés de l'habillage admin des longs (chantier « courts en campagnes + habillage robuste », défaut trouvé en revue clinique) :
+# nbda SORT des clés (ref_v_admin_longs sans nbda : la table rétrécit, les variantes se cumulent entre valeurs de nbda) ;
+# repli hiérarchique (helpers K2) : (0) ces 6 clés -> (1) cage au lieu de l'âge exact -> (2) mode_hospit × cage × racine.
+# Clé du magasin 10_references : un magasin photographié avec nbda est en écart -> FORCER_REFS (le méta l'impose de lui-même).
+CLES_ADMIN_LONGS   <- c("mode_hospit", "sexe", "age", "cage", "ghm2", "diag2")
 
 # Export §7.5 : motif de repérage des libellés « sans précision »
 MOTIF_IMPRECIS <- "sans précision|non précisé"
@@ -150,6 +161,9 @@ NOMS_REFS <- c("ref_das_chronique", "ref_distribution_e660", "ref_das_aigu", "re
                "ref_pivots_courts", "ref_v_admin_courts", "ref_v_admin_longs",
                "ref_substitution_imprecis", "ref_paires_chroniques")
 REFS_CHRONIQUES <- c("ref_das_chronique", "ref_distribution_e660", "ref_nb_chroniques", "ref_paires_chroniques")
+# Refs construites sur ANS_COURTS (le tirable courts et ses refs de saturation : même périmètre, cohérence du magasin) ;
+# les autres restent sur AN_REF. ref_pivots_courts est écrit dans 30_courts/ (le tirable = catalogue des courts).
+REFS_COURTS <- c("ref_pivots_courts", "ref_v_admin_courts", "ref_das_chronique", "ref_distribution_e660", "ref_nb_chroniques")
 
 ## ---- Bloc PROFIL ----
 if(PROFIL == "diagnostic"){
@@ -182,6 +196,9 @@ PLAFONDS_DPEC <- list("Accouchement normal mère" = 100L, "Bébé normal" = 100L
 # dans campagne.R, écrit depuis le notebook (chunk ouvrir_campagne) et activé par SCENARIOS_PMSI_SURCHARGE.
 CAMPAGNE       <- "C1"    # DÉFAUT : identifiant court de la campagne, OBLIGATOIRE, tracé partout (sélection, livrable, registre)
 REGISTRE_ACTIF <- TRUE    # DÉFAUT : FALSE = comportement sans registre (tests / diagnostic / palier)
+# Séjours courts EN CAMPAGNE (même statut que les longs dans le corpus ; tirage par campagne à variantes nouvelles, registre commun).
+RATIO_COURTS        <- 1.0   # DÉFAUT — PROVISOIRE, à calibrer avec l'équipe apprentissage (point ouvert du consortium) : budget courts = RATIO × volume longs de la campagne
+NB_CRH_CIBLE_COURTS <- NULL  # DÉFAUT : NULL = RATIO_COURTS × volume longs (attendu de la sélection) ; un entier impose un budget courts absolu (campagne.R)
 LOT_CHUNKS_FINALISATION <- 10L   # finalisation en flux : nb de chunks relus par lot
 SEUIL_EXPORT_MONOFICHIER <- 2000000L   # au-delà, l'export final reste en parts (pas de monofichier)
 # Chunking DYNAMIQUE (les deux profils) : la taille des chunks est dimensionnée par les données,
@@ -212,6 +229,10 @@ if(nzchar(SURCHARGE_CONFIG)) source(SURCHARGE_CONFIG, local = FALSE)
 if(!MODE_SELECTION %in% c("catalogue_complet", "quota_dp", "quota_dp_fixe")) stop("MODE_SELECTION inconnu : " %+% MODE_SELECTION)
 if(!is.character(CAMPAGNE) || !nzchar(CAMPAGNE) || grepl("[^A-Za-z0-9_-]", CAMPAGNE)) stop("CAMPAGNE : identifiant court obligatoire ([A-Za-z0-9_-]) : " %+% CAMPAGNE)
 if(!exists("BUDGET_TOTAL_LONGS")) BUDGET_TOTAL_LONGS <- NB_CRH_CIBLE   # alias de compatibilité (anciens scripts / surcharges)
+if(is.null(ANS_COURTS)) ANS_COURTS <- AN_REF
+ANS_COURTS <- sort(unique(as.integer(ANS_COURTS)))
+if(!is.numeric(RATIO_COURTS) || length(RATIO_COURTS) != 1 || is.na(RATIO_COURTS) || RATIO_COURTS <= 0) stop("RATIO_COURTS : nombre > 0 attendu", call. = FALSE)
+if(!is.null(NB_CRH_CIBLE_COURTS) && (!is.numeric(NB_CRH_CIBLE_COURTS) || length(NB_CRH_CIBLE_COURTS) != 1 || is.na(NB_CRH_CIBLE_COURTS) || NB_CRH_CIBLE_COURTS < 1)) stop("NB_CRH_CIBLE_COURTS : NULL ou entier >= 1 attendu", call. = FALSE)
 ANSEQTA_REF <- anseqta_de(AN_REF)
 
 ## ---- CHEMINS : bloc UNIQUE de l'arborescence par étapes (après surcharges ; aucune concaténation ailleurs) ----
@@ -223,7 +244,8 @@ chemin_magasin <- function(cle, defaut) if(!is.null(CHEMINS_SURCHARGES[[cle]])) 
 DIR_PARTIELS    <- chemin_magasin("partiels",    "00_partiels/")     # cache d'extraction                         [PARTAGÉ]
 DIR_REFERENCES  <- chemin_magasin("references",  "10_references/")   # les 10 ref_*.parquet + _meta.yaml           [PARTAGÉ]
 DIR_CATALOGUE_M <- chemin_magasin("catalogue",   "20_catalogue/")    # catalogue_longs_seuil/ (parts + _meta.yaml) [PARTAGÉ]
-DIR_COURTS      <- chemin_magasin("courts",      "30_courts/")       # chunks courts + scenarios_courts.parquet    [PARTAGÉ]
+DIR_COURTS      <- chemin_magasin("courts",      "30_courts/")       # le TIRABLE courts : ref_pivots_courts.parquet + _meta.yaml (ANS_COURTS, seuils) ;
+                                                                     # + corpus courts historique (scenarios_courts.parquet, adoption C1)   [PARTAGÉ]
 DIR_DIAGNOSTICS <- chemin_magasin("diagnostics", "90_diagnostics/")  # apports, recouvrement ; mémoire par profil  [PARTAGÉ]
 # PAR PROFIL (production/ ou diagnostic/)
 DIR_PROFIL       <- paste0(PATH_RESULTS, PROFIL, "/")
@@ -234,10 +256,10 @@ MAGASINS_PARTAGES <- c(partiels = DIR_PARTIELS, references = DIR_REFERENCES, cat
 
 # Valeurs effectives écrites dans les meta.yaml (PROFIL et tout ce qui dépend du profil ou
 # d'une surcharge). Fonction pure : lit les variables dans `env`.
-NOMS_CONFIG_META <- c("PROFIL", "VERSION_SCRIPT", "AN_REF", "ANS_HISTORIQUE", "TYPES_ETBS_LONGS", "SEED",
+NOMS_CONFIG_META <- c("PROFIL", "VERSION_SCRIPT", "AN_REF", "ANS_COURTS", "ANS_HISTORIQUE", "TYPES_ETBS_LONGS", "SEED",
                       "SEUIL_PIVOT", "SEUIL_REF_DAS", "SEUIL_REF_IMPRECIS", "SEUIL_REF_PAIRES",
                       "DUREE_COURTS", "DUREE_LONGS", "DUREE_MIN_REF", "NBDA_MAX", "K_GRAINE_LONGS",
-                      "NB_TIRAGES_COURTS", "NB_VARIANTES_ADMIN_COURTS", "NB_VARIANTES_ADMIN_LONGS",
+                      "NB_TIRAGES_COURTS", "NB_VARIANTES_ADMIN_COURTS", "NB_VARIANTES_ADMIN_LONGS", "NB_VARIANTES_ADMIN_REPLI", "PIVOTS_COURTS", "CLES_ADMIN_LONGS", "RATIO_COURTS", "NB_CRH_CIBLE_COURTS",
                       "MODE_SELECTION", "NB_CRH_CIBLE", "NB_LIGNES_PAR_DP", "CAMPAGNE", "REGISTRE_ACTIF", "QUOTA_MIN_PAR_UNITE", "NB_CHUNKS_MAX", "CHUNK_SIZE_MIN", "CHUNK_SIZE_FIXE",
                       "GARDER_CHUNKS", "FORCER_REFS", "PIVOTS_LONGS",
                       "CONVERSION_E669", "BARE_E669_DEFAUT", "COLLECT_PAR_MORCEAUX", "SEUIL_ALERTE_GO")
