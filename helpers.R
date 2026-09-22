@@ -1805,11 +1805,11 @@ imprimer_plan_reorganisation <- function(plan){
 # La décision d'exploitation d'une campagne ne s'édite plus dans config.R : elle s'écrit dans campagne.R (gitignoré),
 # depuis le notebook (chunk ouvrir_campagne), et s'active par SCENARIOS_PMSI_SURCHARGE — même mécanique que palier.R.
 # Les deux surcharges sont EXCLUSIVES ; la surcharge démo (troisième cas légitime) est hors de cette exclusivité.
-PARAMETRES_CAMPAGNE <- c("CAMPAGNE", "NB_CRH_CIBLE", "NB_LIGNES_PAR_DP", "REGISTRE_ACTIF", "PLAFONDS_DPEC", "NB_CRH_CIBLE_COURTS", "RATIO_COURTS", "NB_VARIANTES_ADMIN_LONGS")
+PARAMETRES_CAMPAGNE <- c("CAMPAGNE", "NB_CRH_CIBLE", "NB_LIGNES_PAR_DP", "REGISTRE_ACTIF", "PLAFONDS_DPEC", "NB_CRH_CIBLE_COURTS", "RATIO_COURTS", "NB_VARIANTES_ADMIN_LONGS", "NB_VARIANTES_ADMIN_COURTS")
 MARQUEUR_CAMPAGNE <- "SURCHARGE_CAMPAGNE_ACTIVE <- TRUE"
 MARQUEUR_PALIER   <- "PALIER_ACTIF <- TRUE"
 entier_R <- function(x, nom){ if(length(x) != 1 || is.na(x) || x != round(x) || x < 1) stop(nom %+% " : entier >= 1 attendu", call. = FALSE); sprintf("%dL", as.integer(x)) }
-contenu_surcharge_campagne <- function(campagne, nb_crh_cible, nb_lignes_par_dp = 1L, registre_actif = TRUE, plafonds_dpec = NULL, nb_crh_cible_courts = NULL, ratio_courts = NULL, nb_variantes_admin = NULL){
+contenu_surcharge_campagne <- function(campagne, nb_crh_cible, nb_lignes_par_dp = 1L, registre_actif = TRUE, plafonds_dpec = NULL, nb_crh_cible_courts = NULL, ratio_courts = NULL, nb_variantes_admin = NULL, nb_variantes_admin_courts = NULL){
   if(!is.null(nb_variantes_admin) && length(nb_variantes_admin) != 1) stop("NB_VARIANTES_ADMIN_LONGS : entier >= 1 ou NA attendu", call. = FALSE)
   if(!is.character(campagne) || length(campagne) != 1 || !nzchar(campagne) || grepl("[^A-Za-z0-9_-]", campagne)) stop("CAMPAGNE : identifiant court obligatoire ([A-Za-z0-9_-])", call. = FALSE)
   if(!is.null(ratio_courts) && (!is.numeric(ratio_courts) || length(ratio_courts) != 1 || is.na(ratio_courts) || ratio_courts <= 0)) stop("RATIO_COURTS : nombre > 0 attendu", call. = FALSE)
@@ -1823,7 +1823,8 @@ contenu_surcharge_campagne <- function(campagne, nb_crh_cible, nb_lignes_par_dp 
     if(!is.null(plafonds_dpec)) "PLAFONDS_DPEC <- " %+% paste(deparse(plafonds_dpec), collapse = ""),
     if(!is.null(nb_crh_cible_courts)) "NB_CRH_CIBLE_COURTS <- " %+% entier_R(nb_crh_cible_courts, "NB_CRH_CIBLE_COURTS") %+% "   # budget courts ABSOLU (sinon RATIO_COURTS × volume longs)",
     if(!is.null(ratio_courts)) "RATIO_COURTS <- " %+% format(as.numeric(ratio_courts)) %+% "   # provisoire — à calibrer avec l'équipe apprentissage",
-    if(!is.null(nb_variantes_admin)) "NB_VARIANTES_ADMIN_LONGS <- " %+% (if(is.na(nb_variantes_admin)) "NA   # toutes les combinaisons (v7.2)" else entier_R(nb_variantes_admin, "NB_VARIANTES_ADMIN_LONGS") %+% "   # tenues admin par scénario (N > 1 : id_scenario suffixé -aN)"))
+    if(!is.null(nb_variantes_admin)) "NB_VARIANTES_ADMIN_LONGS <- " %+% (if(is.na(nb_variantes_admin)) "NA   # toutes les combinaisons (v7.2)" else entier_R(nb_variantes_admin, "NB_VARIANTES_ADMIN_LONGS") %+% "   # tenues admin par scénario long (N > 1 : id_scenario suffixé -aN)"),
+    if(!is.null(nb_variantes_admin_courts)) "NB_VARIANTES_ADMIN_COURTS <- " %+% entier_R(nb_variantes_admin_courts, "NB_VARIANTES_ADMIN_COURTS") %+% "   # tenues admin par scénario court (N > 1 : id_scenario suffixé -aN ; 2 = v7.1.2)")
 }
 contenu_surcharge_palier <- function(nb_crh_cible = 100000L){
   c("# palier.R — PALIER DE MESURE (budget réduit, hors registre) ; gitignoré ; écrit par le chunk palier_surcharge de RUN_aval.Rmd.",
@@ -1938,14 +1939,22 @@ habiller_admin <- function(d, v_admin, niveaux = NIVEAUX_REPLI_ADMIN, cols_appor
 # id_scenario sans le suffixe de tenue admin (-aN) : le jeu de DAS, tel qu'inscrit au registre
 id_scenario_base <- function(x) sub("-a[0-9]+$", "", as.character(x))
 # Contrôle « zéro NA d'habillage » (contrôles §8.2) : nb de lignes avec au moins un NA sur les colonnes apportées, lignes dont la
-# durée sort du périmètre de la branche (duree_perimetre, Q72 : plus aucune ligne longue à durée < 3), distribution du repli.
-controle_habillage <- function(df, cols_apport = c(COLS_ADMIN, "duree"), duree_perimetre = NULL){
+# durée sort du périmètre de la branche (duree_perimetre, Q72 : plus aucune ligne longue à durée < 3), distribution du repli,
+# et multiplication admin (N tenues par scénario : lignes attendues = scénarios × N ; lignes EN TROP = anomalie, strates à
+# moins de N combinaisons = information ; NA = toutes les combinaisons, non contrôlé).
+controle_habillage <- function(df, cols_apport = c(COLS_ADMIN, "duree"), duree_perimetre = NULL, N = NA){
   cols <- intersect(cols_apport, names(df))
   na_lignes <- if(length(cols) == 0 || nrow(df) == 0) 0L else sum(rowSums(is.na(df[, cols, drop = FALSE])) > 0)
   hors <- if(is.null(duree_perimetre) || !"duree" %in% names(df) || nrow(df) == 0) 0L else sum(!is.na(df$duree) & !(as.numeric(df$duree) %in% as.numeric(duree_perimetre)))
   repli <- if("repli_admin" %in% names(df) && nrow(df) > 0) as.data.frame(table(niveau = df$repli_admin), responseName = "n") else data.frame(niveau = character(0), n = integer(0))
-  list(na_habillage = as.integer(na_lignes), duree_hors_perimetre = as.integer(hors), colonnes = cols, repli = repli)
+  scen <- if("id_scenario" %in% names(df)) dplyr::n_distinct(id_scenario_base(df$id_scenario)) else NA_integer_
+  att <- if(is.na(N) || is.na(scen)) NA_integer_ else as.integer(scen * N)
+  list(na_habillage = as.integer(na_lignes), duree_hors_perimetre = as.integer(hors), colonnes = cols, repli = repli, N = N, scenarios = scen, lignes = nrow(df), lignes_attendues = att,
+       lignes_hors_multiplication = if(is.na(att)) 0L else as.integer(max(0L, nrow(df) - att)), lignes_manquantes = if(is.na(att)) 0L else as.integer(max(0L, att - nrow(df))))
 }
+# Unicité de id_scenario dans un livrable (toutes branches, campagnes NOUVELLES : les tenues admin sont suffixées -aN) ;
+# les livrables ADOPTÉS (corpus historiques : 2 tenues par scénario court sans suffixe, convention v7.1.2) ne sont pas soumis à ce contrôle.
+controle_unicite_ids <- function(ids){ ids <- ids[!is.na(ids)]; as.integer(sum(duplicated(ids))) }   # NA (modes historiques sans identifiant) ignorés
 
 # --- K3. Adoption de C1 (longs + courts historiques, SANS re-tirage) ---------------------------------------------
 # Candidats : dossiers ou fichiers scenarios_longs_tirage_v8_<AAAAMMJJ> dans un dossier de recherche ; le choix est

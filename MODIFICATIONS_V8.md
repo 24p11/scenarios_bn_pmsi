@@ -1851,3 +1851,24 @@ Une seule fabrique rouverte par branche, une seule régénération de magasin.
 - **Q76** — Les courts conservent 2 tenues admin par scénario (`NB_VARIANTES_ADMIN_COURTS`, héritage) SANS suffixe
   d'`id_scenario` (deux lignes partagent l'identifiant du jeu de DAS, comme avant) ; aligner les courts sur le modèle « un
   scénario = une tenue » serait la suite naturelle de Q74 — non fait ici.
+  **Actée (§24.13)** : courts alignés, défaut 1 tenue, même mécanique.
+
+### 24.13 Micro-lot « Q76 actée — courts alignés sur un scénario = une tenue »
+
+- `NB_VARIANTES_ADMIN_COURTS <- 1L` en défaut (doctrine unifiée entre branches) ; même mécanique que les longs :
+  paramètre de campagne exposé dans `ouvrir_campagne` (`nb_variantes_admin_courts`, `PARAMETRES_CAMPAGNE`), N > 1 = N
+  tenues tirées pondérées sans remise, `id_scenario` suffixé `-a2`..`-aN` (`suffixer_id = TRUE` dans
+  `etape_tirage_courts`) ; `2` accepté et documenté comme comportement v7.1.2 (posé dans le shim des anciens scripts,
+  comme Q74). Le budget courts (`NB_CRH_CIBLE_COURTS` / `RATIO_COURTS`) compte des SCÉNARIOS (= lignes à N = 1) ; méta
+  du tirage courts : `lignes_attendues`.
+- Contrôles §8.2 étendus : `controle_habillage(…, N)` porte désormais lignes / scénarios / attendu / en trop / manquantes
+  pour les deux branches ; `controle_unicite_ids` : identifiant unique par ligne du livrable, toutes branches
+  (`id_scenario_dupliques` au rapport et au méta, anomalie) — campagnes NOUVELLES seulement.
+- Adoption de C1 inchangée : le corpus courts historique (2 tenues, id partagés) est adopté TEL QUEL ; le méta le note
+  (`notes_familles$tracabilite` : « courts historiques : 2 tenues par scénario sans suffixe, convention v7.1.2 »,
+  `id_scenario_dupliques_courts_historiques`) ; l'unicité ne s'applique pas au livrable adopté (garde conditionnelle :
+  le contrôle vit dans `etape_finalisation`, l'adoption ne fait qu'informer).
+- Aucune régénération de magasin (paramètre de tirage, pas de photographie). Tests : unicité toutes branches sur C2 ;
+  courts N = 2 -> suffixes `-a2`, lignes = scénarios × 2 au rapport, retour à N = 1 identique ; adoption C1 inchangée
+  (doublons historiques informés, méta noté) ; helpers : surcharge et suffixe courts.
+  Vérifications : helpers 373 / 370, SQLite 192 / 192, démo et notebooks ± arrow verts (zéro identifiant dupliqué au rapport).

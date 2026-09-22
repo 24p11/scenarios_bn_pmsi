@@ -63,7 +63,8 @@ K_GRAINE_LONGS  <- 2                # nb de DAS réels en graine (§2.1)
 
 NB_TIRAGES_COURTS         <- 3      # héritage v7 (corpus courts FIXE : 3 variantes par pivot, adopté en C1) ; le tirage courts PAR CAMPAGNE
                                     # est piloté par le budget (NB_CRH_CIBLE_COURTS / RATIO_COURTS), réparti sur les pivots au poids
-NB_VARIANTES_ADMIN_COURTS <- 2      # variantes d'habillage admin par scénario court (ex slice(1:2))
+NB_VARIANTES_ADMIN_COURTS <- 1L     # DÉFAUT (Q76 actée, doctrine unifiée avec les longs) : UN scénario court = UNE tenue admin tirée pondérée ;
+                                    # N > 1 = paramètre de campagne (N tenues sans remise, id_scenario suffixé -aN) ; 2 = comportement v7.1.2 (ex slice(1:2))
 NB_VARIANTES_ADMIN_LONGS  <- 1L     # DÉFAUT (Q74 actée) : UN scénario = UNE tenue admin tirée pondérée par les effectifs ; N > 1 = paramètre de
                                     # campagne (campagne.R) : N tenues sans remise, id_scenario suffixé -a2..-aN ; NA = toutes les combinaisons
                                     # (comportement v7.2, accepté). Même nombre aux niveaux de repli (âge exact -> cage -> mode_hospit × cage × racine).
@@ -234,6 +235,7 @@ ANS_COURTS <- sort(unique(as.integer(ANS_COURTS)))
 if(!is.numeric(RATIO_COURTS) || length(RATIO_COURTS) != 1 || is.na(RATIO_COURTS) || RATIO_COURTS <= 0) stop("RATIO_COURTS : nombre > 0 attendu", call. = FALSE)
 if(!is.null(NB_CRH_CIBLE_COURTS) && (!is.numeric(NB_CRH_CIBLE_COURTS) || length(NB_CRH_CIBLE_COURTS) != 1 || is.na(NB_CRH_CIBLE_COURTS) || NB_CRH_CIBLE_COURTS < 1)) stop("NB_CRH_CIBLE_COURTS : NULL ou entier >= 1 attendu", call. = FALSE)
 if(length(NB_VARIANTES_ADMIN_LONGS) != 1 || (!is.na(NB_VARIANTES_ADMIN_LONGS) && (!is.numeric(NB_VARIANTES_ADMIN_LONGS) || NB_VARIANTES_ADMIN_LONGS < 1))) stop("NB_VARIANTES_ADMIN_LONGS : entier >= 1 (tenues admin par scénario) ou NA (toutes, v7.2) attendu", call. = FALSE)
+if(length(NB_VARIANTES_ADMIN_COURTS) != 1 || is.na(NB_VARIANTES_ADMIN_COURTS) || !is.numeric(NB_VARIANTES_ADMIN_COURTS) || NB_VARIANTES_ADMIN_COURTS < 1) stop("NB_VARIANTES_ADMIN_COURTS : entier >= 1 (tenues admin par scénario court) attendu", call. = FALSE)
 ANSEQTA_REF <- anseqta_de(AN_REF)
 
 ## ---- CHEMINS : bloc UNIQUE de l'arborescence par étapes (après surcharges ; aucune concaténation ailleurs) ----

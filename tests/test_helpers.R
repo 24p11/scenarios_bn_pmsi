@@ -1005,7 +1005,13 @@ set.seed(32); h3s <- habiller_admin(d_id, v_adm, NIVEAUX_REPLI_ADMIN, c(COLS_ADM
 ok("N = 3 : jusqu'à 3 tenues par scénario SANS remise (toutes si moins : sexe 2 n'a qu'une combinaison), id_scenario suffixé -a2 / -a3 à partir de la 2e tenue, unicité des id_scenario, base intacte",
    { par <- table(id_scenario_base(h3s$id_scenario)); all(par <= 3) && par[["p1-001"]] == 2 && par[["p2-001"]] == 1 && !anyDuplicated(h3s$id_scenario) && all(grepl("-a[23]$", h3s$id_scenario[duplicated(id_scenario_base(h3s$id_scenario))])) &&
        identical(unique(id_scenario_base(h3s$id_scenario)), d_id$id_scenario) && !anyDuplicated(h3s[, c("id_scenario")]) && !anyDuplicated(h3s[h3s$diag2 == "J449" & h3s$sexe == "1" & h3s$cage == "[60-70[", c("mode_entree", "duree")]) })
-ok("suffixer_id = FALSE (courts) : N = 2 tenues partagent l'id_scenario (héritage, Q76)", { set.seed(33); hh <- habiller_admin(d_id[1, ], v_adm, NIVEAUX_REPLI_ADMIN, c(COLS_ADMIN, "duree"), 2L); nrow(hh) == 2 && all(hh$id_scenario == "p1-001") })
+ok("suffixer_id = FALSE : N = 2 tenues partagent l'id_scenario (mécanique v7.1.2, utilisée seulement pour la lecture des corpus historiques)", { set.seed(33); hh <- habiller_admin(d_id[1, ], v_adm, NIVEAUX_REPLI_ADMIN, c(COLS_ADMIN, "duree"), 2L); nrow(hh) == 2 && all(hh$id_scenario == "p1-001") })
+ok("Q76 : défaut NB_VARIANTES_ADMIN_COURTS = 1L ; courts N = 2 avec suffixer_id -> -a2 sur la 2e tenue, unicité ; contenu_surcharge_campagne écrit NB_VARIANTES_ADMIN_COURTS seulement s'il est posé ; dans PARAMETRES_CAMPAGNE",
+   identical(NB_VARIANTES_ADMIN_COURTS, 1L) && { v_c2 <- dplyr::bind_rows(v_adm[1, ], dplyr::mutate(v_adm[1, ], mode_entree = "URGENCES", n = 30))   # deux combinaisons admin dans la strate courte (duree 4 est une clé)
+     set.seed(34); hc2 <- habiller_admin(tibble::tibble(mode_hospit = "HC", sexe = "1", cage = "[60-70[", ghm2 = "04M053", diag2 = "J449", duree = 4, variante = 1L, id_scenario = "kabc-001"), v_c2, list(PIVOTS_COURTS), COLS_ADMIN, 2L, etiquette = "courts", suffixer_id = TRUE)
+     nrow(hc2) == 2 && identical(hc2$id_scenario, c("kabc-001", "kabc-001-a2")) && !anyDuplicated(hc2$id_scenario) } &&
+     any(grepl("^NB_VARIANTES_ADMIN_COURTS <- 2L", contenu_surcharge_campagne("C4", 10L, nb_variantes_admin_courts = 2))) && !any(grepl("ADMIN_COURTS", contenu_surcharge_campagne("C4", 10L))) && "NB_VARIANTES_ADMIN_COURTS" %in% PARAMETRES_CAMPAGNE &&
+     controle_unicite_ids(c("a", "b", "a")) == 1L && { cc <- controle_habillage(hc2, COLS_ADMIN, DUREE_LONGS, 2L); cc$scenarios == 1 && cc$lignes_attendues == 2 && cc$lignes_hors_multiplication == 0 && cc$lignes_manquantes == 0 })
 ok("id_scenario_base : suffixe -aN retiré, ids sans suffixe intacts", identical(id_scenario_base(c("abc-001-a2", "abc-001", "k1-003-a12")), c("abc-001", "abc-001", "k1-003")))
 ok("contenu_surcharge_campagne : NB_VARIANTES_ADMIN_LONGS écrit (entier L, ou NA = v7.2) seulement s'il est posé ; dans PARAMETRES_CAMPAGNE",
    any(grepl("^NB_VARIANTES_ADMIN_LONGS <- 3L", contenu_surcharge_campagne("C4", 10L, nb_variantes_admin = 3))) && any(grepl("^NB_VARIANTES_ADMIN_LONGS <- NA", contenu_surcharge_campagne("C4", 10L, nb_variantes_admin = NA))) &&
@@ -1046,7 +1052,7 @@ ok("contenu_surcharge_campagne : NB_CRH_CIBLE_COURTS (entier L) et RATIO_COURTS 
      all(c("NB_CRH_CIBLE_COURTS", "RATIO_COURTS") %in% PARAMETRES_CAMPAGNE) && sources_parametres(PARAMETRES_CAMPAGNE, lc2, "/p/campagne.R")[["RATIO_COURTS"]] == "surcharge campagne (campagne.R)")
 ok("notebooks : chunk ouvrir_campagne expose RATIO_COURTS et NB_CRH_CIBLE_COURTS ; chunk tirage_courts en §4b après la sélection ; chunk adoption_c1 (demo=FALSE) ; RUN.Rmd sans tirage des courts",
    { l <- rmd[[2]]; i2 <- grep("^```\\{r ouvrir_campagne", l); j2 <- i2 + which(grepl("^```\\s*$", l[(i2 + 1):length(l)]))[1]
-     any(grepl("^RATIO_COURTS_CAMP\\s*<-", l[i2:j2])) && any(grepl("^NB_CRH_CIBLE_COURTS_CAMP\\s*<-", l[i2:j2])) && any(grepl("^NB_VARIANTES_ADMIN_LONGS_CAMP\\s*<-\\s*1L", l[i2:j2])) && grep("^```\\{r tirage_courts", l) > grep("^```\\{r selection\\}", l) && length(grep("^```\\{r adoption_c1, demo=FALSE", l)) == 1 &&
+     any(grepl("^RATIO_COURTS_CAMP\\s*<-", l[i2:j2])) && any(grepl("^NB_CRH_CIBLE_COURTS_CAMP\\s*<-", l[i2:j2])) && any(grepl("^NB_VARIANTES_ADMIN_LONGS_CAMP\\s*<-\\s*1L", l[i2:j2])) && any(grepl("^NB_VARIANTES_ADMIN_COURTS_CAMP\\s*<-\\s*1L", l[i2:j2])) && grep("^```\\{r tirage_courts", l) > grep("^```\\{r selection\\}", l) && length(grep("^```\\{r adoption_c1, demo=FALSE", l)) == 1 &&
        !any(grepl("^etape_tirage_courts\\(", rmd[[1]])) && any(grepl("^```\\{r tirable_courts", rmd[[1]])) })
 
 cat("\nTOUS LES TESTS SONT VERTS :", n_ok, "assertions\n")

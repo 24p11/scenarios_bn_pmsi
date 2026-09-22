@@ -307,6 +307,10 @@ et `60_export_final/` sont propres au profil.
   suffixé `-a2`..`-aN`, le registre compte toujours les jeux de DAS ; NA = toutes, v7.2) tirées au poids des effectifs `n`
   (aux replis, `n` sommés), colonne `repli_admin` (0 / 1 / 2) jusqu'au corpus, contrôles « zéro NA », « durée dans le
   périmètre de la branche » et « lignes = scénarios × N » au rapport, stop nominatif sinon — jamais de NA silencieux.
+- Courts (Q76) : `NB_VARIANTES_ADMIN_COURTS` tenues admin par scénario court, même mécanique (défaut 1 ; N > 1 : suffixe `-aN` ;
+  2 = convention v7.1.2) ; le budget courts compte des scénarios ; contrôle « lignes = scénarios × N » par branche et
+  « id_scenario unique par ligne, toutes branches » (campagnes nouvelles ; un livrable adopté garde ses courts historiques
+  à 2 tenues sans suffixe, le méta le note).
 - `poids` (famille audit du livrable, les deux branches, numérique, jamais NA) = effectif réel du profil sur le périmètre
   du catalogue (longs) ou du pivot (courts) : la colonne de ré-échantillonnage — corpus à couverture équitable, entraînement
   ∝ `poids` ou `poids^alpha` (curseur réalisme / couverture, décision équipe apprentissage) ; note au méta (`notes_familles`).

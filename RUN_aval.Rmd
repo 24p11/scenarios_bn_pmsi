@@ -199,10 +199,12 @@ REGISTRE_ACTIF_CAMP <- TRUE        # TRUE en production (registre append-only, d
 RATIO_COURTS_CAMP   <- 1.0         # courts = RATIO × volume longs attendu — PROVISOIRE, à calibrer avec l'équipe apprentissage
 NB_CRH_CIBLE_COURTS_CAMP <- NULL   # NULL = ratio ; un entier impose un budget courts absolu
 NB_VARIANTES_ADMIN_LONGS_CAMP <- 1L  # tenues admin par scénario long (1 = un scénario, une tenue ; N > 1 : N tenues pondérées, id_scenario suffixé -aN ; NA = toutes, v7.2)
+NB_VARIANTES_ADMIN_COURTS_CAMP <- 1L # tenues admin par scénario court (même mécanique ; 2 = convention v7.1.2)
 # PLAFONDS_DPEC_CAMP <- list("Accouchement normal mère" = 100L, "Bébé normal" = 100L)   # seulement si ajustés pour cette campagne
 ecrire_surcharge_campagne(CAMPAGNE_A_OUVRIR, NB_CRH_CIBLE_CAMP, NB_LIGNES_PAR_DP_CAMP, REGISTRE_ACTIF_CAMP,
                           plafonds_dpec = if (exists("PLAFONDS_DPEC_CAMP")) PLAFONDS_DPEC_CAMP else NULL,
-                          nb_crh_cible_courts = NB_CRH_CIBLE_COURTS_CAMP, ratio_courts = RATIO_COURTS_CAMP, nb_variantes_admin = NB_VARIANTES_ADMIN_LONGS_CAMP)
+                          nb_crh_cible_courts = NB_CRH_CIBLE_COURTS_CAMP, ratio_courts = RATIO_COURTS_CAMP, nb_variantes_admin = NB_VARIANTES_ADMIN_LONGS_CAMP,
+                          nb_variantes_admin_courts = NB_VARIANTES_ADMIN_COURTS_CAMP)
 # -> « surcharge campagne écrite — Restart R puis chunk session » : la session affichera la source de chaque paramètre.
 ```
 
@@ -288,8 +290,10 @@ Les courts entrent dans l'économie des campagnes : tirés **par campagne** depu
 attendu de la sélection (ratio **provisoire 1.0**, point ouvert du consortium), réparti sur les pivots au
 poids ; variantes numérotées par pivot après la `variante_max` du registre (recyclage = variantes nouvelles,
 `hash_das` enregistrés exclus, aucun re-tirage). Sorties transitoires `40_campagnes/<C>/chunks_courts/` et
-`habille/courts/`. Bannière : campagne, budget courts et sa source (ratio / absolu). Exige la sélection
-(§3b) pour le ratio ; Restart R avant.
+`habille/courts/`. Le budget compte des **scénarios** (= lignes à N = 1) ; `NB_VARIANTES_ADMIN_COURTS` tenues
+admin par scénario (défaut 1, doctrine unifiée avec les longs ; N > 1 : suffixe `-aN`, lignes = scénarios × N au
+rapport). Bannière : campagne, budget courts et sa source (ratio / absolu). Exige la sélection (§3b) pour le
+ratio ; Restart R avant.
 
 ```{r tirage_courts}
 etape_tirage_courts()        # budget = 12345L pour imposer un budget absolu à cet appel ; chunk_range = c(i, j) par session parallèle
