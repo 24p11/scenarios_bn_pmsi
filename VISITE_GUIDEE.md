@@ -457,7 +457,12 @@ de `nbda`) ; jointure explicite sur 6 clés ; **repli hiérarchique** — strate
 fine → la classe d'âge à la place de l'âge exact → mode d'hospitalisation ×
 classe d'âge × racine de GHM —, tirage au premier niveau non vide, colonne
 `repli_admin` (0 / 1 / 2) tracée jusqu'au corpus ; tous niveaux vides ⇒ arrêt
-nominatif. Le rapport ajoute le contrôle « zéro NA d'habillage » et la
+nominatif. Deux arbitrages ont suivi : chaque photographie admin est filtrée
+sur le périmètre de durée de sa branche (un scénario long ne reçoit jamais la
+durée d'un séjour court), et elle compte les séjours par combinaison, le tirage
+des variantes étant pondéré par cet effectif (l'uniforme entre combinaisons
+distinctes sur-représentait les issues rares, comme le décès). Le rapport
+ajoute les contrôles « zéro NA d'habillage » et « durée dans le périmètre » et la
 distribution du repli. La leçon de processus : la revue clinique a validé son
 rôle, et le contrôle qui manquait existe désormais.
 

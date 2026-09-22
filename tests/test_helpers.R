@@ -963,7 +963,7 @@ cat("\n# habillage admin robuste : nbda hors des clés, repli hiérarchique, jam
 ok("clés d'habillage : nbda absent des clés (doctrine config CLES_ADMIN_LONGS), niveau 0 == CLES_ADMIN_LONGS, clé du magasin références",
    !"nbda" %in% CLES_ADMIN_LONGS && identical(NIVEAUX_REPLI_ADMIN[[1]], CLES_ADMIN_LONGS) && "CLES_ADMIN_LONGS" %in% CLES_MAGASINS$references && "ANS_COURTS" %in% CLES_MAGASINS$references && !"nbda" %in% unlist(NIVEAUX_REPLI_ADMIN))
 v_adm <- tibble::tibble(mode_hospit = "HC", mode_entree = c("8", "URGENCES", "8", "8", "URGENCES"), mode_sortie = "8", sexe = c("1", "1", "2", "1", "1"), age = c("ge_18", "ge_18", "ge_18", "ge_18", "ge_18"),
-                        cage = c("[60-70[", "[60-70[", "[60-70[", "[70-80[", "[70-80["), ghm2 = c("04M053", "04M053", "04M053", "04M053", "05M093"), diag2 = c("J449", "J449", "J449", "I500", "I500"), mdp = "6", duree = c(4, 7, 5, 9, 3))
+                        cage = c("[60-70[", "[60-70[", "[60-70[", "[70-80[", "[70-80["), ghm2 = c("04M053", "04M053", "04M053", "04M053", "05M093"), diag2 = c("J449", "J449", "J449", "I500", "I500"), mdp = "6", duree = c(4, 7, 5, 9, 3), n = c(90, 10, 5, 3, 2))
 d_l <- tibble::tibble(mode_hospit = "HC", sexe = c("1", "2", "1", "1"), age = "ge_18", cage = c("[60-70[", "[60-70[", "[70-80[", "[70-80["), racine = c("04M05", "04M05", "04M05", "05M09"), ghm2 = c("04M053", "04M053", "04M053", "05M093"),
                       diag2 = c("J449", "J449", "J449", "K802"), nbda = c(3L, 8L, 2L, 4L), variante = 1L, diagnostic_associes = "I10")
 set.seed(3); h <- habiller_admin(d_l, v_adm, NIVEAUX_REPLI_ADMIN, c(COLS_ADMIN, "duree"), NA, 2L)
@@ -972,7 +972,7 @@ ok("habiller_admin : niveau 0 (6 clés, sans nbda) -> TOUTES les variantes admin
      all(h$repli_admin[h$cage == "[70-80[" & h$diag2 == "J449"] == 2) && all(h$repli_admin[h$diag2 == "K802"] == 2) && all(h$duree[h$diag2 == "K802"] == 3) &&
      !any(is.na(h$mode_entree)) && !any(is.na(h$duree)) && all(c("nbda", "variante", "diagnostic_associes") %in% names(h)) && controle_habillage(h)$na_habillage == 0 &&
      identical(as.character(controle_habillage(h)$repli$niveau), c("0", "2")))
-v_adm2 <- dplyr::bind_rows(v_adm, tibble::tibble(mode_hospit = "HC", mode_entree = "8", mode_sortie = "9", sexe = "1", age = "lt_18", cage = "[70-80[", ghm2 = "04M053", diag2 = "J449", mdp = "6", duree = 12))
+v_adm2 <- dplyr::bind_rows(v_adm, tibble::tibble(mode_hospit = "HC", mode_entree = "8", mode_sortie = "9", sexe = "1", age = "lt_18", cage = "[70-80[", ghm2 = "04M053", diag2 = "J449", mdp = "6", duree = 12, n = 1))
 set.seed(3); h2 <- habiller_admin(d_l[3, ], v_adm2, NIVEAUX_REPLI_ADMIN, c(COLS_ADMIN, "duree"), NA, 2L)
 ok("habiller_admin : premier niveau non vide — âge exact absent mais cage présente -> repli 1 (pas 2), nb_repli variantes au plus", nrow(h2) == 1 && h2$repli_admin == 1 && h2$duree == 12)
 set.seed(4); h3 <- habiller_admin(d_l[1, ], v_adm, NIVEAUX_REPLI_ADMIN, c(COLS_ADMIN, "duree"), 1L, 2L)
@@ -981,7 +981,21 @@ ok("habiller_admin : tous niveaux vides -> stop NOMINATIF (profil cité), jamais
    { e <- tryCatch(habiller_admin(dplyr::mutate(d_l[1, ], mode_hospit = "HP"), v_adm, NIVEAUX_REPLI_ADMIN, c(COLS_ADMIN, "duree")), error = function(e) conditionMessage(e)); grepl("AUCUN niveau de repli", e) && grepl("HP/\\[60-70\\[/04M05/J449", e) && grepl("Jamais de NA silencieux", e) })
 ok("habiller_admin : courts (une strate = les 6 pivots, colonnes admin seules) ; d vide -> schéma avec repli_admin", { hc <- habiller_admin(tibble::tibble(mode_hospit = "HC", sexe = "1", cage = "[60-70[", ghm2 = "04M053", diag2 = "J449", duree = 4L, variante = 1L), v_adm, list(PIVOTS_COURTS), COLS_ADMIN, 2L, 2L, "courts")
    nrow(hc) == 1 && hc$repli_admin == 0 && hc$duree == 4L && "repli_admin" %in% names(habiller_admin(d_l[0, ], v_adm)) })
-ok("controle_habillage : NA comptés par ligne (au moins un NA sur les colonnes apportées)", { x <- h; x$duree[1] <- NA; x$mode_entree[2] <- NA; x$mode_entree[1] <- NA; controle_habillage(x)$na_habillage == 2 })
+ok("controle_habillage : NA comptés par ligne (au moins un NA sur les colonnes apportées) ; durées hors du périmètre de la branche comptées (Q72)",
+   { x <- h; x$duree[1] <- NA; x$mode_entree[2] <- NA; x$mode_entree[1] <- NA; y <- h; y$duree[1:2] <- 1
+     controle_habillage(x)$na_habillage == 2 && controle_habillage(x)$duree_hors_perimetre == 0 && controle_habillage(y, duree_perimetre = DUREE_LONGS)$duree_hors_perimetre == 2 && controle_habillage(y)$duree_hors_perimetre == 0 && controle_habillage(h, duree_perimetre = DUREE_LONGS)$duree_hors_perimetre == 0 })
+cat("\n# micro-lot v_admin : pondération par les effectifs (Q70), photographie sans n refusée\n")
+ok("habiller_admin : photographie sans colonne n -> stop (magasin à régénérer, FORCER_REFS)", grepl("FORCER_REFS", tryCatch(habiller_admin(d_l[1, ], v_adm[, setdiff(names(v_adm), "n")], NIVEAUX_REPLI_ADMIN), error = function(e) conditionMessage(e))))
+set.seed(21); tir_fin <- purrr::map(1:400, ~ habiller_admin(d_l[1, ], v_adm, NIVEAUX_REPLI_ADMIN, c(COLS_ADMIN, "duree"), 1L, 2L)$mode_entree) |> unlist()
+ok("tirage pondéré au niveau fin : effectifs 90 / 10 -> proportions attendues sous seed (entre 82 % et 96 % pour la combinaison majoritaire), déterminisme",
+   { p <- mean(tir_fin == "8"); p > 0.82 && p < 0.96 && { set.seed(21); identical(purrr::map(1:400, ~ habiller_admin(d_l[1, ], v_adm, NIVEAUX_REPLI_ADMIN, c(COLS_ADMIN, "duree"), 1L, 2L)$mode_entree) |> unlist(), tir_fin) } })
+# niveau de repli 2 (mode_hospit × cage × racine) : strates fusionnées -> n sommés ; candidats (mode_entree 8 : durées 9 et 4/5 ; URGENCES : 7 et 3)
+v_rep <- dplyr::bind_rows(v_adm, tibble::tibble(mode_hospit = "HC", mode_entree = "URGENCES", mode_sortie = "8", sexe = "2", age = "ge_18", cage = "[60-70[", ghm2 = "04M053", diag2 = "I500", mdp = "6", duree = 7, n = 10))
+d_rep <- dplyr::mutate(d_l[1, ], diag2 = "K802", sexe = "1")   # aucun candidat aux niveaux 0 et 1 -> niveau 2 : mode_hospit HC × cage [60-70[ × racine 04M05
+set.seed(22); tir_rep <- purrr::map(1:400, ~ habiller_admin(d_rep, v_rep, NIVEAUX_REPLI_ADMIN, c(COLS_ADMIN, "duree"), NA, 1L)) |> purrr::list_rbind()
+ok("tirage pondéré à un niveau de repli : n sommés sur les strates fusionnées (URGENCES/7 : 10 + 10 = 20 vs 8/4 : 90) -> proportions attendues ; repli_admin = 2",
+   all(tir_rep$repli_admin == 2) && { p8 <- mean(tir_rep$mode_entree == "8" & tir_rep$duree == 4); pu <- mean(tir_rep$mode_entree == "URGENCES" & tir_rep$duree == 7); p8 > 0.7 && p8 < 0.93 && pu > 0.08 && pu < 0.28 })
+ok("niveau fin avec nb_variantes = NA : toutes les combinaisons distinctes conservées (comportement v7.2, non pondéré — Q74), colonne n absente de la sortie", nrow(h[h$sexe == "1" & h$cage == "[60-70[", ]) == 2 && !"n" %in% names(h) && !".n_admin" %in% names(h))
 
 cat("\n# adoption de C1 : choix de la source, préparation des longs et des courts adoptés, vérification livrable / registre\n")
 d_ad <- file.path(tempdir(), "adopt"); unlink(d_ad, recursive = TRUE); dir.create(file.path(d_ad, "scenarios_longs_tirage_v8_20260901", "adulte"), recursive = TRUE); dir.create(file.path(d_ad, "scenarios_longs_tirage_v8_20260918"))

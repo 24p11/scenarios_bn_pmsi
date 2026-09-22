@@ -112,9 +112,15 @@ df_pc <- arrow::read_parquet(FICHIER_PIVOTS_COURTS())
 ok("pivots_courts : pivots + nb > seuil ; le TIRABLE vit dans 30_courts (+ _meta.yaml : ANS_COURTS, seuils), pas dans 10_references",
    all(c(PIVOTS_COURTS, "nb") %in% names(df_pc)) && all(df_pc$nb > SEUIL_PIVOT) && nrow(df_pc) > 0 && grepl("/30_courts/ref_pivots_courts\\.parquet$", FICHIER_PIVOTS_COURTS()) &&
      !file.exists(file.path(DIR_REFERENCES, "ref_pivots_courts.parquet")) && file.exists(FICHIER_COURTS_META()) && identical(unlist(yaml::read_yaml(FICHIER_COURTS_META())$ANS_COURTS), 26L) && yaml::read_yaml(FICHIER_COURTS_META())$n_pivots == nrow(df_pc))
-ok("ref_v_admin_longs : photographie SANS nbda (décision revue clinique), colonnes = clés CLES_ADMIN_LONGS + admin + duree ; méta des références porte CLES_ADMIN_LONGS et ANS_COURTS",
+ok("ref_v_admin_longs : photographie SANS nbda (décision revue clinique), colonnes = clés CLES_ADMIN_LONGS + admin + duree + effectif n ; méta des références porte CLES_ADMIN_LONGS, ANS_COURTS, DUREE_LONGS / DUREE_COURTS",
    { va <- arrow::read_parquet(file.path(DIR_REFERENCES, "ref_v_admin_longs.parquet")); mr <- yaml::read_yaml(FICHIER_REFERENCES_META())
-     !"nbda" %in% names(va) && setequal(names(va), c(CLES_ADMIN_LONGS, COLS_ADMIN, "duree")) && !anyDuplicated(va) && identical(unlist(mr$CLES_ADMIN_LONGS), CLES_ADMIN_LONGS) && identical(unlist(mr$ANS_COURTS), 26L) })
+     !"nbda" %in% names(va) && setequal(names(va), c(CLES_ADMIN_LONGS, COLS_ADMIN, "duree", "n")) && !anyDuplicated(va[, setdiff(names(va), "n")]) && all(va$n >= 1) && identical(unlist(mr$CLES_ADMIN_LONGS), CLES_ADMIN_LONGS) && identical(unlist(mr$ANS_COURTS), 26L) &&
+       identical(as.integer(unlist(mr$DUREE_LONGS)), as.integer(DUREE_LONGS)) && identical(as.integer(unlist(mr$DUREE_COURTS)), as.integer(DUREE_COURTS)) })
+ok("Q72 : aucun candidat admin hors du périmètre de durée de sa branche (longs : DUREE_LONGS ; courts : DUREE_COURTS), la base contenant des séjours des deux durées pour un même profil ; effectifs n = séjours (somme == séjours du périmètre)",
+   { va <- arrow::read_parquet(file.path(DIR_REFERENCES, "ref_v_admin_longs.parquet")); vc <- arrow::read_parquet(file.path(DIR_REFERENCES, "ref_v_admin_courts.parquet"))
+     pd <- dplyr::collect(dplyr::tbl(conn, "prep_data_26")); prof <- do.call(paste, pd[, CLES_ADMIN_LONGS])
+     all(va$duree %in% DUREE_LONGS) && all(vc$duree %in% DUREE_COURTS) && sum(va$n) == sum(pd$duree %in% DUREE_LONGS) && sum(vc$n) == sum(pd$duree %in% DUREE_COURTS) &&
+       length(intersect(unique(prof[pd$duree %in% DUREE_COURTS]), unique(prof[pd$duree %in% DUREE_LONGS]))) > 0 })
 ok("ref_comp_diabete : effectifs bruts (pas de pénalisation côté extraction)", { r <- arrow::read_parquet(file.path(DIR_REFERENCES, "ref_comp_diabete.parquet")); all(r$nb == round(r$nb)) && all(c("cage","diabete","comp","nb") %in% names(r)) })
 cat1 <- lire_cat(DIR_CATALOGUE_M)
 ok("catalogue seuil : poids > SEUIL_PIVOT, pas de colonne n, graine <= K sans diabète/I10",
@@ -415,11 +421,13 @@ meme_parquet <- function(a, b) identical(as.data.frame(arrow::read_parquet(a)), 
 # Chantier « courts en campagnes + habillage robuste » : l'identité avec les anciens scripts se limite DÉSORMAIS, par décision,
 # à l'extraction (catalogue, refs hors v_admin_longs), au tirable courts, à la sélection et au tirage des DAS longs (chunks) ;
 # l'habillage (nbda retiré, repli) et les courts (par campagne, budget, registre) divergent des instantanés figés.
-ok("(a) catalogue, 8 refs et le tirable courts identiques aux anciens scripts (anciens noms -> ref_* ; pivots déplacés dans 30_courts) ; ref_v_admin_longs == ancienne photographie SANS nbda (distinct)",
+ok("(a) catalogue, 7 refs et le tirable courts identiques aux anciens scripts (anciens noms -> ref_* ; pivots déplacés dans 30_courts) ; photographies admin == anciennes (distinct) SANS nbda, restreintes aux durées de leur branche, + effectifs n",
    meme_parquet(file.path(EXPORTS_ANC, "catalogue_longs_seuil.parquet"), MONO_CATALOGUE()) &&
-     all(vapply(setdiff(names(ANCIENS_NOMS_REFS), "v_admin_longs"), function(o) meme_parquet(file.path(EXPORTS_ANC, o %+% ".parquet"), FICHIER_REF(ANCIENS_NOMS_REFS[[o]])), logical(1))) &&
-     { va <- as.data.frame(arrow::read_parquet(file.path(EXPORTS_ANC, "v_admin_longs.parquet"))); vn <- as.data.frame(arrow::read_parquet(FICHIER_REF("ref_v_admin_longs"))); va2 <- unique(va[, setdiff(names(va), "nbda"), drop = FALSE])
-       "nbda" %in% names(va) && !"nbda" %in% names(vn) && nrow(vn) < nrow(va) && meme_contenu(va2, vn[, names(va2), drop = FALSE]) })
+     all(vapply(setdiff(names(ANCIENS_NOMS_REFS), c("v_admin_longs", "v_admin_courts")), function(o) meme_parquet(file.path(EXPORTS_ANC, o %+% ".parquet"), FICHIER_REF(ANCIENS_NOMS_REFS[[o]])), logical(1))) &&
+     { va <- as.data.frame(arrow::read_parquet(file.path(EXPORTS_ANC, "v_admin_longs.parquet"))); vn <- as.data.frame(arrow::read_parquet(FICHIER_REF("ref_v_admin_longs"))); va2 <- unique(va[va$duree %in% DUREE_LONGS, setdiff(names(va), "nbda"), drop = FALSE])
+       "nbda" %in% names(va) && !"nbda" %in% names(vn) && any(!va$duree %in% DUREE_LONGS) && nrow(vn) < nrow(va) && "n" %in% names(vn) && meme_contenu(va2, vn[, names(va2), drop = FALSE]) } &&
+     { vc <- as.data.frame(arrow::read_parquet(file.path(EXPORTS_ANC, "v_admin_courts.parquet"))); vcn <- as.data.frame(arrow::read_parquet(FICHIER_REF("ref_v_admin_courts"))); vc2 <- unique(vc[vc$duree %in% DUREE_COURTS, , drop = FALSE])
+       any(!vc$duree %in% DUREE_COURTS) && "n" %in% names(vcn) && meme_contenu(vc2, vcn[, names(vc2), drop = FALSE]) })
 COLS_ID_COURTS <- c("id_profil", "id_scenario", "hash_das")
 f_courts_anc <- file.path(EXPORTS_ANC, "scenarios_courts_v8_" %+% format(Sys.Date(), "%Y%m%d") %+% ".parquet"); f_longs_anc <- file.path(EXPORTS_ANC, "scenarios_longs_tirage_v8_" %+% format(Sys.Date(), "%Y%m%d") %+% ".parquet")
 lire_chunks_longs <- function(d) purrr::map(sort(list.files(d, pattern = "^longs_chunk_[0-9]{4}\\.parquet$", full.names = TRUE)), function(f) as.data.frame(arrow::read_parquet(f))) |> purrr::list_rbind()
@@ -613,8 +621,9 @@ ok("livrable unique : union de schémas — NA typés croisés (graine, racine, 
      all(!is.na(liv1$graine[liv1$branche == "long"])) && all(!is.na(liv1$population[liv1$branche == "long"])) && all(is.na(liv1$nb_cible[liv1$branche == "long"])) && all(!is.na(liv1$nb_cible[liv1$branche == "court"])) &&
      is.character(liv1$age) && all(!is.na(liv1$id_scenario)) && all(grepl("^k[0-9a-f]{15}-[0-9]{3}$", liv1$id_scenario[liv1$branche == "court"])) && all(grepl("^[0-9a-f]{16}-[0-9]{3}$", liv1$id_scenario[liv1$branche == "long"])) &&
      all(!is.na(liv1$poids)))
-ok("habillage robuste : zéro NA (durée, modes) sur les longs ET les courts du livrable ; repli_admin porté (0/1/2) ; rapport §5b (na_habillage = 0, distribution du repli) ; anomalies = 0",
+ok("habillage robuste : zéro NA (durée, modes) sur les longs ET les courts du livrable ; plus aucune ligne longue à durée < 3 ni courte hors 0-2 (Q72) ; repli_admin porté (0/1/2) ; rapport §5b (na_habillage = 0, duree_hors_perimetre = 0, distribution du repli) ; anomalies = 0",
    !any(is.na(liv1$duree)) && !any(is.na(liv1$mode_entree)) && !any(is.na(liv1$mode_sortie)) && !any(is.na(liv1$mdp)) && all(liv1$repli_admin %in% 0:2) &&
+     all(liv1$duree[liv1$branche == "long"] %in% DUREE_LONGS) && all(liv1$duree[liv1$branche == "court"] %in% DUREE_COURTS) && sum(grepl("duree_hors_perimetre \\(hors [0-9]+-[0-9]+\\) = 0", rap_f)) == 3 &&
      any(grepl("== 5b\\. Habillage admin", rap_f)) && all(grepl("na_habillage = 0", grep("na_habillage", rap_f, value = TRUE))) && sum(grepl("na_habillage", rap_f)) == 3 && ml1$habillage_longs$na_habillage == 0 && any(grepl("TOTAL anomalies = 0", rap_f)))
 ok("repli parts au-delà de SEUIL_MONOFICHIER : scenarios_C1/part_*.parquet + méta (forme parts) ; lire_corpus_final identique ; retour au monofichier (idempotence)",
    { assign("SEUIL_MONOFICHIER", 10L, envir = globalenv()); invisible(sortie(etape_finalisation())); mlp <- yaml::read_yaml(FICHIER_LIVRABLE_META()); lp <- lire_corpus_final("C1")

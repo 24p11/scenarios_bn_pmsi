@@ -94,7 +94,10 @@ Chantier « courts en campagnes » (§24.2) : `an` redevient un paramètre (déf
 ### B7 — `df_v_admin_courts` — extraction l.549-553 (`fabrique_v_admin_courts`)
 **Source :** v7.1.2 l.232-234. Écarts : `an` (25 en dur) → `AN_REF` ; nom `df_v_admin` → `df_v_admin_courts`.
 Chantier « courts en campagnes » (§24.2) : `an` paramétré (défaut `AN_REF`, chaîne intacte) ; multi-années =
-chaîne par année puis `distinct` en R (`fabrique_v_admin_courts_cumul`).
+chaîne par année puis addition en R (`fabrique_v_admin_courts_cumul`).
+Micro-lot « v_admin : périmètre de durée + pondération » (§24.11) : `dplyr::filter(duree%in%DUREE_COURTS)` ajouté (Q72 :
+symétrie avec les longs ; aucun débordement n'était possible, `duree` étant une clé de la jointure courts, mais la table
+rétrécit) ; `distinct(...)` → `summarise(n = n(), .by = ...)` (Q70 : compte par combinaison, agrégat seuillable).
 
 ### B8 — `prep_scenarios2(...)` — extraction l.488-547 (écart P1 depuis le chantier mémoire, section 13)
 **Source :** v7.2 l.278-327. Écarts :
@@ -120,6 +123,10 @@ Supprimés : `print("- Noombre ...")` (§5.14), l.537-540 (`sample_n(3000)`, `nb
 revue clinique : NA durée + modes) — la photographie rétrécit, les variantes se cumulent entre valeurs de `nbda` ;
 la jointure d'habillage porte 6 clés (`CLES_ADMIN_LONGS`). Seule modification de contenu d'une chaîne depuis la
 règle d'or ; clé du magasin `10_references` (`CLES_ADMIN_LONGS`) : un magasin antérieur est en écart de lui-même.
+Micro-lot « v_admin : périmètre de durée + pondération » (§24.11) : `dplyr::filter(duree%in%DUREE_LONGS)` ajouté (Q72
+actée : la photographie des longs ne contient plus que les durées du périmètre catalogue 3-100, constante existante ; un
+scénario long ne peut plus recevoir la durée d'un séjour court) ; `distinct(...)` → `summarise(n = n(), .by = ...)`
+(Q70 actée : effectif par combinaison). Clés du magasin `10_references` complétées par `DUREE_LONGS`, `DUREE_COURTS`.
 
 ### B11 — `cma` dans `referentiels.R` l.32
 `dplyr::filter(v2025>1)` → `dplyr::filter(!!dplyr::sym("v20" %+% ANSEQTA_REF)>1)` (§5.8) avec
@@ -1765,9 +1772,44 @@ helpers 363 (avec arrow) / 360 (sans arrow) ; SQLite 189 / 189 ; démo + RUN.Rmd
   scénarios DISTINCTS (le corpus porte `NB_VARIANTES_ADMIN_COURTS` lignes par scénario) ; les deux nombres sont imprimés.
 - **Q70** — « Tirage pondéré » aux niveaux de repli : `v_admin` est une table `distinct` sans effectifs, le tirage est
   uniforme entre candidats distincts ; pondérer par les effectifs exigerait un `count` dans la fabrique (chaîne B10).
+  **Actée (§24.11)** : compte par combinaison, tirage pondéré par `n` à tous les niveaux.
 - **Q71** — Si la revue clinique constate des durées incohérentes avec la charge en comorbidités : réintroduire `nbda`
   EN CLASSES (0-3 / 4-7 / 8+) dans les clés — décision après revue (§5 du brief, a).
 - **Q72** — `ref_v_admin_longs` n'est pas filtré sur `DUREE_LONGS` : un scénario long peut recevoir la durée d'un séjour
   court de même profil (pré-existant, visible depuis le retrait de `nbda`) — à trancher avec Q71.
+  **Actée (§24.11)** : filtre de durée par branche (`DUREE_LONGS` / `DUREE_COURTS`) ; Q71 reste ouverte.
 - **Q73** — Chunk `adoption_c1` marqué `demo=FALSE` (pas de corpus historique en démo) ; `NB_TIRAGES_COURTS` conservé en
   config comme héritage documenté (le supprimer casserait les instantanés figés des anciens scripts).
+
+### 24.11 Micro-lot « v_admin : périmètre de durée + pondération » (Q72, Q70 actées)
+
+Une seule fabrique rouverte par branche, une seule régénération de magasin.
+- **Q72 actée — filtre de durée par branche** : `fabrique_v_admin_longs` filtre `duree %in% DUREE_LONGS` (le périmètre
+  du catalogue, 3-100, constante existante : borne haute incluse, aucun littéral) ; `fabrique_v_admin_courts` filtre
+  `duree %in% DUREE_COURTS` symétriquement — vérifié : aucun débordement n'était possible côté courts (`duree` est une clé
+  de leur jointure), la table rétrécit seulement. Un scénario ne peut plus recevoir la durée de l'autre branche ;
+  l'incohérence DPEC / durée (typologie à `duree = 3` conventionnelle vs durée habillée courte) disparaît par
+  construction. Contrôle §8.2 ajouté : `duree_hors_perimetre` par branche (`controle_habillage(…, duree_perimetre)`),
+  compté dans `TOTAL anomalies` ; assertion « plus aucune ligne longue à durée < 3 » sur le livrable.
+- **Q70 actée — pondération par effectifs** : les deux fabriques passent de `distinct()` à un compte par combinaison
+  (colonne `n`) ; `habiller_admin` tire les variantes admin PONDÉRÉES par `n` (`slice_sample(weight_by)`) au niveau fin
+  comme à chaque niveau de repli (aux replis, `n` sommés sur les strates fusionnées). Motivation : l'uniforme entre
+  combinaisons distinctes sur-représente les issues rares qui diversifient les combinaisons (ex. décès : 2 % des séjours,
+  bien plus des combinaisons distinctes) — la pondération restitue les proportions réelles de la strate. La photographie
+  reste un agrégat seuillable (combinaison × n) : aucune donnée au grain séjour. Photographie sans colonne `n` → stop
+  nominatif (magasin à régénérer).
+  Conversion E669 des photographies : par COMPTES (`convertir_e669_comptes`, `n` répartis aux plus forts restes puis
+  ré-agrégés — la conversion par `distinct` dupliquait les lignes E669 nues sans partager `n`).
+- Conséquences : régénération des deux magasins imposée par le méta (clés `DUREE_LONGS`, `DUREE_COURTS` ajoutées aux
+  références ; `FORCER_REFS`, une requête `count` par branche, quelques minutes — RUN.md) ; `repli_admin`, assertion zéro
+  NA et le reste du chantier inchangés ; Q71 reste ouverte (nbda en classes : après revue clinique).
+- Tests : helpers (+4, 367) — photographie sans `n` refusée, proportions 90 / 10 sous seed au niveau fin (400 tirages) et
+  à un niveau de repli (n sommés), périmètre de durée dans `controle_habillage` ; SQLite (+1, 190) — aucun candidat hors du
+  périmètre de sa branche sur les deux tables régénérées (base contenant des séjours des deux durées pour un même
+  profil), `sum(n)` == séjours du périmètre, identité avec l'ancienne photographie recadrée (filtrée), livrable sans ligne
+  longue < 3 ni courte hors 0-2, rapport `duree_hors_perimetre = 0`.
+  Vérifications : helpers 367 / 364, SQLite 190 / 190, démo et notebooks ± arrow verts.
+- **Q74** — Au niveau fin avec `NB_VARIANTES_ADMIN_LONGS = NA` (défaut v7.2 : toutes les variantes conservées), aucun
+  tirage n'a lieu : chaque combinaison distincte donne une ligne, sans pondération. La pondération ne joue qu'où l'on tire
+  (`NB_VARIANTES_ADMIN_LONGS` non-NA, `NB_VARIANTES_ADMIN_COURTS`, replis). Poser un nombre de variantes au niveau fin
+  serait le prolongement naturel de Q70 — décision d'exploitation, non prise ici.

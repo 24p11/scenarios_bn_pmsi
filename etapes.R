@@ -538,18 +538,24 @@ fabrique_pivots_courts <- function(an = AN_REF){   # chantier courts en campagne
     dplyr::collect()
   df_cases_courts
 }
-fabrique_v_admin_courts <- function(an = AN_REF){   # `an` paramétré (défaut AN_REF, chaîne B7 intacte)
+# Micro-lot « v_admin : périmètre de durée + pondération » (Q72, Q70 actées, journal §24.11) : chaque photographie admin est
+# FILTRÉE sur le périmètre de durée de sa branche (DUREE_COURTS / DUREE_LONGS : un scénario ne peut plus recevoir la durée
+# de l'autre branche) et passe de distinct() à un COMPTE par combinaison (colonne n : agrégat seuillable, aucune donnée au
+# grain séjour) ; l'habillage tire les variantes admin pondérées par n (helpers K2). Écarts B7 / B10 consignés.
+fabrique_v_admin_courts <- function(an = AN_REF){   # `an` paramétré (défaut AN_REF)
   df_v_admin_courts <- pRatihque::atihble(conn, 'prep_data_' %+% an ) |> 
-    dplyr::distinct(mode_hospit,mode_entree,mode_sortie,sexe,cage,ghm2,diag2,mdp,duree) |> 
+    dplyr::filter(duree%in%DUREE_COURTS) |> 
+    dplyr::summarise(n=dplyr::n(),.by=c(mode_hospit,mode_entree,mode_sortie,sexe,cage,ghm2,diag2,mdp,duree)) |> 
     dplyr::collect()
   df_v_admin_courts
 }
-# DÉCISION UTILISATEUR (chantier « habillage robuste », défaut trouvé en revue clinique) : nbda SORT du distinct() de la
+# DÉCISION UTILISATEUR (chantier « habillage robuste », défaut trouvé en revue clinique) : nbda SORT des clés de la
 # photographie admin des longs (écart B10 consigné) — la table rétrécit, les variantes se cumulent entre valeurs de nbda ;
 # la jointure d'habillage porte alors 6 clés (CLES_ADMIN_LONGS) avec repli hiérarchique (helpers K2).
 fabrique_v_admin_longs <- function(){
   df_v_admin_longs <- pRatihque::atihble(conn, 'prep_data_' %+% AN_REF ) |> 
-    dplyr::distinct(mode_hospit,mode_entree,mode_sortie,sexe,age,cage,ghm2,diag2,mdp,duree) |> 
+    dplyr::filter(duree%in%DUREE_LONGS) |> 
+    dplyr::summarise(n=dplyr::n(),.by=c(mode_hospit,mode_entree,mode_sortie,sexe,age,cage,ghm2,diag2,mdp,duree)) |> 
     dplyr::collect()
   df_v_admin_longs
 }
@@ -563,7 +569,7 @@ fabrique_pivots_courts_cumul <- function(ans){
   parts <- lapply(ans, function(an) pRatihque::atihble(conn, 'prep_data_' %+% an) |> dplyr::filter(duree%in%DUREE_COURTS) |> dplyr::summarise(nb=dplyr::n(),.by=dplyr::all_of(PIVOTS_COURTS)))
   Reduce(dplyr::union_all, parts) |> dplyr::summarise(nb = sum(nb, na.rm = TRUE), .by = dplyr::all_of(PIVOTS_COURTS)) |> dplyr::filter(nb>SEUIL_PIVOT) |> dplyr::collect()
 }
-fabrique_v_admin_courts_cumul <- function(ans) purrr::map(ans, fabrique_v_admin_courts) |> purrr::list_rbind() |> dplyr::distinct()
+fabrique_v_admin_courts_cumul <- function(ans) purrr::map(ans, fabrique_v_admin_courts) |> purrr::list_rbind() |> reagreger(c("mode_hospit", "mode_entree", "mode_sortie", "sexe", "cage", "ghm2", "diag2", "mdp", "duree"), "n")
 ref_das_chronique_cumul <- function(ans) purrr::map(ans, ref_das_chronique) |> purrr::list_rbind() |> reagreger(c("diag2", "das", "sexe", "cage", "niveau", "type_liste", "caract"), "nb_das")
 ref_nb_chroniques_cumul <- function(ans) purrr::map(ans, ref_nb_chroniques) |> purrr::list_rbind() |> reagreger(c("cage", "sexe", "nb_chro"), "nb")
 FABRIQUES_REFS <- list(
@@ -600,15 +606,16 @@ FABRIQUES_REFS <- list(
     if(!CONVERSION_E669) return(df)
     convertir_e669_comptes(df, "diag2", setdiff(PIVOTS_COURTS, "diag2"), "nb", charger_dist_e660(), BARE_E669_DEFAUT)
   },
+  # photographies admin avec effectifs (micro-lot §24.11) : conversion E669 par COMPTES (n répartis aux plus forts restes, ré-agrégés), plus par distinct
   ref_v_admin_courts = function(){
     df <- if(un_seul_an_ref(ANS_COURTS)) fabrique_v_admin_courts() else fabrique_v_admin_courts_cumul(ANS_COURTS)
     if(!CONVERSION_E669) return(df)
-    convertir_e669_distinct(df, "diag2", charger_dist_e660(), BARE_E669_DEFAUT)
+    convertir_e669_comptes(df, "diag2", setdiff(names(df), c("diag2", "n")), "n", charger_dist_e660(), BARE_E669_DEFAUT)
   },
   ref_v_admin_longs = function(){
     df <- fabrique_v_admin_longs()
     if(!CONVERSION_E669) return(df)
-    convertir_e669_distinct(df, "diag2", charger_dist_e660(), BARE_E669_DEFAUT)
+    convertir_e669_comptes(df, "diag2", setdiff(names(df), c("diag2", "n")), "n", charger_dist_e660(), BARE_E669_DEFAUT)
   },
   ref_substitution_imprecis = function(){
     codes_imprecis <- codes_imprecis_extraction()
@@ -1478,7 +1485,7 @@ etape_tirage_das_longs <- function(chunk_range = NULL, populations = names(POPUL
 # × racine), colonne repli_admin tracée, stop nominatif si aucun candidat — jamais de NA silencieux. Résultat en
 # mémoire de session (modes historiques) ; relit les chunks si l'étape T3 n'a pas tourné dans cette session.
 etape_habillage_longs <- function(populations = names(POPULATIONS)){
-  t0 <- banniere_debut("etape_habillage_longs", "NB_VARIANTES_ADMIN_LONGS = " %+% NB_VARIANTES_ADMIN_LONGS %+% " ; clés = " %+% paste(CLES_ADMIN_LONGS, collapse = ",") %+% " ; repli (cage, puis mode_hospit × cage × racine) : " %+% NB_VARIANTES_ADMIN_REPLI %+% " variantes")
+  t0 <- banniere_debut("etape_habillage_longs", "NB_VARIANTES_ADMIN_LONGS = " %+% NB_VARIANTES_ADMIN_LONGS %+% " ; clés = " %+% paste(CLES_ADMIN_LONGS, collapse = ",") %+% " ; repli (cage, puis mode_hospit × cage × racine) : " %+% NB_VARIANTES_ADMIN_REPLI %+% " variantes, tirage pondéré par les effectifs (n) ; durées du périmètre " %+% min(DUREE_LONGS) %+% "-" %+% max(DUREE_LONGS))
   charger_contexte_tirage("ref_v_admin_longs", "etape_habillage_longs")
   if(is.null(etat_tirage("mode_tirage")) && file.exists(FICHIER_SELECTION_META())) relire_selection_longs("etape_habillage_longs")
   if(identical(etat_tirage("mode_tirage"), "quota_dp_fixe")){
@@ -1574,7 +1581,7 @@ etape_finalisation <- function(fusionner = NULL, populations = names(POPULATIONS
   rapport$courts_tirage_n <- if(!is.null(cs$meta$scenarios_gardes)) cs$meta$scenarios_gardes else NA
   rapport$courts_meta <- cs$meta
   rapport$courts <- stats_branche(df_c, PIVOTS_COURTS, ctx$codes_imprecis, c("diag2", "diagnostic_associes"))
-  rapport$courts$habillage <- controle_habillage(df_c, COLS_ADMIN); rapport$courts$scenarios <- dplyr::n_distinct(df_c$id_scenario)
+  rapport$courts$habillage <- controle_habillage(df_c, COLS_ADMIN, DUREE_COURTS); rapport$courts$scenarios <- dplyr::n_distinct(df_c$id_scenario)
   cat("- Séjours courts de la campagne ", CAMPAGNE, " relus depuis ", FICHIER_COURTS_CAMPAGNE(), " : ", nrow(df_c), " lignes, ", rapport$courts$scenarios, " scénarios\n", sep = "")
   # Longs : lots habillés par population (quota_dp_fixe) ou résultat de session (modes historiques)
   lots <- list(); resultats <- list()
@@ -1586,12 +1593,12 @@ etape_finalisation <- function(fusionner = NULL, populations = names(POPULATIONS
           cat("population ", pop, " : lots habillés absents, chunks présents : reconstruction via etape_habillage_longs() (aucun re-tirage)\n", sep = ""); etape_habillage_longs(pop)
         } else { cat("population ", pop, " : aucun chunk ni lot habillé, sautée (lancez etape_tirage_das_longs())\n", sep = ""); next }
       }
-      acc <- acc_stats_init(); doublons <- NULL; n_lot <- 0L; hab_na <- 0L; hab_repli <- NULL; n_scen <- 0L
+      acc <- acc_stats_init(); doublons <- NULL; n_lot <- 0L; hab_na <- 0L; hab_dur <- 0L; hab_repli <- NULL; n_scen <- 0L
       for(f in sort(list.files(dir_h, pattern = "^lot_[0-9]{4}\\.parquet$", full.names = TRUE))){
         n_lot <- n_lot + 1L
         d <- tibble::as_tibble(arrow::read_parquet(f))
         acc <- acc_stats_ajouter(acc, d, PIVOTS_LONGS, ctx$codes_imprecis, hta_autres, SEUIL_PIVOT, c("diag2", "graine", "diagnostic_associes"))
-        ch <- controle_habillage(d); hab_na <- hab_na + ch$na_habillage; hab_repli <- dplyr::bind_rows(hab_repli, ch$repli); if("id_scenario" %in% names(d)) n_scen <- n_scen + dplyr::n_distinct(d$id_scenario)
+        ch <- controle_habillage(d, c(COLS_ADMIN, "duree"), DUREE_LONGS); hab_na <- hab_na + ch$na_habillage; hab_dur <- hab_dur + ch$duree_hors_perimetre; hab_repli <- dplyr::bind_rows(hab_repli, ch$repli); if("id_scenario" %in% names(d)) n_scen <- n_scen + dplyr::n_distinct(d$id_scenario)
         if("nb_variantes_demandees" %in% names(d)){
           dd <- d |> dplyr::distinct(dplyr::across(dplyr::all_of(c(PIVOTS_LONGS, "graine", "variante", "nb_variantes_demandees")))) |>
             dplyr::summarise(demandees = dplyr::first(nb_variantes_demandees), gardees = dplyr::n(), .by = dplyr::all_of(c(PIVOTS_LONGS, "graine"))) |>
@@ -1605,7 +1612,7 @@ etape_finalisation <- function(fusionner = NULL, populations = names(POPULATIONS
       st <- acc_stats_final(acc)
       scen_gardes <- if(is.null(doublons)) NA_integer_ else sum(doublons$gardees); scen_demandes <- if(is.null(doublons)) NA_integer_ else sum(doublons$demandees)
       resultats[[pop]] <- list(stats = st, doublons = doublons, scenarios_gardes = scen_gardes, scenarios_demandes = scen_demandes, lignes_finales = st$n, scenarios = n_scen,
-                               habillage = list(na_habillage = hab_na, repli = if(is.null(hab_repli)) data.frame(niveau = character(0), n = integer(0)) else hab_repli |> dplyr::summarise(n = sum(n), .by = niveau)))
+                               habillage = list(na_habillage = hab_na, duree_hors_perimetre = hab_dur, repli = if(is.null(hab_repli)) data.frame(niveau = character(0), n = integer(0)) else hab_repli |> dplyr::summarise(n = sum(n), .by = niveau)))
       cat(sprintf("== %s : %s scénarios gardés / %s demandés (cible population %s) ; %d lignes finales (habillage)\n", pop, format(scen_gardes), format(scen_demandes),
                   format(meta_tirage$par_population[[pop]]$budget_population), st$n))
     }
@@ -1615,7 +1622,7 @@ etape_finalisation <- function(fusionner = NULL, populations = names(POPULATIONS
     if(is.null(rapport$longs_tirage_n)) rapport$longs_tirage_n <- NA
     d <- tibble::as_tibble(etat_tirage("df_scenarios_longs")); d$branche <- "long"; if(!"campagne" %in% names(d)) d$campagne <- CAMPAGNE
     rapport$longs <- stats_branche(d, PIVOTS_LONGS, ctx$codes_imprecis, c("diag2", "graine", "diagnostic_associes"))
-    rapport$longs$habillage <- controle_habillage(d); rapport$longs$scenarios <- if("id_scenario" %in% names(d)) dplyr::n_distinct(d$id_scenario) else NA_integer_
+    rapport$longs$habillage <- controle_habillage(d, c(COLS_ADMIN, "duree"), DUREE_LONGS); rapport$longs$scenarios <- if("id_scenario" %in% names(d)) dplyr::n_distinct(d$id_scenario) else NA_integer_
     lots[[1L]] <- d; rm(d); rm("df_scenarios_longs", envir = ETAPES_ENV); gc()
   }
   ## Livrable unique
@@ -1720,10 +1727,10 @@ rapport_finalisation <- function(fixe, rapport, resultats, meta_tirage, ctx, liv
     for(pop in names(resultats)) lignes <- c(lignes, "   longs " %+% pop %+% " :", fmt_df(resultats[[pop]]$stats$e660))
     lignes <- c(lignes, "", "== 5b. Habillage admin : zéro NA attendu (durée, modes) ; distribution du repli (0 = strate fine 6 clés, 1 = cage, 2 = mode_hospit × cage × racine) ==")
     for(pop in names(resultats)){ hb <- resultats[[pop]]$habillage
-      lignes <- c(lignes, sprintf("longs %-8s na_habillage = %d%s ; repli_admin : %s", pop, hb$na_habillage, if(hb$na_habillage > 0) "  <- ANOMALIE" else "", if(nrow(hb$repli)) paste(hb$repli$niveau, hb$repli$n, sep = " = ", collapse = " ; ") else "(aucune ligne)"))
-      anomalies <- anomalies + hb$na_habillage }
-    lignes <- c(lignes, sprintf("sejours_courts   na_habillage = %d%s", rapport$courts$habillage$na_habillage, if(rapport$courts$habillage$na_habillage > 0) "  <- ANOMALIE" else ""))
-    anomalies <- anomalies + rapport$courts$habillage$na_habillage
+      lignes <- c(lignes, sprintf("longs %-8s na_habillage = %d%s ; duree_hors_perimetre (hors %d-%d) = %d%s ; repli_admin : %s", pop, hb$na_habillage, if(hb$na_habillage > 0) "  <- ANOMALIE" else "", min(DUREE_LONGS), max(DUREE_LONGS), hb$duree_hors_perimetre, if(hb$duree_hors_perimetre > 0) "  <- ANOMALIE" else "", if(nrow(hb$repli)) paste(hb$repli$niveau, hb$repli$n, sep = " = ", collapse = " ; ") else "(aucune ligne)"))
+      anomalies <- anomalies + hb$na_habillage + hb$duree_hors_perimetre }
+    lignes <- c(lignes, sprintf("sejours_courts   na_habillage = %d%s ; duree_hors_perimetre (hors %d-%d) = %d%s", rapport$courts$habillage$na_habillage, if(rapport$courts$habillage$na_habillage > 0) "  <- ANOMALIE" else "", min(DUREE_COURTS), max(DUREE_COURTS), rapport$courts$habillage$duree_hors_perimetre, if(rapport$courts$habillage$duree_hors_perimetre > 0) "  <- ANOMALIE" else ""))
+    anomalies <- anomalies + rapport$courts$habillage$na_habillage + rapport$courts$habillage$duree_hors_perimetre
   } else {
     lignes <- c(lignes, "== 1. Volumétrie ==",
                 sprintf("sejours_courts : tirage = %s ; final = %d ; pivots distincts = %d", format(rapport$courts_tirage_n), rapport$courts$n, rapport$courts$pivots),
@@ -1761,9 +1768,9 @@ rapport_finalisation <- function(fixe, rapport, resultats, meta_tirage, ctx, liv
     lignes <- c(lignes, "-- effectifs E660x par classe (diag2 + DAS) :", "   courts :", fmt_df(rapport$courts$e660), "   longs :", fmt_df(rapport$longs$e660))
     hb <- rapport$longs$habillage
     lignes <- c(lignes, "== 5b. Habillage admin : zéro NA attendu (durée, modes) ; distribution du repli (0 = strate fine 6 clés, 1 = cage, 2 = mode_hospit × cage × racine) ==",
-                sprintf("sejours_longs   na_habillage = %d%s ; repli_admin : %s", hb$na_habillage, if(hb$na_habillage > 0) "  <- ANOMALIE" else "", if(nrow(hb$repli)) paste(hb$repli$niveau, hb$repli$n, sep = " = ", collapse = " ; ") else "(aucune ligne)"),
-                sprintf("sejours_courts  na_habillage = %d%s", rapport$courts$habillage$na_habillage, if(rapport$courts$habillage$na_habillage > 0) "  <- ANOMALIE" else ""))
-    anomalies <- anomalies + hb$na_habillage + rapport$courts$habillage$na_habillage
+                sprintf("sejours_longs   na_habillage = %d%s ; duree_hors_perimetre (hors %d-%d) = %d%s ; repli_admin : %s", hb$na_habillage, if(hb$na_habillage > 0) "  <- ANOMALIE" else "", min(DUREE_LONGS), max(DUREE_LONGS), hb$duree_hors_perimetre, if(hb$duree_hors_perimetre > 0) "  <- ANOMALIE" else "", if(nrow(hb$repli)) paste(hb$repli$niveau, hb$repli$n, sep = " = ", collapse = " ; ") else "(aucune ligne)"),
+                sprintf("sejours_courts  na_habillage = %d%s ; duree_hors_perimetre (hors %d-%d) = %d%s", rapport$courts$habillage$na_habillage, if(rapport$courts$habillage$na_habillage > 0) "  <- ANOMALIE" else "", min(DUREE_COURTS), max(DUREE_COURTS), rapport$courts$habillage$duree_hors_perimetre, if(rapport$courts$habillage$duree_hors_perimetre > 0) "  <- ANOMALIE" else ""))
+    anomalies <- anomalies + hb$na_habillage + hb$duree_hors_perimetre + rapport$courts$habillage$na_habillage + rapport$courts$habillage$duree_hors_perimetre
   }
   c(lignes, "TOTAL anomalies = " %+% anomalies, "",
     "Livrables : " %+% basename(if(liv$forme == "monofichier") FICHIER_LIVRABLE() else DIR_LIVRABLE_PARTS()) %+% " (+ " %+% basename(FICHIER_LIVRABLE_META()) %+% ") ; " %+% basename(FICHIER_REVUE()) %+% " (" %+% nrow(df_revue) %+% " scénarios) ; " %+%

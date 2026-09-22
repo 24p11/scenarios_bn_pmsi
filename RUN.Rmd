@@ -71,9 +71,10 @@ Les dix `ref_*` : neuf dans `10_references/`, et `ref_pivots_courts` — **le ca
 `30_courts/` (magasin partagé, méta : `ANS_COURTS`, seuils). `ANS_COURTS` (défaut `AN_REF`) étend le tirable
 et ses refs de saturation sur le **cumul** de plusieurs années (ids des pivots stables sous extension).
 Le **tirage** des courts n'est plus ici : c'est une étape **de campagne** (`RUN_aval.Rmd` §4b, après la
-sélection : budget `NB_CRH_CIBLE_COURTS` ou `RATIO_COURTS` × volume longs). `ref_v_admin_longs` est
-photographié SANS `nbda` (habillage robuste) : un magasin antérieur est en écart ⇒ `etape_refs(forcer = TRUE)`
-(une requête distinct, quelques minutes).
+sélection : budget `NB_CRH_CIBLE_COURTS` ou `RATIO_COURTS` × volume longs). Les photographies admin
+(`ref_v_admin_longs` SANS `nbda`, `ref_v_admin_courts`) sont filtrées sur le périmètre de durée de leur
+branche et comptent les séjours par combinaison (`n`, tirage pondéré) : un magasin antérieur est en écart ⇒
+`etape_refs(forcer = TRUE)` (une requête `count` par branche, quelques minutes).
 
 ```{r refs}
 etape_refs()               # forcer = TRUE après changement d'AN_REF / ANS_COURTS, de SEUIL_REF_*, de CONVERSION_E669, ou magasin antérieur au retrait de nbda

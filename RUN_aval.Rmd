@@ -356,9 +356,11 @@ if (JE_CONFIRME) {
 
 **Habillage** (flux par lots) : relecture des chunks par lots de `LOT_CHUNKS_FINALISATION`, jointure
 `ref_v_admin_longs.parquet` relu (jamais `prep_data` : frontière tirage / base) sur les **6 clés**
-`CLES_ADMIN_LONGS` (nbda retiré), **repli hiérarchique** (âge exact → cage → mode_hospit × cage × racine,
-`NB_VARIANTES_ADMIN_REPLI` variantes aux niveaux de repli), colonne `repli_admin` tracée jusqu'au corpus, stop
-nominatif si aucun candidat (jamais de NA silencieux) ; DPEC/TPEC recalculés (duree = 3, comme le catalogue).
+`CLES_ADMIN_LONGS` (nbda retiré ; photographie filtrée sur `DUREE_LONGS`, effectif `n` par combinaison), **repli
+hiérarchique** (âge exact → cage → mode_hospit × cage × racine, `NB_VARIANTES_ADMIN_REPLI` variantes aux niveaux
+de repli), variantes tirées **au poids des effectifs** (n sommés aux replis), colonne `repli_admin` tracée jusqu'au
+corpus, stop nominatif si aucun candidat (jamais de NA silencieux) ; DPEC/TPEC recalculés (duree = 3, comme le
+catalogue).
 Exige un jeu de chunks complet (stop sinon). Restart R avant.
 
 ```{r habillage}

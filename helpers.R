@@ -1654,7 +1654,7 @@ lire_si_present <- function(chemin, produit_par = "l'étape amont", mode = "auto
 # clés bloquantes historiques ; les références les 6 clés de l'ancienne condition Q13.
 CLES_MAGASINS <- list(
   partiels   = c("K_GRAINE_LONGS", "NBDA_MAX", "DUREE_LONGS", "PIVOTS_LONGS"),
-  references = c("AN_REF", "ANS_COURTS", "SEUIL_REF_DAS", "SEUIL_REF_IMPRECIS", "SEUIL_REF_PAIRES", "CONVERSION_E669", "BARE_E669_DEFAUT", "CLES_ADMIN_LONGS"),
+  references = c("AN_REF", "ANS_COURTS", "SEUIL_REF_DAS", "SEUIL_REF_IMPRECIS", "SEUIL_REF_PAIRES", "CONVERSION_E669", "BARE_E669_DEFAUT", "CLES_ADMIN_LONGS", "DUREE_LONGS", "DUREE_COURTS"),
   catalogue  = c("ANS_HISTORIQUE", "TYPES_ETBS_LONGS", "SEUIL_PIVOT", "CONVERSION_E669", "BARE_E669_DEFAUT", "K_GRAINE_LONGS", "NBDA_MAX", "DUREE_LONGS", "PIVOTS_LONGS"),
   courts     = c("ANS_COURTS", "SEUIL_PIVOT", "DUREE_COURTS", "PIVOTS_COURTS", "CONVERSION_E669", "BARE_E669_DEFAUT"))   # 30_courts = le TIRABLE (pivots), plus le tirage
 DRAPEAUX_MAGASINS <- c(partiels = "FORCER_PARTIELS", references = "FORCER_REFS", catalogue = "FORCER_CATALOGUE", courts = "FORCER_COURTS")
@@ -1881,15 +1881,18 @@ pivots_sous_registre <- function(pivots, registre_profil = NULL){
 # Cause : jointure naturelle sur 7 clés dont l'âge EXACT et nbda, v_admin photographié sur AN_REF seule -> profils du
 # catalogue multi-années sans candidat -> NA sur les 4 colonnes apportées, ensemble. Décision : nbda SORT des clés
 # (fabrique_v_admin_longs sans nbda) ; repli hiérarchique : (0) strate fine 6 clés -> (1) cage au lieu de l'âge exact ->
-# (2) mode_hospit × cage × racine ; tirage au premier niveau non vide (uniforme entre candidats distincts : v_admin est
-# une table distinct sans effectif — question K-b) ; colonne repli_admin (0/1/2) tracée jusqu'au corpus ; tous niveaux
-# vides -> stop NOMINATIF, jamais de NA silencieux.
+# (2) mode_hospit × cage × racine ; tirage au premier niveau non vide, PONDÉRÉ par les effectifs n de la photographie
+# (Q70 actée : l'uniforme entre combinaisons distinctes sur-représente les issues rares ; aux replis, n sommés sur les
+# strates fusionnées) ; colonne repli_admin (0/1/2) tracée jusqu'au corpus ; tous niveaux vides -> stop NOMINATIF, jamais
+# de NA silencieux. La photographie est filtrée sur le périmètre de durée de sa branche (Q72 actée).
 # CLES_ADMIN_LONGS (config, doctrine) = niveau 0 ; niveaux de repli dérivés.
 NIVEAUX_REPLI_ADMIN <- list(c("mode_hospit", "sexe", "age", "cage", "ghm2", "diag2"), c("mode_hospit", "sexe", "cage", "ghm2", "diag2"), c("mode_hospit", "cage", "racine"))
-# d : scénarios ; v_admin : photographie admin (racine dérivée de ghm2 si absente) ; niveau 0 : toutes les variantes
-# (nb_variantes = NA) ou nb_variantes tirées ; niveaux de repli : nb_repli variantes tirées ; cols_apport : colonnes apportées.
+# d : scénarios ; v_admin : photographie admin avec effectifs n (racine dérivée de ghm2 si absente) ; niveau 0 : toutes les
+# variantes (nb_variantes = NA) ou nb_variantes tirées au poids n ; niveaux de repli : nb_repli variantes tirées au poids n
+# (sommés sur les strates fusionnées) ; cols_apport : colonnes apportées. Photographie sans colonne n -> stop (magasin à régénérer).
 habiller_admin <- function(d, v_admin, niveaux = NIVEAUX_REPLI_ADMIN, cols_apport = c(COLS_ADMIN, "duree"), nb_variantes = NA, nb_repli = 2L, etiquette = "longs"){
   d <- tibble::as_tibble(d); v <- tibble::as_tibble(v_admin)
+  if(!"n" %in% names(v)) stop("habiller_admin (" %+% etiquette %+% ") : la photographie admin ne porte pas d'effectifs (colonne n) : magasin 10_references antérieur au micro-lot « v_admin : périmètre de durée + pondération » — régénérer avec FORCER_REFS <- TRUE.", call. = FALSE)
   if(!"racine" %in% names(v) && "ghm2" %in% names(v)) v$racine <- substr(as.character(v$ghm2), 1, 5)
   if(any(vapply(niveaux, function(k) "racine" %in% k, logical(1))) && !"racine" %in% names(d) && "ghm2" %in% names(d)) d$racine <- substr(as.character(d$ghm2), 1, 5)
   manq <- setdiff(cols_apport, names(v)); if(length(manq)) stop("habiller_admin : colonnes apportées absentes de v_admin : " %+% paste(manq, collapse = ", "), call. = FALSE)
@@ -1898,10 +1901,11 @@ habiller_admin <- function(d, v_admin, niveaux = NIVEAUX_REPLI_ADMIN, cols_appor
   for(j in seq_along(niveaux)){
     cles <- niveaux[[j]]
     manq <- setdiff(cles, c(names(v), names(restants))); if(length(manq)) stop("habiller_admin : clés absentes au niveau " %+% (j - 1) %+% " : " %+% paste(manq, collapse = ", "), call. = FALSE)
-    cand <- dplyr::distinct(v[, c(cles, cols_apport), drop = FALSE])
+    cand <- v[, c(cles, cols_apport, "n"), drop = FALSE] |> dplyr::summarise(.n_admin = sum(n), .by = dplyr::all_of(c(cles, cols_apport)))   # n sommés sur les strates fusionnées
     h <- dplyr::inner_join(restants, cand, by = cles, relationship = "many-to-many")
     n_var <- if(j == 1) nb_variantes else nb_repli
-    if(!is.na(n_var)) h <- h |> dplyr::group_by(.rid) |> dplyr::slice_sample(n = as.integer(n_var)) |> dplyr::ungroup()
+    if(!is.na(n_var)) h <- h |> dplyr::group_by(.rid) |> dplyr::slice_sample(n = as.integer(n_var), weight_by = .n_admin) |> dplyr::ungroup()
+    h$.n_admin <- NULL
     h$repli_admin <- as.integer(j - 1L); out[[j]] <- h
     restants <- restants[!restants$.rid %in% h$.rid, , drop = FALSE]
     if(nrow(restants) == 0) break
@@ -1914,12 +1918,14 @@ habiller_admin <- function(d, v_admin, niveaux = NIVEAUX_REPLI_ADMIN, cols_appor
   res <- dplyr::bind_rows(out); res <- res[order(res$.rid), , drop = FALSE]; res$.rid <- NULL
   res
 }
-# Contrôle « zéro NA d'habillage » (contrôles §8.2) : nb de lignes avec au moins un NA sur les colonnes apportées, et distribution du repli.
-controle_habillage <- function(df, cols_apport = c(COLS_ADMIN, "duree")){
+# Contrôle « zéro NA d'habillage » (contrôles §8.2) : nb de lignes avec au moins un NA sur les colonnes apportées, lignes dont la
+# durée sort du périmètre de la branche (duree_perimetre, Q72 : plus aucune ligne longue à durée < 3), distribution du repli.
+controle_habillage <- function(df, cols_apport = c(COLS_ADMIN, "duree"), duree_perimetre = NULL){
   cols <- intersect(cols_apport, names(df))
   na_lignes <- if(length(cols) == 0 || nrow(df) == 0) 0L else sum(rowSums(is.na(df[, cols, drop = FALSE])) > 0)
+  hors <- if(is.null(duree_perimetre) || !"duree" %in% names(df) || nrow(df) == 0) 0L else sum(!is.na(df$duree) & !(as.numeric(df$duree) %in% as.numeric(duree_perimetre)))
   repli <- if("repli_admin" %in% names(df) && nrow(df) > 0) as.data.frame(table(niveau = df$repli_admin), responseName = "n") else data.frame(niveau = character(0), n = integer(0))
-  list(na_habillage = as.integer(na_lignes), colonnes = cols, repli = repli)
+  list(na_habillage = as.integer(na_lignes), duree_hors_perimetre = as.integer(hors), colonnes = cols, repli = repli)
 }
 
 # --- K3. Adoption de C1 (longs + courts historiques, SANS re-tirage) ---------------------------------------------
