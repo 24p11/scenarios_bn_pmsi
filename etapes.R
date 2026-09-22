@@ -746,8 +746,8 @@ ecrire_surcharge <- function(type, lignes, fichier){
   cat("surcharge ", type, " écrite : ", normalizePath(fichier), " — Restart R puis chunk `session` (la session affiche la source de chaque paramètre).\n", sep = "")
   invisible(normalizePath(fichier))
 }
-ecrire_surcharge_campagne <- function(campagne, nb_crh_cible, nb_lignes_par_dp = 1L, registre_actif = TRUE, plafonds_dpec = NULL, fichier = "campagne.R")
-  ecrire_surcharge("campagne", contenu_surcharge_campagne(campagne, nb_crh_cible, nb_lignes_par_dp, registre_actif, plafonds_dpec), fichier)
+ecrire_surcharge_campagne <- function(campagne, nb_crh_cible, nb_lignes_par_dp = 1L, registre_actif = TRUE, plafonds_dpec = NULL, fichier = "campagne.R", nb_crh_cible_courts = NULL, ratio_courts = NULL, nb_variantes_admin = NULL)
+  ecrire_surcharge("campagne", contenu_surcharge_campagne(campagne, nb_crh_cible, nb_lignes_par_dp, registre_actif, plafonds_dpec, nb_crh_cible_courts, ratio_courts, nb_variantes_admin), fichier)
 ecrire_surcharge_palier <- function(nb_crh_cible = 100000L, fichier = "palier.R") ecrire_surcharge("palier", contenu_surcharge_palier(nb_crh_cible), fichier)
 # Affichage session : valeur effective et SOURCE de chaque paramètre de campagne (défaut config / campagne.R / palier.R)
 afficher_sources_campagne <- function(){
@@ -1485,7 +1485,7 @@ etape_tirage_das_longs <- function(chunk_range = NULL, populations = names(POPUL
 # × racine), colonne repli_admin tracée, stop nominatif si aucun candidat — jamais de NA silencieux. Résultat en
 # mémoire de session (modes historiques) ; relit les chunks si l'étape T3 n'a pas tourné dans cette session.
 etape_habillage_longs <- function(populations = names(POPULATIONS)){
-  t0 <- banniere_debut("etape_habillage_longs", "NB_VARIANTES_ADMIN_LONGS = " %+% NB_VARIANTES_ADMIN_LONGS %+% " ; clés = " %+% paste(CLES_ADMIN_LONGS, collapse = ",") %+% " ; repli (cage, puis mode_hospit × cage × racine) : " %+% NB_VARIANTES_ADMIN_REPLI %+% " variantes, tirage pondéré par les effectifs (n) ; durées du périmètre " %+% min(DUREE_LONGS) %+% "-" %+% max(DUREE_LONGS))
+  t0 <- banniere_debut("etape_habillage_longs", "NB_VARIANTES_ADMIN_LONGS = " %+% NB_VARIANTES_ADMIN_LONGS %+% " tenue(s) admin par scénario (tirage pondéré par les effectifs n, sans remise ; NA = toutes, v7.2 ; N > 1 : id_scenario suffixé -aN) ; clés = " %+% paste(CLES_ADMIN_LONGS, collapse = ",") %+% " ; même nombre aux replis (cage, puis mode_hospit × cage × racine) ; durées du périmètre " %+% min(DUREE_LONGS) %+% "-" %+% max(DUREE_LONGS))
   charger_contexte_tirage("ref_v_admin_longs", "etape_habillage_longs")
   if(is.null(etat_tirage("mode_tirage")) && file.exists(FICHIER_SELECTION_META())) relire_selection_longs("etape_habillage_longs")
   if(identical(etat_tirage("mode_tirage"), "quota_dp_fixe")){
@@ -1503,7 +1503,7 @@ etape_habillage_longs <- function(populations = names(POPULATIONS)){
       lire_chunks_par_lots(dir_ch, "longs", LOT_CHUNKS_FINALISATION, function(d, i_lot){
         d <- typologie_sejour(d, typo, col_age = "age", col_duree = "duree", duree_defaut = 3); d$population <- pop
         set.seed(SEED + 4e6 + 1e4 * ipop + i_lot)
-        h <- habiller_admin(d, df_v_admin_longs, NIVEAUX_REPLI_ADMIN, c(COLS_ADMIN, "duree"), NB_VARIANTES_ADMIN_LONGS, NB_VARIANTES_ADMIN_REPLI, "longs " %+% pop)
+        h <- habiller_admin(d, df_v_admin_longs, NIVEAUX_REPLI_ADMIN, c(COLS_ADMIN, "duree"), NB_VARIANTES_ADMIN_LONGS, NULL, "longs " %+% pop, suffixer_id = TRUE)
         f <- file.path(dir_h, sprintf("lot_%04d.parquet", i_lot)); arrow::write_parquet(h, f)
         rp <- table(h$repli_admin)
         cat(sprintf("  %s lot %04d : %d scénarios -> %d lignes habillées (repli_admin : %s)\n", pop, i_lot, nrow(d), nrow(h), paste(names(rp), rp, sep = "=", collapse = ", ")))
@@ -1518,7 +1518,7 @@ etape_habillage_longs <- function(populations = names(POPULATIONS)){
   df_v_admin_longs <- arrow::read_parquet(file.path(ns(DIR_REFERENCES), nom_ref("ref_v_admin_longs")))
   # Habillage admin (v7.2 l.555) — robuste : 6 clés, repli hiérarchique, jamais de NA silencieux
   set.seed(SEED + 4e6)
-  df_scenarios <- habiller_admin(df_tirage, df_v_admin_longs, NIVEAUX_REPLI_ADMIN, c(COLS_ADMIN, "duree"), NB_VARIANTES_ADMIN_LONGS, NB_VARIANTES_ADMIN_REPLI, "longs")
+  df_scenarios <- habiller_admin(df_tirage, df_v_admin_longs, NIVEAUX_REPLI_ADMIN, c(COLS_ADMIN, "duree"), NB_VARIANTES_ADMIN_LONGS, NULL, "longs", suffixer_id = TRUE)
   rm(df_tirage, df_v_admin_longs)
   poser_tirage("df_scenarios_longs", df_scenarios)
   if(exists("df_tirage_longs", envir = ETAPES_ENV, inherits = FALSE)) rm("df_tirage_longs", envir = ETAPES_ENV)
@@ -1598,7 +1598,7 @@ etape_finalisation <- function(fusionner = NULL, populations = names(POPULATIONS
         n_lot <- n_lot + 1L
         d <- tibble::as_tibble(arrow::read_parquet(f))
         acc <- acc_stats_ajouter(acc, d, PIVOTS_LONGS, ctx$codes_imprecis, hta_autres, SEUIL_PIVOT, c("diag2", "graine", "diagnostic_associes"))
-        ch <- controle_habillage(d, c(COLS_ADMIN, "duree"), DUREE_LONGS); hab_na <- hab_na + ch$na_habillage; hab_dur <- hab_dur + ch$duree_hors_perimetre; hab_repli <- dplyr::bind_rows(hab_repli, ch$repli); if("id_scenario" %in% names(d)) n_scen <- n_scen + dplyr::n_distinct(d$id_scenario)
+        ch <- controle_habillage(d, c(COLS_ADMIN, "duree"), DUREE_LONGS); hab_na <- hab_na + ch$na_habillage; hab_dur <- hab_dur + ch$duree_hors_perimetre; hab_repli <- dplyr::bind_rows(hab_repli, ch$repli); if("id_scenario" %in% names(d)) n_scen <- n_scen + dplyr::n_distinct(id_scenario_base(d$id_scenario))
         if("nb_variantes_demandees" %in% names(d)){
           dd <- d |> dplyr::distinct(dplyr::across(dplyr::all_of(c(PIVOTS_LONGS, "graine", "variante", "nb_variantes_demandees")))) |>
             dplyr::summarise(demandees = dplyr::first(nb_variantes_demandees), gardees = dplyr::n(), .by = dplyr::all_of(c(PIVOTS_LONGS, "graine"))) |>
@@ -1612,7 +1612,10 @@ etape_finalisation <- function(fusionner = NULL, populations = names(POPULATIONS
       st <- acc_stats_final(acc)
       scen_gardes <- if(is.null(doublons)) NA_integer_ else sum(doublons$gardees); scen_demandes <- if(is.null(doublons)) NA_integer_ else sum(doublons$demandees)
       resultats[[pop]] <- list(stats = st, doublons = doublons, scenarios_gardes = scen_gardes, scenarios_demandes = scen_demandes, lignes_finales = st$n, scenarios = n_scen,
-                               habillage = list(na_habillage = hab_na, duree_hors_perimetre = hab_dur, repli = if(is.null(hab_repli)) data.frame(niveau = character(0), n = integer(0)) else hab_repli |> dplyr::summarise(n = sum(n), .by = niveau)))
+                               habillage = list(na_habillage = hab_na, duree_hors_perimetre = hab_dur, repli = if(is.null(hab_repli)) data.frame(niveau = character(0), n = integer(0)) else hab_repli |> dplyr::summarise(n = sum(n), .by = niveau),
+                                                N = NB_VARIANTES_ADMIN_LONGS, lignes_attendues = if(is.na(NB_VARIANTES_ADMIN_LONGS)) NA_integer_ else as.integer(n_scen * NB_VARIANTES_ADMIN_LONGS),
+                                                lignes_hors_multiplication = if(is.na(NB_VARIANTES_ADMIN_LONGS)) 0L else as.integer(max(0L, st$n - n_scen * NB_VARIANTES_ADMIN_LONGS)),   # lignes EN TROP = multiplication non demandée (anomalie)
+                                                lignes_manquantes = if(is.na(NB_VARIANTES_ADMIN_LONGS)) 0L else as.integer(max(0L, n_scen * NB_VARIANTES_ADMIN_LONGS - st$n))))              # strates à moins de N combinaisons (information)
       cat(sprintf("== %s : %s scénarios gardés / %s demandés (cible population %s) ; %d lignes finales (habillage)\n", pop, format(scen_gardes), format(scen_demandes),
                   format(meta_tirage$par_population[[pop]]$budget_population), st$n))
     }
@@ -1622,7 +1625,10 @@ etape_finalisation <- function(fusionner = NULL, populations = names(POPULATIONS
     if(is.null(rapport$longs_tirage_n)) rapport$longs_tirage_n <- NA
     d <- tibble::as_tibble(etat_tirage("df_scenarios_longs")); d$branche <- "long"; if(!"campagne" %in% names(d)) d$campagne <- CAMPAGNE
     rapport$longs <- stats_branche(d, PIVOTS_LONGS, ctx$codes_imprecis, c("diag2", "graine", "diagnostic_associes"))
-    rapport$longs$habillage <- controle_habillage(d, c(COLS_ADMIN, "duree"), DUREE_LONGS); rapport$longs$scenarios <- if("id_scenario" %in% names(d)) dplyr::n_distinct(d$id_scenario) else NA_integer_
+    rapport$longs$habillage <- controle_habillage(d, c(COLS_ADMIN, "duree"), DUREE_LONGS); rapport$longs$scenarios <- if("id_scenario" %in% names(d)) dplyr::n_distinct(id_scenario_base(d$id_scenario)) else NA_integer_
+    rapport$longs$habillage$N <- NB_VARIANTES_ADMIN_LONGS; rapport$longs$habillage$lignes_attendues <- if(is.na(NB_VARIANTES_ADMIN_LONGS) || is.na(rapport$longs$scenarios)) NA_integer_ else as.integer(rapport$longs$scenarios * NB_VARIANTES_ADMIN_LONGS)
+    rapport$longs$habillage$lignes_hors_multiplication <- if(is.na(rapport$longs$habillage$lignes_attendues)) 0L else as.integer(max(0L, nrow(d) - rapport$longs$habillage$lignes_attendues))
+    rapport$longs$habillage$lignes_manquantes <- if(is.na(rapport$longs$habillage$lignes_attendues)) 0L else as.integer(max(0L, rapport$longs$habillage$lignes_attendues - nrow(d)))
     lots[[1L]] <- d; rm(d); rm("df_scenarios_longs", envir = ETAPES_ENV); gc()
   }
   ## Livrable unique
@@ -1648,7 +1654,9 @@ etape_finalisation <- function(fusionner = NULL, populations = names(POPULATIONS
                    MODE_SELECTION = mode, total = liv$total, n_long = liv$n_long, n_court = liv$n_court,
                    volumes = list(long = list(lignes = liv$n_long, scenarios = scen_long), court = list(lignes = liv$n_court, scenarios = rapport$courts$scenarios)),
                    ratio_courts_realise = if(!is.na(scen_long) && scen_long > 0) round(rapport$courts$scenarios / scen_long, 4) else NA, ratio_courts_cible = if(!is.null(cs$meta$RATIO_COURTS)) cs$meta$RATIO_COURTS else RATIO_COURTS,
-                   habillage_longs = list(na_habillage = na_hab_longs, repli_admin = if(fixe) lapply(resultats, function(r) stats::setNames(as.list(r$habillage$repli$n), r$habillage$repli$niveau)) else stats::setNames(as.list(rapport$longs$habillage$repli$n), rapport$longs$habillage$repli$niveau)),
+                   habillage_longs = list(NB_VARIANTES_ADMIN_LONGS = NB_VARIANTES_ADMIN_LONGS, lignes_attendues = if(fixe) sum(vapply(resultats, function(r) r$habillage$lignes_attendues, integer(1))) else rapport$longs$habillage$lignes_attendues,
+                                          na_habillage = na_hab_longs, repli_admin = if(fixe) lapply(resultats, function(r) stats::setNames(as.list(r$habillage$repli$n), r$habillage$repli$niveau)) else stats::setNames(as.list(rapport$longs$habillage$repli$n), rapport$longs$habillage$repli$niveau)),
+                   notes_familles = list(audit = NOTE_POIDS, tracabilite = "id_scenario = id_profil-variante (jeu de DAS, inscrit au registre) ; suffixe -aN = tenue admin N >= 2 quand NB_VARIANTES_ADMIN_LONGS > 1 (raffinement sous le registre)"),
                    populations = if(fixe) names(resultats) else NA, lignes_finales_longs = if(fixe) lapply(resultats, function(r) r$lignes_finales) else list(long = liv$n_long),
                    REGISTRE_ACTIF = isTRUE(REGISTRE_ACTIF) && fixe, version_recette_id = RECETTE_ID, version_recette_id_courts = RECETTE_ID_COURTS,
                    courts = list(source = FICHIER_COURTS_CAMPAGNE(), n = liv$n_court, meta = cs$meta),
@@ -1727,8 +1735,9 @@ rapport_finalisation <- function(fixe, rapport, resultats, meta_tirage, ctx, liv
     for(pop in names(resultats)) lignes <- c(lignes, "   longs " %+% pop %+% " :", fmt_df(resultats[[pop]]$stats$e660))
     lignes <- c(lignes, "", "== 5b. Habillage admin : zéro NA attendu (durée, modes) ; distribution du repli (0 = strate fine 6 clés, 1 = cage, 2 = mode_hospit × cage × racine) ==")
     for(pop in names(resultats)){ hb <- resultats[[pop]]$habillage
-      lignes <- c(lignes, sprintf("longs %-8s na_habillage = %d%s ; duree_hors_perimetre (hors %d-%d) = %d%s ; repli_admin : %s", pop, hb$na_habillage, if(hb$na_habillage > 0) "  <- ANOMALIE" else "", min(DUREE_LONGS), max(DUREE_LONGS), hb$duree_hors_perimetre, if(hb$duree_hors_perimetre > 0) "  <- ANOMALIE" else "", if(nrow(hb$repli)) paste(hb$repli$niveau, hb$repli$n, sep = " = ", collapse = " ; ") else "(aucune ligne)"))
-      anomalies <- anomalies + hb$na_habillage + hb$duree_hors_perimetre }
+      lignes <- c(lignes, sprintf("longs %-8s na_habillage = %d%s ; duree_hors_perimetre (hors %d-%d) = %d%s ; repli_admin : %s", pop, hb$na_habillage, if(hb$na_habillage > 0) "  <- ANOMALIE" else "", min(DUREE_LONGS), max(DUREE_LONGS), hb$duree_hors_perimetre, if(hb$duree_hors_perimetre > 0) "  <- ANOMALIE" else "", if(nrow(hb$repli)) paste(hb$repli$niveau, hb$repli$n, sep = " = ", collapse = " ; ") else "(aucune ligne)"),
+                  sprintf("           tenues admin N = %s : lignes = %d, scénarios = %d, attendu = scénarios × N = %s ; strates à moins de N combinaisons (lignes manquantes) = %d ; lignes_hors_multiplication = %d%s", format(hb$N), resultats[[pop]]$lignes_finales, resultats[[pop]]$scenarios, format(hb$lignes_attendues), hb$lignes_manquantes, hb$lignes_hors_multiplication, if(hb$lignes_hors_multiplication > 0) "  <- ANOMALIE" else ""))
+      anomalies <- anomalies + hb$na_habillage + hb$duree_hors_perimetre + hb$lignes_hors_multiplication }
     lignes <- c(lignes, sprintf("sejours_courts   na_habillage = %d%s ; duree_hors_perimetre (hors %d-%d) = %d%s", rapport$courts$habillage$na_habillage, if(rapport$courts$habillage$na_habillage > 0) "  <- ANOMALIE" else "", min(DUREE_COURTS), max(DUREE_COURTS), rapport$courts$habillage$duree_hors_perimetre, if(rapport$courts$habillage$duree_hors_perimetre > 0) "  <- ANOMALIE" else ""))
     anomalies <- anomalies + rapport$courts$habillage$na_habillage + rapport$courts$habillage$duree_hors_perimetre
   } else {
@@ -1769,8 +1778,9 @@ rapport_finalisation <- function(fixe, rapport, resultats, meta_tirage, ctx, liv
     hb <- rapport$longs$habillage
     lignes <- c(lignes, "== 5b. Habillage admin : zéro NA attendu (durée, modes) ; distribution du repli (0 = strate fine 6 clés, 1 = cage, 2 = mode_hospit × cage × racine) ==",
                 sprintf("sejours_longs   na_habillage = %d%s ; duree_hors_perimetre (hors %d-%d) = %d%s ; repli_admin : %s", hb$na_habillage, if(hb$na_habillage > 0) "  <- ANOMALIE" else "", min(DUREE_LONGS), max(DUREE_LONGS), hb$duree_hors_perimetre, if(hb$duree_hors_perimetre > 0) "  <- ANOMALIE" else "", if(nrow(hb$repli)) paste(hb$repli$niveau, hb$repli$n, sep = " = ", collapse = " ; ") else "(aucune ligne)"),
+                sprintf("sejours_longs   tenues admin N = %s : lignes = %d, scénarios = %s, attendu = %s ; strates à moins de N combinaisons (lignes manquantes) = %d ; lignes_hors_multiplication = %d%s", format(hb$N), rapport$longs$n, format(rapport$longs$scenarios), format(hb$lignes_attendues), hb$lignes_manquantes, hb$lignes_hors_multiplication, if(hb$lignes_hors_multiplication > 0) "  <- ANOMALIE" else ""),
                 sprintf("sejours_courts  na_habillage = %d%s ; duree_hors_perimetre (hors %d-%d) = %d%s", rapport$courts$habillage$na_habillage, if(rapport$courts$habillage$na_habillage > 0) "  <- ANOMALIE" else "", min(DUREE_COURTS), max(DUREE_COURTS), rapport$courts$habillage$duree_hors_perimetre, if(rapport$courts$habillage$duree_hors_perimetre > 0) "  <- ANOMALIE" else ""))
-    anomalies <- anomalies + hb$na_habillage + hb$duree_hors_perimetre + rapport$courts$habillage$na_habillage + rapport$courts$habillage$duree_hors_perimetre
+    anomalies <- anomalies + hb$na_habillage + hb$duree_hors_perimetre + hb$lignes_hors_multiplication + rapport$courts$habillage$na_habillage + rapport$courts$habillage$duree_hors_perimetre
   }
   c(lignes, "TOTAL anomalies = " %+% anomalies, "",
     "Livrables : " %+% basename(if(liv$forme == "monofichier") FICHIER_LIVRABLE() else DIR_LIVRABLE_PARTS()) %+% " (+ " %+% basename(FICHIER_LIVRABLE_META()) %+% ") ; " %+% basename(FICHIER_REVUE()) %+% " (" %+% nrow(df_revue) %+% " scénarios) ; " %+%
@@ -1903,7 +1913,7 @@ etape_adopter_campagne <- function(campagne = "C1", source_longs = NULL, fichier
                    ratio_courts_realise = if(nrow(pl$registre) > 0) round(nrow(pc$registre) / nrow(pl$registre), 4) else NA,
                    verification_registre = list(ok = v$ok, livrable = as.list(v$livrable), registre = as.list(v$registre)),
                    populations = sort(unique(pl$df$population)), REGISTRE_ACTIF = TRUE, version_recette_id = RECETTE_ID, version_recette_id_courts = RECETTE_ID_COURTS,
-                   colonnes = as.list(liv$colonnes), types = as.list(liv$types), familles_colonnes = liv$familles,
+                   colonnes = as.list(liv$colonnes), types = as.list(liv$types), familles_colonnes = liv$familles, notes_familles = list(audit = NOTE_POIDS),
                    note = "campagne ADOPTÉE (longs + courts historiques, aucun re-tirage) ; branche en tête, union de schémas ; les campagnes suivantes tirent leurs propres courts sous 40_campagnes/")
   yaml::write_yaml(meta_liv, FICHIER_LIVRABLE_META(campagne))
   copies <- character(0)

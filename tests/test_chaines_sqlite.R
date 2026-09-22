@@ -409,7 +409,8 @@ writeLines(c('source(file.path(PATH_PROJET, "config.R"))',
              'NOMS_REFS <- c("ref_das_chronique", "distribution_e660", "ref_das_aigu", "ref_nb_chroniques", "ref_comp_diabete", "pivots_courts", "v_admin_courts", "v_admin_longs", "referentiel_substitution_imprecis", "referentiel_paires_chroniques")',
              'REFS_CHRONIQUES <- c("ref_das_chronique", "distribution_e660", "ref_nb_chroniques", "referentiel_paires_chroniques")',
              'EXPORTS_DIR <- paste0(PATH_RESULTS, "exports_ancien/"); PARTIELS_DIR <- paste0(PATH_RESULTS, "partiels_ancien/"); CHUNKS_DIR <- paste0(EXPORTS_DIR, "chunks/")',
-             'DATE_TAG <- format(Sys.Date(), "%Y%m%d")'), file.path(proj_anc, "config_v8.R"))
+             'DATE_TAG <- format(Sys.Date(), "%Y%m%d")',
+             'NB_VARIANTES_ADMIN_LONGS <- NA   # comportement v7.2 des instantanés figés (toutes les variantes admin) ; défaut courant = 1L (Q74)'), file.path(proj_anc, "config_v8.R"))
 writeLines('source(file.path(PATH_PROJET, "helpers.R"))', file.path(proj_anc, "helpers_v8.R"))
 Sys.setenv(SCENARIOS_PMSI_PATH = proj_anc); surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)")
 invisible(sortie(lancer("extraction_associations_codes_v8.R"))); fermer()
@@ -624,12 +625,20 @@ ok("livrable unique : union de schémas — NA typés croisés (graine, racine, 
 ok("habillage robuste : zéro NA (durée, modes) sur les longs ET les courts du livrable ; plus aucune ligne longue à durée < 3 ni courte hors 0-2 (Q72) ; repli_admin porté (0/1/2) ; rapport §5b (na_habillage = 0, duree_hors_perimetre = 0, distribution du repli) ; anomalies = 0",
    !any(is.na(liv1$duree)) && !any(is.na(liv1$mode_entree)) && !any(is.na(liv1$mode_sortie)) && !any(is.na(liv1$mdp)) && all(liv1$repli_admin %in% 0:2) &&
      all(liv1$duree[liv1$branche == "long"] %in% DUREE_LONGS) && all(liv1$duree[liv1$branche == "court"] %in% DUREE_COURTS) && sum(grepl("duree_hors_perimetre \\(hors [0-9]+-[0-9]+\\) = 0", rap_f)) == 3 &&
+     NB_VARIANTES_ADMIN_LONGS == 1L && sum(liv1$branche == "long") == dplyr::n_distinct(liv1$id_scenario[liv1$branche == "long"]) && !any(grepl("-a[0-9]+$", liv1$id_scenario)) && sum(grepl("tenues admin N = 1 : .* lignes_hors_multiplication = 0$", rap_f)) == 2 &&
+     ml1$habillage_longs$NB_VARIANTES_ADMIN_LONGS == 1L && ml1$habillage_longs$lignes_attendues == ml1$n_long && is.numeric(liv1$poids) && all(!is.na(liv1$poids)) && all(liv1$poids > 0) && grepl("ré-échantillonnage", ml1$notes_familles$audit) &&
      any(grepl("== 5b\\. Habillage admin", rap_f)) && all(grepl("na_habillage = 0", grep("na_habillage", rap_f, value = TRUE))) && sum(grepl("na_habillage", rap_f)) == 3 && ml1$habillage_longs$na_habillage == 0 && any(grepl("TOTAL anomalies = 0", rap_f)))
 ok("repli parts au-delà de SEUIL_MONOFICHIER : scenarios_C1/part_*.parquet + méta (forme parts) ; lire_corpus_final identique ; retour au monofichier (idempotence)",
    { assign("SEUIL_MONOFICHIER", 10L, envir = globalenv()); invisible(sortie(etape_finalisation())); mlp <- yaml::read_yaml(FICHIER_LIVRABLE_META()); lp <- lire_corpus_final("C1")
      etat_parts <- !file.exists(FICHIER_LIVRABLE()) && dir.exists(DIR_LIVRABLE_PARTS()) && length(list.files(DIR_LIVRABLE_PARTS(), pattern = "^part_")) >= 2
      assign("SEUIL_MONOFICHIER", 5000000L, envir = globalenv()); invisible(sortie(etape_finalisation())); lm <- lire_corpus_final("C1")
      mlp$forme == "parts" && etat_parts && meme_contenu(lp, liv1) && meme_contenu(lm, liv1) && file.exists(FICHIER_LIVRABLE()) && !dir.exists(DIR_LIVRABLE_PARTS()) })
+ok("multiplication admin N = 3 (paramètre de campagne) : lignes longues == scénarios × 3 (moins les strates à moins de 3 combinaisons), suffixes -a2 / -a3 uniques, contrôle §8.2 au rapport ; retour à N = 1 : livrable identique bit à bit",
+   { assign("NB_VARIANTES_ADMIN_LONGS", 3L, envir = globalenv()); invisible(sortie(etape_habillage_longs())); invisible(sortie(etape_finalisation())); l3 <- lire_corpus_final("C1", branche = "long"); r3 <- readLines(FICHIER_RAPPORT()); m3 <- yaml::read_yaml(FICHIER_LIVRABLE_META())
+     assign("NB_VARIANTES_ADMIN_LONGS", 1L, envir = globalenv()); invisible(sortie(etape_habillage_longs())); invisible(sortie(etape_finalisation()))
+     n_sc <- dplyr::n_distinct(id_scenario_base(l3$id_scenario))
+     nrow(l3) > n_sc && nrow(l3) <= 3 * n_sc && !anyDuplicated(l3$id_scenario) && any(grepl("-a2$", l3$id_scenario)) && setequal(unique(id_scenario_base(l3$id_scenario)), unique(finaux$id_scenario)) &&
+       m3$habillage_longs$NB_VARIANTES_ADMIN_LONGS == 3L && any(grepl("tenues admin N = 3", r3)) && meme_contenu(lire_corpus_final("C1"), liv1) })
 ok("finalisation relancée sans lots habillés ni scénarios courts habillés : reconstruction depuis les chunks des DEUX branches (aucun re-tirage), livrable identique",
    { unlink(file.path(DIR_CAMPAGNE(), "habille"), recursive = TRUE); o <- sortie(etape_finalisation()); any(grepl("reconstruction via etape_habillage_longs", o)) && any(grepl("reconstruction via etape_tirage_courts", o)) && any(grepl("déjà présent, sauté", o)) && meme_contenu(lire_corpus_final("C1"), liv1) })
 ok("finalisation sans aucun courts de campagne (chunks_courts absents) -> message actionnable (étape de campagne après la sélection), rien écrasé",

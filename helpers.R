@@ -1700,6 +1700,12 @@ harmoniser <- function(d, modele){
   for(n in intersect(names(d), names(modele))){ t_m <- class(modele[[n]])[1]; if(class(d[[n]])[1] != t_m) d[[n]] <- coercer(d[[n]], t_m) }
   h <- dplyr::bind_rows(modele, d); h[, names(modele), drop = FALSE]
 }
+# poids : la colonne de RÉ-ÉCHANTILLONNAGE du livrable (micro-lot « Q74 + poids documenté », journal §24.12) — même note au méta,
+# dans VISITE_GUIDEE.md et au README ; le curseur alpha est une décision de l'équipe apprentissage (question ouverte du consortium).
+NOTE_POIDS <- paste0("poids = effectif réel du profil dans la base sur le périmètre du catalogue (longs : profil du catalogue ; courts : n du pivot) — ",
+                     "la colonne de ré-échantillonnage : le corpus est construit à couverture équitable (quota par DP), l'entraînement peut restituer la ",
+                     "distribution réelle en échantillonnant proportionnellement à poids (ou poids^alpha, curseur réalisme / couverture — décision équipe apprentissage) ; ",
+                     "numérique, jamais NA sur les deux branches")
 FAMILLES_COLONNES <- list(
   identite_livrable = c("branche", "population", "campagne"),
   profil_clinique   = c("sexe", "age", "cage", "cage2"),
@@ -1799,11 +1805,12 @@ imprimer_plan_reorganisation <- function(plan){
 # La décision d'exploitation d'une campagne ne s'édite plus dans config.R : elle s'écrit dans campagne.R (gitignoré),
 # depuis le notebook (chunk ouvrir_campagne), et s'active par SCENARIOS_PMSI_SURCHARGE — même mécanique que palier.R.
 # Les deux surcharges sont EXCLUSIVES ; la surcharge démo (troisième cas légitime) est hors de cette exclusivité.
-PARAMETRES_CAMPAGNE <- c("CAMPAGNE", "NB_CRH_CIBLE", "NB_LIGNES_PAR_DP", "REGISTRE_ACTIF", "PLAFONDS_DPEC", "NB_CRH_CIBLE_COURTS", "RATIO_COURTS")
+PARAMETRES_CAMPAGNE <- c("CAMPAGNE", "NB_CRH_CIBLE", "NB_LIGNES_PAR_DP", "REGISTRE_ACTIF", "PLAFONDS_DPEC", "NB_CRH_CIBLE_COURTS", "RATIO_COURTS", "NB_VARIANTES_ADMIN_LONGS")
 MARQUEUR_CAMPAGNE <- "SURCHARGE_CAMPAGNE_ACTIVE <- TRUE"
 MARQUEUR_PALIER   <- "PALIER_ACTIF <- TRUE"
 entier_R <- function(x, nom){ if(length(x) != 1 || is.na(x) || x != round(x) || x < 1) stop(nom %+% " : entier >= 1 attendu", call. = FALSE); sprintf("%dL", as.integer(x)) }
-contenu_surcharge_campagne <- function(campagne, nb_crh_cible, nb_lignes_par_dp = 1L, registre_actif = TRUE, plafonds_dpec = NULL, nb_crh_cible_courts = NULL, ratio_courts = NULL){
+contenu_surcharge_campagne <- function(campagne, nb_crh_cible, nb_lignes_par_dp = 1L, registre_actif = TRUE, plafonds_dpec = NULL, nb_crh_cible_courts = NULL, ratio_courts = NULL, nb_variantes_admin = NULL){
+  if(!is.null(nb_variantes_admin) && length(nb_variantes_admin) != 1) stop("NB_VARIANTES_ADMIN_LONGS : entier >= 1 ou NA attendu", call. = FALSE)
   if(!is.character(campagne) || length(campagne) != 1 || !nzchar(campagne) || grepl("[^A-Za-z0-9_-]", campagne)) stop("CAMPAGNE : identifiant court obligatoire ([A-Za-z0-9_-])", call. = FALSE)
   if(!is.null(ratio_courts) && (!is.numeric(ratio_courts) || length(ratio_courts) != 1 || is.na(ratio_courts) || ratio_courts <= 0)) stop("RATIO_COURTS : nombre > 0 attendu", call. = FALSE)
   c("# campagne.R — DÉCISION D'EXPLOITATION de la campagne (niveau campagne ; gitignoré ; écrit par le chunk ouvrir_campagne de RUN_aval.Rmd).",
@@ -1815,7 +1822,8 @@ contenu_surcharge_campagne <- function(campagne, nb_crh_cible, nb_lignes_par_dp 
     "REGISTRE_ACTIF <- " %+% (if(isTRUE(registre_actif)) "TRUE" else "FALSE"),
     if(!is.null(plafonds_dpec)) "PLAFONDS_DPEC <- " %+% paste(deparse(plafonds_dpec), collapse = ""),
     if(!is.null(nb_crh_cible_courts)) "NB_CRH_CIBLE_COURTS <- " %+% entier_R(nb_crh_cible_courts, "NB_CRH_CIBLE_COURTS") %+% "   # budget courts ABSOLU (sinon RATIO_COURTS × volume longs)",
-    if(!is.null(ratio_courts)) "RATIO_COURTS <- " %+% format(as.numeric(ratio_courts)) %+% "   # provisoire — à calibrer avec l'équipe apprentissage")
+    if(!is.null(ratio_courts)) "RATIO_COURTS <- " %+% format(as.numeric(ratio_courts)) %+% "   # provisoire — à calibrer avec l'équipe apprentissage",
+    if(!is.null(nb_variantes_admin)) "NB_VARIANTES_ADMIN_LONGS <- " %+% (if(is.na(nb_variantes_admin)) "NA   # toutes les combinaisons (v7.2)" else entier_R(nb_variantes_admin, "NB_VARIANTES_ADMIN_LONGS") %+% "   # tenues admin par scénario (N > 1 : id_scenario suffixé -aN)"))
 }
 contenu_surcharge_palier <- function(nb_crh_cible = 100000L){
   c("# palier.R — PALIER DE MESURE (budget réduit, hors registre) ; gitignoré ; écrit par le chunk palier_surcharge de RUN_aval.Rmd.",
@@ -1887,11 +1895,15 @@ pivots_sous_registre <- function(pivots, registre_profil = NULL){
 # de NA silencieux. La photographie est filtrée sur le périmètre de durée de sa branche (Q72 actée).
 # CLES_ADMIN_LONGS (config, doctrine) = niveau 0 ; niveaux de repli dérivés.
 NIVEAUX_REPLI_ADMIN <- list(c("mode_hospit", "sexe", "age", "cage", "ghm2", "diag2"), c("mode_hospit", "sexe", "cage", "ghm2", "diag2"), c("mode_hospit", "cage", "racine"))
-# d : scénarios ; v_admin : photographie admin avec effectifs n (racine dérivée de ghm2 si absente) ; niveau 0 : toutes les
-# variantes (nb_variantes = NA) ou nb_variantes tirées au poids n ; niveaux de repli : nb_repli variantes tirées au poids n
-# (sommés sur les strates fusionnées) ; cols_apport : colonnes apportées. Photographie sans colonne n -> stop (magasin à régénérer).
-habiller_admin <- function(d, v_admin, niveaux = NIVEAUX_REPLI_ADMIN, cols_apport = c(COLS_ADMIN, "duree"), nb_variantes = NA, nb_repli = 2L, etiquette = "longs"){
+# d : scénarios ; v_admin : photographie admin avec effectifs n (racine dérivée de ghm2 si absente) ; nb_variantes : N tenues
+# admin par scénario tirées SANS remise au poids n parmi les combinaisons de la strate (toutes si moins ; NA = toutes, v7.2) ;
+# nb_repli : idem aux niveaux de repli (NULL = aligné sur nb_variantes, 1 si NA ; n sommés sur les strates fusionnées) ;
+# cols_apport : colonnes apportées. suffixer_id : pour N > 1, id_scenario suffixé -a2..-aN à partir de la 2e tenue (unicité ;
+# aucun suffixe à N = 1 — le registre compte les jeux de DAS, les tenues admin sont un raffinement en dessous).
+# Photographie sans colonne n -> stop (magasin à régénérer).
+habiller_admin <- function(d, v_admin, niveaux = NIVEAUX_REPLI_ADMIN, cols_apport = c(COLS_ADMIN, "duree"), nb_variantes = NA, nb_repli = NULL, etiquette = "longs", suffixer_id = FALSE){
   d <- tibble::as_tibble(d); v <- tibble::as_tibble(v_admin)
+  if(is.null(nb_repli)) nb_repli <- if(is.na(nb_variantes)) 1L else as.integer(nb_variantes)
   if(!"n" %in% names(v)) stop("habiller_admin (" %+% etiquette %+% ") : la photographie admin ne porte pas d'effectifs (colonne n) : magasin 10_references antérieur au micro-lot « v_admin : périmètre de durée + pondération » — régénérer avec FORCER_REFS <- TRUE.", call. = FALSE)
   if(!"racine" %in% names(v) && "ghm2" %in% names(v)) v$racine <- substr(as.character(v$ghm2), 1, 5)
   if(any(vapply(niveaux, function(k) "racine" %in% k, logical(1))) && !"racine" %in% names(d) && "ghm2" %in% names(d)) d$racine <- substr(as.character(d$ghm2), 1, 5)
@@ -1915,9 +1927,16 @@ habiller_admin <- function(d, v_admin, niveaux = NIVEAUX_REPLI_ADMIN, cols_appor
     stop("habillage " %+% etiquette %+% " : aucun candidat admin à AUCUN niveau de repli pour " %+% nrow(restants) %+% " scénario(s) — profils (" %+% paste(names(ex), collapse = ", ") %+% ") : " %+%
            paste(apply(as.data.frame(ex), 1, paste, collapse = "/"), collapse = " ; ") %+% ". Jamais de NA silencieux : élargir la photographie v_admin (années) ou les niveaux de repli.", call. = FALSE)
   }
-  res <- dplyr::bind_rows(out); res <- res[order(res$.rid), , drop = FALSE]; res$.rid <- NULL
+  res <- dplyr::bind_rows(out); res <- res[order(res$.rid), , drop = FALSE]
+  if(isTRUE(suffixer_id) && !is.na(nb_variantes) && nb_variantes > 1 && "id_scenario" %in% names(res)){
+    k <- stats::ave(seq_len(nrow(res)), res$.rid, FUN = seq_along)
+    res$id_scenario <- ifelse(k > 1, paste0(res$id_scenario, "-a", k), res$id_scenario)
+  }
+  res$.rid <- NULL
   res
 }
+# id_scenario sans le suffixe de tenue admin (-aN) : le jeu de DAS, tel qu'inscrit au registre
+id_scenario_base <- function(x) sub("-a[0-9]+$", "", as.character(x))
 # Contrôle « zéro NA d'habillage » (contrôles §8.2) : nb de lignes avec au moins un NA sur les colonnes apportées, lignes dont la
 # durée sort du périmètre de la branche (duree_perimetre, Q72 : plus aucune ligne longue à durée < 3), distribution du repli.
 controle_habillage <- function(df, cols_apport = c(COLS_ADMIN, "duree"), duree_perimetre = NULL){

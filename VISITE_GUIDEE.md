@@ -403,7 +403,13 @@ des longs : plages `chunk_range` parallélisables, débit par chunk, extrapolati
 - **La conversion E669 se fait avant le seuil** (voir §4C).
 - **La colonne `poids`** = l'effectif du PROFIL, répété sur toutes les lignes
   d'un même profil. Additionner `poids` sur le catalogue n'a donc aucun
-  sens ; il faut d'abord dédupliquer au profil.
+  sens ; il faut d'abord dédupliquer au profil. Dans le **livrable**, `poids`
+  (famille audit, les deux branches : effectif du profil au catalogue pour les
+  longs, `n` du pivot pour les courts) est **la colonne de ré-échantillonnage** :
+  le corpus est construit à couverture équitable (quota par DP), l'entraînement
+  peut restituer la distribution réelle en échantillonnant ∝ `poids` (ou
+  `poids^alpha`, curseur réalisme / couverture — décision de l'équipe
+  apprentissage). La même note vit au méta du livrable (`notes_familles`).
 
 ### 5b. Les dix tables de référence (ce que le tirage consomme)
 `ref_das_aigu` (les candidats de complétion des longs, par strate fine),
@@ -461,9 +467,12 @@ nominatif. Deux arbitrages ont suivi : chaque photographie admin est filtrée
 sur le périmètre de durée de sa branche (un scénario long ne reçoit jamais la
 durée d'un séjour court), et elle compte les séjours par combinaison, le tirage
 des variantes étant pondéré par cet effectif (l'uniforme entre combinaisons
-distinctes sur-représentait les issues rares, comme le décès). Le rapport
-ajoute les contrôles « zéro NA d'habillage » et « durée dans le périmètre » et la
-distribution du repli. La leçon de processus : la revue clinique a validé son
+distinctes sur-représentait les issues rares, comme le décès). Enfin (Q74) un
+scénario = UNE tenue admin par défaut : dans le modèle campagnes les variantes
+sont des variantes de DAS, pas d'habillage ; la multiplication admin est un
+bouton de campagne (`NB_VARIANTES_ADMIN_LONGS`, N tenues et suffixe `-aN`). Le
+rapport ajoute les contrôles « zéro NA d'habillage », « durée dans le
+périmètre », « lignes = scénarios × N » et la distribution du repli. La leçon de processus : la revue clinique a validé son
 rôle, et le contrôle qui manquait existe désormais.
 
 ## 6. La robustesse : pourquoi « relancer la même commande » marche toujours

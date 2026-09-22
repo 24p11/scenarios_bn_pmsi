@@ -31,6 +31,11 @@ seule composante issue du réel est la « graine » de chaque scénario long —
 la paire des deux diagnostics associés les plus sévères d'un séjour, agrégée
 sur ~10 ans et l'ensemble des établissements, sous seuil d'effectif.
 
+Le corpus est construit à **couverture équitable** (chaque diagnostic principal
+représenté) ; la colonne `poids` de chaque scénario (effectif réel du profil)
+permet à l'entraînement de restituer la distribution réelle en ré-échantillonnant
+∝ `poids` (ou `poids^alpha`, curseur réalisme / couverture).
+
 ## Architecture en deux mondes
 
 ```

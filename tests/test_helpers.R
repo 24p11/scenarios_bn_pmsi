@@ -995,7 +995,21 @@ d_rep <- dplyr::mutate(d_l[1, ], diag2 = "K802", sexe = "1")   # aucun candidat 
 set.seed(22); tir_rep <- purrr::map(1:400, ~ habiller_admin(d_rep, v_rep, NIVEAUX_REPLI_ADMIN, c(COLS_ADMIN, "duree"), NA, 1L)) |> purrr::list_rbind()
 ok("tirage pondéré à un niveau de repli : n sommés sur les strates fusionnées (URGENCES/7 : 10 + 10 = 20 vs 8/4 : 90) -> proportions attendues ; repli_admin = 2",
    all(tir_rep$repli_admin == 2) && { p8 <- mean(tir_rep$mode_entree == "8" & tir_rep$duree == 4); pu <- mean(tir_rep$mode_entree == "URGENCES" & tir_rep$duree == 7); p8 > 0.7 && p8 < 0.93 && pu > 0.08 && pu < 0.28 })
-ok("niveau fin avec nb_variantes = NA : toutes les combinaisons distinctes conservées (comportement v7.2, non pondéré — Q74), colonne n absente de la sortie", nrow(h[h$sexe == "1" & h$cage == "[60-70[", ]) == 2 && !"n" %in% names(h) && !".n_admin" %in% names(h))
+ok("niveau fin avec nb_variantes = NA : toutes les combinaisons distinctes conservées (comportement v7.2, non pondéré), colonne n absente de la sortie", nrow(h[h$sexe == "1" & h$cage == "[60-70[", ]) == 2 && !"n" %in% names(h) && !".n_admin" %in% names(h))
+cat("\n# micro-lot Q74 + poids : défaut 1 tenue, N tenues pondérées sans remise, suffixe -aN, nb_repli aligné, paramètre de campagne\n")
+d_id <- dplyr::mutate(d_l, id_scenario = paste0("p", 1:4, "-001"))
+set.seed(31); h1 <- habiller_admin(d_id, v_adm, NIVEAUX_REPLI_ADMIN, c(COLS_ADMIN, "duree"), 1L, suffixer_id = TRUE)
+ok("Q74 : défaut config NB_VARIANTES_ADMIN_LONGS = 1L ; N = 1 -> une ligne par scénario, id_scenario SANS suffixe, nb_repli aligné (repli 2 : une seule tenue)",
+   identical(NB_VARIANTES_ADMIN_LONGS, 1L) && !exists("NB_VARIANTES_ADMIN_REPLI") && nrow(h1) == 4 && identical(h1$id_scenario, d_id$id_scenario) && all(table(h1$repli_admin[h1$diag2 == "K802"]) == 1))
+set.seed(32); h3s <- habiller_admin(d_id, v_adm, NIVEAUX_REPLI_ADMIN, c(COLS_ADMIN, "duree"), 3L, suffixer_id = TRUE)
+ok("N = 3 : jusqu'à 3 tenues par scénario SANS remise (toutes si moins : sexe 2 n'a qu'une combinaison), id_scenario suffixé -a2 / -a3 à partir de la 2e tenue, unicité des id_scenario, base intacte",
+   { par <- table(id_scenario_base(h3s$id_scenario)); all(par <= 3) && par[["p1-001"]] == 2 && par[["p2-001"]] == 1 && !anyDuplicated(h3s$id_scenario) && all(grepl("-a[23]$", h3s$id_scenario[duplicated(id_scenario_base(h3s$id_scenario))])) &&
+       identical(unique(id_scenario_base(h3s$id_scenario)), d_id$id_scenario) && !anyDuplicated(h3s[, c("id_scenario")]) && !anyDuplicated(h3s[h3s$diag2 == "J449" & h3s$sexe == "1" & h3s$cage == "[60-70[", c("mode_entree", "duree")]) })
+ok("suffixer_id = FALSE (courts) : N = 2 tenues partagent l'id_scenario (héritage, Q76)", { set.seed(33); hh <- habiller_admin(d_id[1, ], v_adm, NIVEAUX_REPLI_ADMIN, c(COLS_ADMIN, "duree"), 2L); nrow(hh) == 2 && all(hh$id_scenario == "p1-001") })
+ok("id_scenario_base : suffixe -aN retiré, ids sans suffixe intacts", identical(id_scenario_base(c("abc-001-a2", "abc-001", "k1-003-a12")), c("abc-001", "abc-001", "k1-003")))
+ok("contenu_surcharge_campagne : NB_VARIANTES_ADMIN_LONGS écrit (entier L, ou NA = v7.2) seulement s'il est posé ; dans PARAMETRES_CAMPAGNE",
+   any(grepl("^NB_VARIANTES_ADMIN_LONGS <- 3L", contenu_surcharge_campagne("C4", 10L, nb_variantes_admin = 3))) && any(grepl("^NB_VARIANTES_ADMIN_LONGS <- NA", contenu_surcharge_campagne("C4", 10L, nb_variantes_admin = NA))) &&
+     !any(grepl("NB_VARIANTES_ADMIN", contenu_surcharge_campagne("C4", 10L))) && "NB_VARIANTES_ADMIN_LONGS" %in% PARAMETRES_CAMPAGNE && grepl("poids\\^alpha", NOTE_POIDS))
 
 cat("\n# adoption de C1 : choix de la source, préparation des longs et des courts adoptés, vérification livrable / registre\n")
 d_ad <- file.path(tempdir(), "adopt"); unlink(d_ad, recursive = TRUE); dir.create(file.path(d_ad, "scenarios_longs_tirage_v8_20260901", "adulte"), recursive = TRUE); dir.create(file.path(d_ad, "scenarios_longs_tirage_v8_20260918"))
@@ -1032,7 +1046,7 @@ ok("contenu_surcharge_campagne : NB_CRH_CIBLE_COURTS (entier L) et RATIO_COURTS 
      all(c("NB_CRH_CIBLE_COURTS", "RATIO_COURTS") %in% PARAMETRES_CAMPAGNE) && sources_parametres(PARAMETRES_CAMPAGNE, lc2, "/p/campagne.R")[["RATIO_COURTS"]] == "surcharge campagne (campagne.R)")
 ok("notebooks : chunk ouvrir_campagne expose RATIO_COURTS et NB_CRH_CIBLE_COURTS ; chunk tirage_courts en §4b après la sélection ; chunk adoption_c1 (demo=FALSE) ; RUN.Rmd sans tirage des courts",
    { l <- rmd[[2]]; i2 <- grep("^```\\{r ouvrir_campagne", l); j2 <- i2 + which(grepl("^```\\s*$", l[(i2 + 1):length(l)]))[1]
-     any(grepl("^RATIO_COURTS_CAMP\\s*<-", l[i2:j2])) && any(grepl("^NB_CRH_CIBLE_COURTS_CAMP\\s*<-", l[i2:j2])) && grep("^```\\{r tirage_courts", l) > grep("^```\\{r selection\\}", l) && length(grep("^```\\{r adoption_c1, demo=FALSE", l)) == 1 &&
+     any(grepl("^RATIO_COURTS_CAMP\\s*<-", l[i2:j2])) && any(grepl("^NB_CRH_CIBLE_COURTS_CAMP\\s*<-", l[i2:j2])) && any(grepl("^NB_VARIANTES_ADMIN_LONGS_CAMP\\s*<-\\s*1L", l[i2:j2])) && grep("^```\\{r tirage_courts", l) > grep("^```\\{r selection\\}", l) && length(grep("^```\\{r adoption_c1, demo=FALSE", l)) == 1 &&
        !any(grepl("^etape_tirage_courts\\(", rmd[[1]])) && any(grepl("^```\\{r tirable_courts", rmd[[1]])) })
 
 cat("\nTOUS LES TESTS SONT VERTS :", n_ok, "assertions\n")

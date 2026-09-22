@@ -198,10 +198,11 @@ NB_LIGNES_PAR_DP_CAMP <- 1L        # k lignes distinctes par DP, variantes dédu
 REGISTRE_ACTIF_CAMP <- TRUE        # TRUE en production (registre append-only, deux branches)
 RATIO_COURTS_CAMP   <- 1.0         # courts = RATIO × volume longs attendu — PROVISOIRE, à calibrer avec l'équipe apprentissage
 NB_CRH_CIBLE_COURTS_CAMP <- NULL   # NULL = ratio ; un entier impose un budget courts absolu
+NB_VARIANTES_ADMIN_LONGS_CAMP <- 1L  # tenues admin par scénario long (1 = un scénario, une tenue ; N > 1 : N tenues pondérées, id_scenario suffixé -aN ; NA = toutes, v7.2)
 # PLAFONDS_DPEC_CAMP <- list("Accouchement normal mère" = 100L, "Bébé normal" = 100L)   # seulement si ajustés pour cette campagne
 ecrire_surcharge_campagne(CAMPAGNE_A_OUVRIR, NB_CRH_CIBLE_CAMP, NB_LIGNES_PAR_DP_CAMP, REGISTRE_ACTIF_CAMP,
                           plafonds_dpec = if (exists("PLAFONDS_DPEC_CAMP")) PLAFONDS_DPEC_CAMP else NULL,
-                          nb_crh_cible_courts = NB_CRH_CIBLE_COURTS_CAMP, ratio_courts = RATIO_COURTS_CAMP)
+                          nb_crh_cible_courts = NB_CRH_CIBLE_COURTS_CAMP, ratio_courts = RATIO_COURTS_CAMP, nb_variantes_admin = NB_VARIANTES_ADMIN_LONGS_CAMP)
 # -> « surcharge campagne écrite — Restart R puis chunk session » : la session affichera la source de chaque paramètre.
 ```
 
@@ -357,10 +358,11 @@ if (JE_CONFIRME) {
 **Habillage** (flux par lots) : relecture des chunks par lots de `LOT_CHUNKS_FINALISATION`, jointure
 `ref_v_admin_longs.parquet` relu (jamais `prep_data` : frontière tirage / base) sur les **6 clés**
 `CLES_ADMIN_LONGS` (nbda retiré ; photographie filtrée sur `DUREE_LONGS`, effectif `n` par combinaison), **repli
-hiérarchique** (âge exact → cage → mode_hospit × cage × racine, `NB_VARIANTES_ADMIN_REPLI` variantes aux niveaux
-de repli), variantes tirées **au poids des effectifs** (n sommés aux replis), colonne `repli_admin` tracée jusqu'au
-corpus, stop nominatif si aucun candidat (jamais de NA silencieux) ; DPEC/TPEC recalculés (duree = 3, comme le
-catalogue).
+hiérarchique** (âge exact → cage → mode_hospit × cage × racine, même nombre de tenues aux replis), tenues admin
+tirées **au poids des effectifs** sans remise (n sommés aux replis) : `NB_VARIANTES_ADMIN_LONGS` = 1 par défaut
+(un scénario = une tenue ; paramètre de campagne : N > 1 donne N tenues et suffixe `-aN` sur `id_scenario` ; NA =
+toutes, v7.2), colonne `repli_admin` tracée jusqu'au corpus, stop nominatif si aucun candidat (jamais de NA
+silencieux) ; DPEC/TPEC recalculés (duree = 3, comme le catalogue). Contrôle §8.2 : lignes longues = scénarios × N.
 Exige un jeu de chunks complet (stop sinon). Restart R avant.
 
 ```{r habillage}

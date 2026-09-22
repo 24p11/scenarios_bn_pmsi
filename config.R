@@ -64,9 +64,9 @@ K_GRAINE_LONGS  <- 2                # nb de DAS réels en graine (§2.1)
 NB_TIRAGES_COURTS         <- 3      # héritage v7 (corpus courts FIXE : 3 variantes par pivot, adopté en C1) ; le tirage courts PAR CAMPAGNE
                                     # est piloté par le budget (NB_CRH_CIBLE_COURTS / RATIO_COURTS), réparti sur les pivots au poids
 NB_VARIANTES_ADMIN_COURTS <- 2      # variantes d'habillage admin par scénario court (ex slice(1:2))
-NB_VARIANTES_ADMIN_LONGS  <- NA     # NA = toutes les variantes (comportement v7.2) — au niveau fin de l'habillage (6 clés, nbda retiré)
-NB_VARIANTES_ADMIN_REPLI  <- 2L     # habillage longs : variantes admin tirées aux niveaux de REPLI (1 : cage au lieu de l'âge exact ;
-                                    # 2 : mode_hospit × cage × racine) quand la strate fine est vide — jamais de NA silencieux
+NB_VARIANTES_ADMIN_LONGS  <- 1L     # DÉFAUT (Q74 actée) : UN scénario = UNE tenue admin tirée pondérée par les effectifs ; N > 1 = paramètre de
+                                    # campagne (campagne.R) : N tenues sans remise, id_scenario suffixé -a2..-aN ; NA = toutes les combinaisons
+                                    # (comportement v7.2, accepté). Même nombre aux niveaux de repli (âge exact -> cage -> mode_hospit × cage × racine).
 AGE_MAX_OUVERT            <- 95     # borne haute de la classe ouverte "[80-[" pour le tirage d'âge
 # (NB_TIRAGES_LONGS et MAX_SCENARIOS_LONGS supprimés : remplacés par MODE_SELECTION /
 #  BUDGET_TOTAL_LONGS du bloc PROFIL.)
@@ -233,6 +233,7 @@ if(is.null(ANS_COURTS)) ANS_COURTS <- AN_REF
 ANS_COURTS <- sort(unique(as.integer(ANS_COURTS)))
 if(!is.numeric(RATIO_COURTS) || length(RATIO_COURTS) != 1 || is.na(RATIO_COURTS) || RATIO_COURTS <= 0) stop("RATIO_COURTS : nombre > 0 attendu", call. = FALSE)
 if(!is.null(NB_CRH_CIBLE_COURTS) && (!is.numeric(NB_CRH_CIBLE_COURTS) || length(NB_CRH_CIBLE_COURTS) != 1 || is.na(NB_CRH_CIBLE_COURTS) || NB_CRH_CIBLE_COURTS < 1)) stop("NB_CRH_CIBLE_COURTS : NULL ou entier >= 1 attendu", call. = FALSE)
+if(length(NB_VARIANTES_ADMIN_LONGS) != 1 || (!is.na(NB_VARIANTES_ADMIN_LONGS) && (!is.numeric(NB_VARIANTES_ADMIN_LONGS) || NB_VARIANTES_ADMIN_LONGS < 1))) stop("NB_VARIANTES_ADMIN_LONGS : entier >= 1 (tenues admin par scénario) ou NA (toutes, v7.2) attendu", call. = FALSE)
 ANSEQTA_REF <- anseqta_de(AN_REF)
 
 ## ---- CHEMINS : bloc UNIQUE de l'arborescence par étapes (après surcharges ; aucune concaténation ailleurs) ----
@@ -259,7 +260,7 @@ MAGASINS_PARTAGES <- c(partiels = DIR_PARTIELS, references = DIR_REFERENCES, cat
 NOMS_CONFIG_META <- c("PROFIL", "VERSION_SCRIPT", "AN_REF", "ANS_COURTS", "ANS_HISTORIQUE", "TYPES_ETBS_LONGS", "SEED",
                       "SEUIL_PIVOT", "SEUIL_REF_DAS", "SEUIL_REF_IMPRECIS", "SEUIL_REF_PAIRES",
                       "DUREE_COURTS", "DUREE_LONGS", "DUREE_MIN_REF", "NBDA_MAX", "K_GRAINE_LONGS",
-                      "NB_TIRAGES_COURTS", "NB_VARIANTES_ADMIN_COURTS", "NB_VARIANTES_ADMIN_LONGS", "NB_VARIANTES_ADMIN_REPLI", "PIVOTS_COURTS", "CLES_ADMIN_LONGS", "RATIO_COURTS", "NB_CRH_CIBLE_COURTS",
+                      "NB_TIRAGES_COURTS", "NB_VARIANTES_ADMIN_COURTS", "NB_VARIANTES_ADMIN_LONGS", "PIVOTS_COURTS", "CLES_ADMIN_LONGS", "RATIO_COURTS", "NB_CRH_CIBLE_COURTS",
                       "MODE_SELECTION", "NB_CRH_CIBLE", "NB_LIGNES_PAR_DP", "CAMPAGNE", "REGISTRE_ACTIF", "QUOTA_MIN_PAR_UNITE", "NB_CHUNKS_MAX", "CHUNK_SIZE_MIN", "CHUNK_SIZE_FIXE",
                       "GARDER_CHUNKS", "FORCER_REFS", "PIVOTS_LONGS",
                       "CONVERSION_E669", "BARE_E669_DEFAUT", "COLLECT_PAR_MORCEAUX", "SEUIL_ALERTE_GO")

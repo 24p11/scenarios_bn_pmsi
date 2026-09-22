@@ -1813,3 +1813,41 @@ Une seule fabrique rouverte par branche, une seule régénération de magasin.
   tirage n'a lieu : chaque combinaison distincte donne une ligne, sans pondération. La pondération ne joue qu'où l'on tire
   (`NB_VARIANTES_ADMIN_LONGS` non-NA, `NB_VARIANTES_ADMIN_COURTS`, replis). Poser un nombre de variantes au niveau fin
   serait le prolongement naturel de Q70 — décision d'exploitation, non prise ici.
+  **Actée (§24.12)** : défaut `1L`, bouton de campagne pour l'équipe apprentissage.
+
+### 24.12 Micro-lot « Q74 + poids documenté »
+
+- **Q74 actée** : `NB_VARIANTES_ADMIN_LONGS <- 1L` en défaut — dans le modèle campagnes, les variantes d'un scénario sont
+  des variantes de DAS (`id_scenario`, `hash_das`), pas d'habillage : un scénario = UNE tenue admin, tirée pondérée par
+  `n` (Q70 s'applique désormais au niveau fin, le cas majoritaire). `NA` reste accepté et documenté (comportement v7.2 :
+  toutes les combinaisons) ; les tests d'identité avec les anciens scripts le posent en surcharge dans leur shim
+  (`config_v8.R` du projet ancien — ajouté, assertions inchangées). `NB_VARIANTES_ADMIN_REPLI` ABSORBÉ : le nombre de
+  tenues aux niveaux de repli est aligné sur le niveau fin (`nb_repli = NULL` dans `habiller_admin` ; 1 quand le niveau
+  fin est NA) — au plus simple, une seule constante.
+- **Multiplication admin = paramètre de campagne assumé** : `NB_VARIANTES_ADMIN_LONGS` exposé dans `ouvrir_campagne`
+  (`contenu_surcharge_campagne(…, nb_variantes_admin)`, `PARAMETRES_CAMPAGNE`) ; pour N > 1, chaque scénario sort en N
+  tenues tirées PONDÉRÉES sans remise parmi les combinaisons de la strate (toutes si moins) et `id_scenario` est suffixé
+  `-a2`..`-aN` à partir de la 2e tenue (`suffixer_id`, unicité préservée ; aucun suffixe à N = 1 — aucun changement pour
+  l'existant ; `id_scenario_base` retire le suffixe). Le registre est inchangé : il compte les jeux de DAS (base des ids),
+  les tenues admin sont un raffinement en dessous (note `tracabilite` au méta). Rapport et méta : N, lignes attendues =
+  scénarios × N ; contrôle §8.2 `lignes_hors_multiplication` = lignes EN TROP (toute multiplication non demandée devient
+  impossible ; les strates à moins de N combinaisons donnent moins de tenues, chiffrées à part comme information).
+  Les courts gardent `NB_VARIANTES_ADMIN_COURTS` (2, sans suffixe : inchangé, Q76).
+- **Poids documenté** : `NOTE_POIDS` (helpers I2) au méta du livrable (`notes_familles$audit`, finalisation et adoption),
+  dans VISITE_GUIDEE.md (§5a, § livrable) et au README (section corpus) : « effectif réel du profil dans la base sur le
+  périmètre du catalogue — la colonne de ré-échantillonnage : le corpus est construit à couverture équitable (quota par
+  DP), l'entraînement peut restituer la distribution réelle en échantillonnant ∝ poids (ou poids^alpha, curseur réalisme /
+  couverture — décision équipe apprentissage) ». Vérifié : `poids` est peuplé pour les DEUX branches (longs : effectif du
+  profil au catalogue ; courts : `n` du pivot, déjà posé par `sample_das_court`), numérique, jamais NA (assertion).
+- Tests : helpers — pondération au niveau fin (fixture 90 / 10, déjà en place), N = 1 sans suffixe, N = 3 suffixes `-a2`,
+  `-a3` uniques et sans remise, `nb_repli` aligné, `contenu_surcharge_campagne` avec N et NA ; SQLite — lignes longues ==
+  scénarios × N au rapport (N = 1 puis N = 3 sur les lots de C1 : suffixes uniques, contrôle vert, retour à N = 1
+  identique), identité anciens scripts sous leur surcharge NA, `poids` numérique non-NA sur les deux branches.
+  Vérifications : helpers 372 / 369, SQLite 191 / 191, démo et notebooks ± arrow verts.
+- **Q75 (consortium)** — les trois curseurs de composition du matériau d'apprentissage restent des décisions de
+  l'équipe apprentissage : le ré-échantillonnage ∝ `poids^alpha` (réalisme / couverture), le ratio courts / longs
+  (`RATIO_COURTS`, Q67) et le vecteur de variation narrative (tenues admin `NB_VARIANTES_ADMIN_LONGS`, variantes de DAS
+  par profil).
+- **Q76** — Les courts conservent 2 tenues admin par scénario (`NB_VARIANTES_ADMIN_COURTS`, héritage) SANS suffixe
+  d'`id_scenario` (deux lignes partagent l'identifiant du jeu de DAS, comme avant) ; aligner les courts sur le modèle « un
+  scénario = une tenue » serait la suite naturelle de Q74 — non fait ici.
