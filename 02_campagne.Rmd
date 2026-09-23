@@ -1,0 +1,433 @@
+---
+title: "02 — Produire une campagne de scénarios (le cycle courant)"
+output: html_notebook
+---
+
+```{r opts, include=FALSE}
+# Sécurité : un Knit ne doit JAMAIS lancer le pipeline (heures de calcul).
+# Les chunks s'exécutent uniquement au clic (bouton Run), pas au tricotage.
+knitr::opts_chunk$set(eval = FALSE)
+```
+
+> **Principe directeur : un notebook = UN parcours utilisateur, exécutable DE HAUT EN BAS sans rien
+> sauter.** Le déroulé complet est le mode d'emploi. Il n'y a **aucun chunk optionnel** dans ce fichier.
+> Préparer les données → `01_preparation_donnees.Rmd` ; réparer, migrer, mesurer → `03_outils_maintenance.Rmd`.
+
+## À qui, quand, prérequis, ce que vous aurez à la fin
+
+**À qui.** À la personne (médecin DIM, data manager) qui produit une **campagne** de scénarios : une campagne,
+c'est un lot de scénarios cliniques fictifs tirés en une fois, identifié par un nom court (`C1`, `C2`…), avec un
+seul fichier livrable à la fin. Le corpus se construit campagne après campagne.
+
+**Quand.** À chaque campagne : c'est le cycle courant. Une seule décision à prendre, au chunk
+`ouvrir_campagne` (le nom de la campagne et ses budgets) ; tout le reste s'exécute dans l'ordre.
+
+**Prérequis.** `01_preparation_donnees.Rmd` a été déroulé au moins une fois sur ce répertoire de travail
+(le tableau de bord affiche FAIT sur les lignes d'amont). **Aucune connexion à la base** : ce notebook ne
+lit que les magasins partagés (les dossiers de résultats communs) et peut tourner hors plateforme sur une
+copie de ces magasins. Un fichier `config_locale.R` à la racine du dépôt (voir 01). Sur la base réelle,
+comptez de quelques heures à une journée pour une campagne de 500 000 scénarios.
+
+**Ce que vous aurez à la fin.** Un **livrable unique** `<profil>/60_export_final/scenarios_<Cn>.parquet`
+(tous les scénarios de la campagne, séjours longs et courts, avec un fichier compagnon `_meta.yaml` qui décrit
+son contenu), un rapport de contrôle `rapport_<Cn>.txt`, un échantillon de relecture `echantillon_revue_<Cn>.csv`
+(50 scénarios lisibles, libellés inclus) et la campagne **inscrite au registre** — le registre est le livre de
+comptes du corpus : il mémorise, campagne après campagne, quels profils et quels jeux de diagnostics ont déjà
+servi, pour que la campagne suivante tire du neuf.
+
+**Relancer est sûr.** Chaque étape reprend ce qui est déjà sur le disque (paquets déjà tirés, sélection déjà
+faite) : après un plantage, Restart R, rejouez `session_campagne`, puis relancez le chunk interrompu. Une
+campagne déjà inscrite au registre est **close** : la relancer du haut ne re-tire rien (« sélection relue,
+aucune nouvelle sélection ») ; pour produire du neuf, on ouvre une nouvelle campagne.
+
+**Les chunks de ce notebook, dans l'ordre** (tout s'exécute) :
+
+| Chunk | Ce qu'il fait |
+|---|---|
+| `mode_demo` | *Hors plateforme seulement* : bascule sur une base fictive (à NE PAS exécuter sur la plateforme). |
+| `session` | Charge le code sans base, affiche la campagne courante, son statut au registre, l'empreinte de version, le tableau de bord. |
+| `ouvrir_campagne` | **La décision** : nom et budgets de la campagne, écrits dans `campagne.R` ; vidage (confirmé) des dossiers de travail des campagnes précédentes. |
+| `session_campagne` | Après le Restart R : recharge la session sous la nouvelle campagne (même code que `session`). |
+| `selection` | Choisit dans le catalogue les profils de séjours longs de la campagne (quota par diagnostic principal). |
+| `verif_selection` | Affiche le volume attendu et les diagnostics les plus pauvres. |
+| `tirage_longs` | Tire les diagnostics associés de chaque scénario long, par paquets (reprise et parallélisme). |
+| `tirage_courts` | Tire les scénarios de séjours courts de la campagne (budget = ratio × longs). |
+| `habillage` | Donne à chaque scénario long sa durée et ses modes d'entrée / sortie. |
+| `finalisation` | Assemble le livrable unique, les contrôles, le rapport, l'échantillon de revue. |
+| `registre` | **Inscrit la campagne au registre** : l'engagement de la campagne. |
+| `rapport` | Affiche le rapport de contrôle et l'état du registre. |
+| `revue` | Ouvre l'échantillon de relecture clinique (grille de lecture ci-dessous). |
+| `etat_final` | Ce que contient le livrable, et le tableau de bord de fin. |
+
+---
+
+# 0. Mode démo (hors plateforme uniquement)
+
+```{r mode_demo, eval=FALSE}
+# MODE DÉMO (optionnel) — données FICTIVES et ALÉATOIRES : aucune validité épidémiologique.
+# Sur la plateforme : NE PAS exécuter ce chunk. Hors plateforme : l'exécuter AVANT le chunk `session`.
+# Il installe un faux paquet pRatihque sur demo/base_demo.sqlite (créée si absente), copie le code dans
+# demo/resultats/projet_demo/ (stubs utils/referentiels), active la surcharge du profil « démo » (sorties
+# sous demo/resultats/) et pose SCENARIOS_PMSI_DEMO = 1 (le chunk `session` l'affiche). L'amont (catalogue)
+# doit avoir été produit par 01_preparation_donnees.Rmd en mode démo, ou par Rscript demo/lancer_demo.R.
+source("demo/session_demo.R")
+```
+
+# 1. Session : charger le code (sans base)
+
+Une « session » R, c'est l'état de la mémoire de R : après *Session → Restart R*, tout est oublié et il faut
+rejouer ce chunk. Il charge le code du profil **production** sans ouvrir de connexion et n'exécute aucune étape.
+Il affiche la campagne courante et son **statut au registre** (« jamais inscrite » = on peut la produire ;
+« déjà inscrite … — changez d'identifiant » = elle est close), la **surcharge active** (le fichier `campagne.R`
+qui porte la décision de campagne, ou « aucune ») et, pour chaque paramètre de campagne, sa valeur et sa
+**source** (`défaut config` ou `surcharge campagne (campagne.R)`). Il affiche aussi l'**empreinte de version**
+du code (voir `03_outils_maintenance.Rmd`, table des symptômes : « fonction inconnue »).
+
+```{r session}
+# Ce que fait ce chunk : charge config + code (profil production, aucune connexion), affiche campagne, statut au registre,
+#   surcharge active, source de chaque paramètre, empreinte de version et tableau de bord. N'exécute rien.
+# Ce que vous verrez : « Session chargée sans exécution », « CAMPAGNE = … | jamais inscrite au registre | surcharge active : … »,
+#   la liste des paramètres [source], l'empreinte, puis etat_pipeline() (amont FAIT, campagne À FAIRE : normal avant d'ouvrir).
+# Durée : quelques secondes. À rejouer après chaque Restart R.
+rm(list = ls())
+if (nzchar(Sys.getenv("SCENARIOS_PMSI_DEMO"))) {
+  cat("################  MODE DÉMO : base fictive, sorties sous demo/resultats/ — AUCUNE validité épidémiologique  ################\n")
+} else {
+  Sys.setenv(SCENARIOS_PMSI_PROFIL = "production")
+  # SCENARIOS_PMSI_SURCHARGE : posée par le chunk `ouvrir_campagne` (campagne.R), conservée par Restart R ;
+  # Sys.setenv(SCENARIOS_PMSI_SURCHARGE = "") pour revenir aux défauts de config.R (03_outils_maintenance.Rmd).
+}
+Sys.setenv(SCENARIOS_PMSI_ETAPES_SEULEMENT = "1")   # charger sans exécuter : les étapes se lancent chunk par chunk ci-dessous
+source("tirage.R")                                  # aucune connexion base ; racine du dépôt : SCENARIOS_PMSI_PATH ou config_locale.R
+cat(empreinte_version(PATH_PROJET)$texte, "\n")     # à comparer entre postes en cas de « fonction inconnue »
+cat("CAMPAGNE =", CAMPAGNE, "|", statut_campagne_registre(CAMPAGNE, lire_registre(DIR_REGISTRE()))$texte, "| surcharge active :", surcharge_active(), "\n")
+afficher_sources_campagne()   # valeur effective et source (défaut config / campagne.R) de chaque paramètre de campagne
+etat_pipeline()
+```
+
+*Si vous voyez* « Racine du projet inconnue » : `config_locale.R` manque (copiez `config_locale.exemple.R`).
+*Si le tableau de bord affiche* À FAIRE sur `etape_catalogue` ou `tirable_courts` : l'amont n'a pas été fait sur
+ce répertoire ; c'est `01_preparation_donnees.Rmd`. *Si la session affiche* « défaut config » partout alors que
+vous aviez ouvert une campagne : la variable de surcharge n'a pas survécu à une nouvelle session RStudio ;
+rejouez `ouvrir_campagne` (réécriture identique, acceptée).
+
+# 2. Ouvrir la campagne : LA décision (`ouvrir_campagne`)
+
+C'est le seul chunk à décision du notebook. Ses paramètres sont **en tête, en clair**, un commentaire chacun.
+Il les écrit dans `campagne.R` (un petit fichier à la racine du dépôt, jamais versionné) et l'active pour la
+session ; les défauts de doctrine restent dans `config.R`, qu'on n'édite jamais pour une campagne.
+
+Comment choisir :
+
+- **L'identifiant** (`CAMPAGNE_A_OUVRIR`) : court, jamais utilisé (`C3` après `C2`). Une campagne déjà inscrite
+  au registre est close : le chunk `session_campagne` vous le dira (« déjà inscrite … — changez d'identifiant »).
+- **Le budget longs** (`NB_CRH_CIBLE_CAMP`) : le nombre de scénarios de séjours longs visé. C'est un ordre de
+  grandeur, pas un engagement : le réalisé est inférieur (les doublons sont éliminés, le rapport les chiffre).
+  Exemple : 500 000 pour une campagne de production ; 20 000 pour une campagne d'essai.
+- **k** (`NB_LIGNES_PAR_DP_CAMP`) : combien de profils différents par diagnostic principal. À k = 1, un seul
+  profil par diagnostic reçoit toutes les variantes ; à k = 5, cinq profils s'en partagent. Leçon du premier
+  tirage réel : à k = 1 on demande trop de variantes à une seule strate et l'unicité en élimine la moitié — k = 5
+  est recommandé pour une grosse campagne.
+- **Le registre** (`REGISTRE_ACTIF_CAMP`) : `TRUE` en production (la campagne compte pour les suivantes).
+  `FALSE` seulement pour un essai que l'on ne veut pas inscrire.
+- **Les courts** : `RATIO_COURTS_CAMP` = combien de scénarios de séjours courts pour un scénario long
+  (1.0 = autant ; valeur provisoire, à calibrer avec l'équipe apprentissage) ; ou `NB_CRH_CIBLE_COURTS_CAMP`
+  pour imposer un nombre absolu (sinon `NULL`).
+- **Les tenues admin** (`NB_VARIANTES_ADMIN_*_CAMP`) : combien de « tenues » (durée + modes d'entrée / sortie)
+  par scénario. 1 = un scénario, une tenue (le défaut). N > 1 démultiplie les lignes du livrable.
+
+Le chunk affiche ensuite les dossiers de travail des **campagnes précédentes** (`40_campagnes/<C>/` : sélection,
+paquets tirés, habillé — des fichiers transitoires, reconstructibles) et propose de les vider derrière
+`JE_CONFIRME_NOUVELLE_CAMPAGNE`. Ce vidage **ne touche jamais** le registre ni les livrables des campagnes passées.
+
+```{r ouvrir_campagne}
+# Ce que ce chunk TOUCHE : écrit campagne.R à la racine (non versionné) et pose SCENARIOS_PMSI_SURCHARGE pour la session ;
+#   si JE_CONFIRME_NOUVELLE_CAMPAGNE = TRUE, SUPPRIME les dossiers 40_campagnes/<autres campagnes>/ (sélection, paquets, habillé).
+# Ce qu'il ne touche JAMAIS : config.R, config_locale.R, le registre (50_registre/), les livrables (60_export_final/), les magasins partagés.
+# Ce que vous verrez : « surcharge campagne écrite : … — Restart R puis chunk session », puis la liste des dossiers transitoires
+#   d'autres campagnes et « Rien vidé » (ou « Vidé : … » si confirmé). En mode démo : la campagne est pilotée par la surcharge démo.
+# Si vous voyez « surcharge campagne refusée : le PALIER … est actif » : un palier de mesure est en cours (03_outils_maintenance.Rmd,
+#   chunk vider_palier), retirez-le d'abord. Durée : instantané.
+CAMPAGNE_A_OUVRIR   <- "C2"        # identifiant court ([A-Za-z0-9_-]) : nouveau, jamais inscrit au registre
+NB_CRH_CIBLE_CAMP   <- 500000L     # budget de scénarios LONGS visé (ordre de grandeur, pas un engagement ; 20000L pour un essai)
+NB_LIGNES_PAR_DP_CAMP <- 1L        # k profils distincts par diagnostic principal (5L recommandé pour une grosse campagne)
+REGISTRE_ACTIF_CAMP <- TRUE        # TRUE en production : la campagne compte pour les suivantes ; FALSE = essai non inscrit
+RATIO_COURTS_CAMP   <- 1.0         # scénarios courts = RATIO × scénarios longs attendus — PROVISOIRE, à calibrer avec l'équipe apprentissage
+NB_CRH_CIBLE_COURTS_CAMP <- NULL   # NULL = le ratio ci-dessus ; un entier (ex. 250000L) impose un budget courts absolu
+NB_VARIANTES_ADMIN_LONGS_CAMP <- 1L  # tenues admin (durée + modes) par scénario long : 1 = un scénario, une tenue ; N > 1 : N tenues, lignes × N
+NB_VARIANTES_ADMIN_COURTS_CAMP <- 1L # idem pour les courts (2 = ancienne convention v7.1.2)
+# PLAFONDS_DPEC_CAMP <- list("Accouchement normal mère" = 100L, "Bébé normal" = 100L)   # seulement pour ajuster les plafonds de classe pour CETTE campagne
+JE_CONFIRME_NOUVELLE_CAMPAGNE <- FALSE   # TRUE : vide les dossiers transitoires des campagnes PRÉCÉDENTES (le registre et les livrables restent)
+if (nzchar(Sys.getenv("SCENARIOS_PMSI_DEMO"))) {
+  campagne_ouverte <- CAMPAGNE
+  cat("MODE DÉMO : campagne", CAMPAGNE, "pilotée par la surcharge démo (SCENARIOS_PMSI_DEMO_CAMPAGNE) ; campagne.R n'est pas écrit.\n")
+} else {
+  campagne_ouverte <- CAMPAGNE_A_OUVRIR
+  ecrire_surcharge_campagne(CAMPAGNE_A_OUVRIR, NB_CRH_CIBLE_CAMP, NB_LIGNES_PAR_DP_CAMP, REGISTRE_ACTIF_CAMP,
+                            plafonds_dpec = if (exists("PLAFONDS_DPEC_CAMP")) PLAFONDS_DPEC_CAMP else NULL,
+                            nb_crh_cible_courts = NB_CRH_CIBLE_COURTS_CAMP, ratio_courts = RATIO_COURTS_CAMP, nb_variantes_admin = NB_VARIANTES_ADMIN_LONGS_CAMP,
+                            nb_variantes_admin_courts = NB_VARIANTES_ADMIN_COURTS_CAMP)
+}
+anciennes <- setdiff(basename(list.dirs(DIR_CAMPAGNES, recursive = FALSE)), campagne_ouverte)
+cat("campagne ouverte :", campagne_ouverte, "; dossiers transitoires d'autres campagnes (40_campagnes/) :", if (length(anciennes)) paste(anciennes, collapse = ", ") else "aucun", "\n")
+if (JE_CONFIRME_NOUVELLE_CAMPAGNE && length(anciennes)) {
+  unlink(file.path(DIR_CAMPAGNES, anciennes), recursive = TRUE); cat("Vidé :", paste(anciennes, collapse = ", "), "(le registre et les livrables sont intacts).\n")
+} else cat(paste0("Rien vidé", if (length(anciennes)) " : passer JE_CONFIRME_NOUVELLE_CAMPAGNE à TRUE pour supprimer ces dossiers transitoires (reconstructibles, jamais le registre)." else "."), "\n")
+```
+
+**Maintenant : Session → Restart R**, puis le chunk suivant. Le Restart est nécessaire pour que la nouvelle
+décision (`campagne.R`) soit chargée par le code ; la variable qui l'active survit au Restart. (En mode démo,
+enchaînez sans Restart.)
+
+# 3. Session sous la nouvelle campagne (`session_campagne`)
+
+Même code que `session`. La ligne `CAMPAGNE = …` doit maintenant afficher **votre** identifiant, avec
+« jamais inscrite au registre », et chaque paramètre de campagne la source `surcharge campagne (campagne.R)`.
+Sur la base réelle, rejouez aussi ce chunk après chaque Restart R entre deux étapes lourdes.
+
+```{r session_campagne}
+# Ce que fait ce chunk : identique à `session` — à rejouer après le Restart R qui suit ouvrir_campagne, et après tout Restart R.
+# Ce que vous verrez : « CAMPAGNE = <votre identifiant> | jamais inscrite au registre | surcharge active : …/campagne.R (CAMPAGNE …) »
+#   et chaque paramètre avec [surcharge campagne (campagne.R)]. Sinon : voir les messages sous `session`. Durée : quelques secondes.
+rm(list = ls())
+if (nzchar(Sys.getenv("SCENARIOS_PMSI_DEMO"))) {
+  cat("################  MODE DÉMO : base fictive, sorties sous demo/resultats/ — AUCUNE validité épidémiologique  ################\n")
+} else Sys.setenv(SCENARIOS_PMSI_PROFIL = "production")
+Sys.setenv(SCENARIOS_PMSI_ETAPES_SEULEMENT = "1")
+source("tirage.R")
+cat(empreinte_version(PATH_PROJET)$texte, "\n")
+cat("CAMPAGNE =", CAMPAGNE, "|", statut_campagne_registre(CAMPAGNE, lire_registre(DIR_REGISTRE()))$texte, "| surcharge active :", surcharge_active(), "\n")
+afficher_sources_campagne()
+etat_pipeline()
+```
+
+# 4. Sélectionner les profils de la campagne (`selection`)
+
+La **sélection** choisit, dans le catalogue, les profils de séjours longs de la campagne. Doctrine : **la
+représentativité des diagnostics passe avant celle des situations cliniques** — chaque diagnostic principal du
+catalogue reçoit sa part du budget (X scénarios par diagnostic), k profils distincts par diagnostic sont tirés
+(probabilité proportionnelle à leur effectif réel), chacun décliné en **variantes** (un même profil, des jeux
+de diagnostics associés différents). Les classes très standardisées (accouchement normal, bébé normal) sont
+plafonnées. Sous registre : les profils **jamais utilisés** d'abord ; quand un diagnostic n'en a plus, ses
+profils déjà utilisés sont **recyclés** avec des variantes nouvelles (numérotées après celles du registre) — un
+diagnostic épuisé reste ainsi présent à chaque campagne, avec des scénarios réellement nouveaux. Lettre par
+lettre pour tenir en mémoire ; figée sous graine : relancer relit la sélection, ne la refait jamais.
+
+```{r selection}
+# Ce que fait ce chunk : écrit 40_campagnes/<C>/selection/ (une part par population et par lettre, stats par DP, _meta.yaml).
+# Ce que vous verrez : par population, « == Sélection <pop> : <nb DP> DP, budget <b>, X = <x> par DP, k = <k> == », puis
+#   « <pop> : <l> lignes sélectionnées, <v> variantes attendues ; plafonds appliqués = … ; manque à gagner = … ».
+# Durée : quelques minutes sur le catalogue réel ; secondes en démo. Relancer = relecture (« sélection relue »).
+etape_selection_longs()      # budget = NB_CRH_CIBLE, mode = MODE_SELECTION, k = NB_LIGNES_PAR_DP (tous posés par campagne.R)
+```
+
+*Si vous voyez* « campagne … déjà inscrite au registre … campagne CLOSE » : cet identifiant a déjà servi ;
+retournez à `ouvrir_campagne` avec un identifiant neuf. *Si vous voyez* « selection/_meta.yaml : paramètres
+différents » : le dossier de cette campagne a été produit sous un autre budget ; ouvrez un autre identifiant,
+ou videz ce dossier (`03_outils_maintenance.Rmd`, chunk `vider_campagne_courante`).
+
+## 4b. Vérifier la sélection (`verif_selection`)
+
+```{r verif_selection}
+# Ce que fait ce chunk : lit selection/_meta.yaml et les stats par DP (lecture seule).
+# Ce que vous verrez : « campagne … ; volume attendu total : … (cible …) », le détail par population, les 30 DP les plus
+#   pauvres (manque à gagner = variantes demandées non disponibles) et les classes plafonnées. Durée : instantané.
+mt <- lire_si_present(FICHIER_SELECTION_META(), "etape_selection_longs()")
+if (!is.null(mt)) {
+  cat("campagne", mt$CAMPAGNE, "; volume attendu total :", mt$volume_attendu, "(cible", mt$NB_CRH_CIBLE, ")\n"); str(mt$par_population)
+  stats_dp <- do.call(rbind, lapply(names(POPULATIONS), function(p){ d <- lire_si_present(file.path(DIR_SELECTION(p), "selection_longs_stats_dp.csv"), "etape_selection_longs()"); if (is.null(d)) NULL else cbind(population = p, d) }))
+  if (!is.null(stats_dp)) {
+    print(head(stats_dp[order(-stats_dp$manque_a_gagner), c("population", "dp", "groupe", "lignes_disponibles", "X_dp", "manque_a_gagner")], 30))   # DP les plus pauvres
+    print(aggregate(variantes ~ population + groupe, stats_dp[stats_dp$plafonne, ], sum))                                                          # classes DPEC plafonnées
+  }
+}
+```
+
+# 5. Tirer les diagnostics associés des séjours longs (`tirage_longs`)
+
+Chaque scénario long part de sa **graine** (les deux diagnostics associés réels de son profil) et reçoit une
+**complétion** tirée au sort dans la table de référence de sa strate (même diagnostic principal, sexe, âge,
+GHM), chaque code ayant la probabilité de sa fréquence réelle. Le travail se fait par **paquets** (« chunks »)
+écrits un à un sur le disque : après un plantage, on relance tel quel et seuls les paquets manquants sont
+refaits, avec exactement le même résultat qu'une exécution d'une traite (une graine aléatoire par paquet).
+
+**Étape lourde** sur la base réelle : Restart R avant (puis `session_campagne`). Par défaut, tout est tiré dans
+cette session. Pour aller plus vite, plusieurs sessions R peuvent se partager les paquets : chacune reçoit une
+**plage** disjointe (`chunk_range = c(i, j)`) et une population, toutes écrivent dans le même dossier — le
+nombre de paquets par population est dans le fichier compagnon `longs_chunks_meta.yaml` après le premier appel.
+
+```{r tirage_longs}
+# Ce que fait ce chunk : écrit 40_campagnes/<C>/chunks/<population>/longs_chunk_XXXX.parquet (un paquet à la fois, reprise sûre).
+# Ce que vous verrez : la bannière (CAMPAGNE, NB_CRH_CIBLE effectif, surcharge active), puis une ligne par paquet avec son débit
+#   (scénarios/s) et, tous les 10 paquets, une extrapolation du temps restant ; « déjà présent, sauté » à la reprise.
+# Durée : des heures pour 500 000 scénarios en une session (le débit affiché permet d'extrapoler) ; secondes en démo.
+# Parallélisme (facultatif) : dans CHAQUE session, jouer `session_campagne` puis UNE plage disjointe, ex. :
+#   session 1 : etape_tirage_das_longs(chunk_range = c(1, 25),  populations = "adulte")
+#   session 2 : etape_tirage_das_longs(chunk_range = c(26, 50), populations = "adulte")
+#   session 3 : etape_tirage_das_longs(populations = "pediatrie")
+if (palier_actif()) cat("ATTENTION : un PALIER de mesure est actif (", surcharge_active(), ") : ce tirage utiliserait le budget de mesure, pas la campagne. Videz le palier (03_outils_maintenance.Rmd) et Restart R d'abord.\n") else
+  etape_tirage_das_longs()   # tout, en une session ; chunk_range = c(i, j) et populations = "adulte" pour une plage (voir ci-dessus)
+```
+
+*Si vous voyez* « découpage incompatible avec les chunks existants … attendu … ; reçu … » : le découpage en
+paquets a changé (budget ou paramètres de chunking) et le dossier contient des paquets d'un autre découpage ; le
+garde-fou refuse de mélanger — videz le dossier de la campagne (`03_outils_maintenance.Rmd`,
+`vider_campagne_courante`) ou ouvrez un autre identifiant.
+
+# 6. Tirer les scénarios de séjours courts (`tirage_courts`)
+
+Les **séjours courts** (0 à 2 nuits) ont le même statut que les longs dans le corpus. Leur traitement diffère :
+leurs diagnostics associés sont notoirement sous-codés en routine, donc on ne recopie pas ce sous-codage — on
+**sature** chaque scénario avec des maladies chroniques tirées selon leur prévalence chez les patients de même
+âge et sexe hospitalisés longtemps (là où le codage est complet). Le **budget** = `RATIO_COURTS` × volume longs
+attendu de la sélection (ou le budget absolu posé à l'ouverture), réparti sur les **pivots** du catalogue des
+courts au prorata de leur effectif ; sous registre, les variantes reprennent après celles déjà inscrites (aucun
+re-tirage). Même mécanique de paquets et de plages que les longs (`chunk_range`).
+
+```{r tirage_courts}
+# Ce que fait ce chunk : écrit 40_campagnes/<C>/chunks_courts/ puis habille/courts/scenarios_courts.parquet + _meta.yaml.
+# Ce que vous verrez : « CAMPAGNE = … ; budget courts = N (source : ratio … ) », « tirable P pivots, T tirés (vierges = …,
+#   recyclés = …) », une ligne par paquet, puis le nombre de scénarios gardés / demandés.
+# Durée : de quelques minutes à une heure sur la base réelle selon le budget ; secondes en démo.
+etape_tirage_courts()        # budget = 12345L pour imposer un budget absolu à cet appel ; chunk_range = c(i, j) par session parallèle
+```
+
+*Si vous voyez* « budget courts : NB_CRH_CIBLE_COURTS est NULL et le volume longs attendu de la campagne est
+inconnu » : le ratio a besoin du volume attendu de la sélection ; remontez au chunk `selection`. *Si vous voyez*
+« campagne CLOSE côté courts » : cet identifiant a déjà des courts inscrits ; nouvel identifiant (`ouvrir_campagne`).
+
+# 7. Habiller les scénarios longs (`habillage`)
+
+L'**habillage administratif** donne à chaque scénario long une durée de séjour et des modes d'entrée et de
+sortie, tirés parmi les combinaisons observées dans la vraie base pour sa strate (au poids des effectifs).
+Quand la strate fine est vide, l'étape **replie** sur une strate plus large (la classe d'âge à la place de
+l'âge exact, puis mode d'hospitalisation × classe d'âge × racine de GHM) et le note dans la colonne
+`repli_admin` (0 = strate fine). Jamais de valeur vide en silence : si aucun niveau ne convient, l'étape
+s'arrête en nommant le profil. Lit les paquets par lots ; exige un jeu de paquets complet. Restart R avant sur
+la base réelle.
+
+```{r habillage}
+# Ce que fait ce chunk : écrit 40_campagnes/<C>/habille/<population>/lot_XXXX.parquet (relecture des paquets par lots).
+# Ce que vous verrez : une ligne par lot, la distribution de repli_admin (0 / 1 / 2), « zéro NA d'habillage ».
+# Durée : dizaines de minutes sur la base réelle ; secondes en démo. Exige tous les paquets : sinon « population … : n / N chunks
+#   présents. Lancez etape_tirage_das_longs() (plages manquantes) d'abord » — remontez au chunk tirage_longs.
+etape_habillage_longs()      # populations = "adulte" pour une seule population
+```
+
+*Si vous voyez* « aucun candidat admin à AUCUN niveau » : la photographie des modes / durées ne couvre pas ce
+profil ; c'est un cas de maintenance (élargir les années de la photographie, `01`, chunk `references` sous
+`FORCER_REFS`) — jamais de valeur vide silencieuse.
+
+# 8. Finaliser : le livrable unique, le rapport, l'échantillon (`finalisation`)
+
+Assemble **un seul fichier livrable** pour la campagne : tous les scénarios longs (toutes populations) **et** les
+courts, avec une colonne `branche` (`long` / `court`) en tête. Applique les contrôles (aucun code E669 résiduel,
+aucune valeur d'habillage vide, durée dans le périmètre de sa branche, identifiants uniques), élimine les
+doublons, écrit le fichier compagnon `_meta.yaml` (volumes par branche, ratio courts réalisé, familles de
+colonnes), le **rapport** de contrôle, l'**échantillon de revue** (50 scénarios lisibles) et le top 30 des
+diagnostics associés par CMD. Garde-fou : le livrable d'une **autre** campagne n'est jamais écrasé (stop) ; la
+même campagne est réécrite à l'identique. Restart R avant sur la base réelle.
+
+```{r finalisation}
+# Ce que fait ce chunk : écrit <profil>/60_export_final/scenarios_<C>.parquet + _meta.yaml, rapport_<C>.txt, echantillon_revue_<C>.csv,
+#   top30_das_par_cmd_<C>.csv ; inscrit aussi le registre en fin de course quand REGISTRE_ACTIF est TRUE (le chunk suivant le confirme).
+# Ce que vous verrez : « corpus <C> : dossier créé », une ligne par lot relu, « livrable monofichier : N lignes (longs = …, courts = …) »,
+#   puis le rapport complet imprimé (critère : « TOTAL anomalies = 0 »). Durée : dizaines de minutes en production ; secondes en démo.
+etape_finalisation()         # fusionner = TRUE pour forcer un fichier unique au-delà de SEUIL_MONOFICHIER
+etat_pipeline()
+```
+
+*Si vous voyez* « le dossier … porte un _meta.yaml d'une AUTRE campagne » : deux campagnes se disputent le même
+identifiant ; rien n'a été écrasé — ouvrez un autre identifiant. *Si vous voyez* « scénarios courts de la
+campagne absents » : remontez au chunk `tirage_courts`.
+
+# 9. Inscrire la campagne au registre (`registre`)
+
+**C'est l'engagement de la campagne.** Le registre (`<profil>/50_registre/registre_tirages/registre_<C>.parquet`)
+grave, pour chaque scénario produit, son profil, son numéro de variante et l'empreinte de son jeu de diagnostics,
+dans les deux branches (longs et courts). C'est lui qui garantit que la campagne suivante tirera du neuf. **Une
+campagne finalisée mais non inscrite est un poison silencieux** : ses scénarios seraient re-tirés à la campagne
+suivante sans que rien ne l'indique — c'est arrivé en exploitation réelle. Ce chunk est donc dans le fil nominal,
+distinct et visible. La finalisation l'a déjà écrit quand le registre est actif : ce chunk le confirme (même
+contenu = rien réécrit, le registre est append-only et ne se réécrit jamais) et l'écrit s'il manquait. Sous
+`REGISTRE_ACTIF <- FALSE` (posé à l'ouverture), il affiche « registre inactif — rien à inscrire ».
+
+La marche arrière existe, bruyante et confirmée : si la revue clinique disqualifie la campagne, `03_outils_maintenance.Rmd`,
+chunk `oublier_campagne`, retire ses lignes du registre (le livrable n'est pas touché).
+
+```{r registre}
+# Ce que ce chunk TOUCHE : registre_<C>.parquet dans 50_registre/registre_tirages/ (ajout ; jamais de réécriture d'un contenu différent).
+# Ce qu'il ne touche JAMAIS : les registres des autres campagnes, le livrable, les dossiers transitoires.
+# Ce que vous verrez : « registre <C> : N scénarios (L longs, K courts), P profils, D DP -> registre_<C>.parquet », puis le statut
+#   « déjà inscrite au registre : N scénarios … » ; ou « registre inactif — rien à inscrire » si REGISTRE_ACTIF est FALSE.
+# Si vous voyez « surcharge de PALIER active » : un palier de mesure est en cours, il n'écrit jamais au registre (03, vider_palier).
+if (isTRUE(REGISTRE_ACTIF)) etape_registre_campagne() else cat("registre inactif (REGISTRE_ACTIF = FALSE posé à l'ouverture) — rien à inscrire : cette campagne ne comptera pas pour les suivantes.\n")
+cat("CAMPAGNE =", CAMPAGNE, "|", statut_campagne_registre(CAMPAGNE, lire_registre(DIR_REGISTRE()))$texte, "\n")
+```
+
+# 10. Lire le rapport de contrôle (`rapport`)
+
+Le rapport (`rapport_<C>.txt`, date en première ligne) : volumes réalisés contre visés par population, doublons
+éliminés, distribution du nombre de diagnostics associés, codes imprécis, contrôles §8.2 (critère : **« TOTAL
+anomalies = 0 »**), habillage (zéro NA, répartition du repli), section campagne (diagnostics vierges / recyclés,
+consommation cumulée du catalogue, diagnostics proches de l'épuisement). Puis l'état du registre.
+
+```{r rapport}
+# Ce que fait ce chunk : affiche rapport_<C>.txt et les agrégats du registre (lecture seule).
+# Ce que vous verrez : le rapport complet, puis « campagnes : n ; scénarios cumulés : … ; profils consommés : … » et une table
+#   par campagne (nb_longs / nb_courts). Avant la finalisation : « rapport_<C>.txt absent — produit par etape_finalisation() ».
+cat(lire_si_present(FICHIER_RAPPORT(), "etape_finalisation()"), sep = "\n")
+reg <- lire_registre(DIR_REGISTRE())
+cat("campagnes :", reg$nb_campagnes, "; scénarios cumulés :", reg$nb_scenarios, "; profils consommés :", nrow(reg$par_profil), "\n")
+reg$par_campagne   # nb_longs / nb_courts par campagne (registre commun aux deux branches)
+```
+
+# 11. La revue clinique (`revue`)
+
+L'échantillon (`echantillon_revue_<C>.csv`, 50 scénarios, moitié courts moitié longs) est fait pour être **lu par
+un médecin** : une ligne par scénario avec le diagnostic principal et son libellé, les diagnostics associés avec
+leurs libellés (`[G]` marque les deux codes de la graine, issus du réel ; les autres sont la complétion tirée),
+l'âge, le sexe, le GHM, la durée, les modes d'entrée et de sortie.
+
+**Grille de lecture**, scénario par scénario :
+
+1. Le diagnostic principal est-il plausible pour ce GHM, cet âge, ce sexe ?
+2. Les diagnostics associés sont-ils compatibles entre eux et avec le principal (pas de doublon d'une même
+   maladie, pas d'incompatibilité de sexe ou d'âge, chronicités plausibles) ?
+3. La durée et les modes d'entrée / sortie sont-ils cohérents avec le type de séjour (un décès ou un
+   transfert en réanimation sur un séjour de 0 nuit doit vous arrêter) ?
+4. Aucune case vide sur la durée et les modes (les contrôles automatiques l'interdisent : le voir ici serait
+   une anomalie à signaler).
+5. Le scénario pris dans son ensemble raconte-t-il un séjour crédible ?
+
+Notez chaque anomalie avec l'`id_scenario`. Une ou deux invraisemblances isolées : à consigner. Un défaut
+systématique : la campagne est **disqualifiée** — ne la livrez pas, et retirez-la du registre
+(`03_outils_maintenance.Rmd`, chunk `oublier_campagne`) pour que ses scénarios ne bloquent pas les suivants. La
+revue clinique a déjà trouvé un défaut que les contrôles automatiques avaient manqué : elle fait partie du processus.
+
+```{r revue}
+# Ce que fait ce chunk : ouvre l'échantillon de revue et le top 30 des DAS par CMD dans le visualiseur (lecture seule).
+# Ce que vous verrez : deux tables (View) ; branche, id_scenario, dp + libellé, das_libelles ([G] = graine réelle), âge, sexe,
+#   durée, modes. Avant la finalisation : message « absent — produit par etape_finalisation() ». Durée : instantané.
+revue <- lire_si_present(FICHIER_REVUE(), "etape_finalisation()"); if (!is.null(revue)) View(revue)   # csv2 détecté ; deux branches (court / long)
+top30 <- lire_si_present(FICHIER_TOP30(), "etape_finalisation()"); if (!is.null(top30)) View(top30)
+```
+
+# 12. Ce que vous avez à la fin (`etat_final`)
+
+Le livrable de la campagne lu par le lecteur unique (fichier unique ou parts, sans charger les colonnes inutiles),
+compté par branche, population et classe DPEC ; puis le tableau de bord, où la ligne `etape_finalisation` affiche
+le livrable de cette campagne et la ligne `registre_tirages` la compte.
+
+```{r etat_final}
+# Ce que fait ce chunk : lit le _meta.yaml du livrable et compte ses lignes par branche × population × DPEC ; puis etat_pipeline().
+# Ce que vous verrez : « scenarios_<C>.parquet : N lignes ; familles de colonnes : … », une table de comptes, le tableau de bord.
+# Durée : quelques secondes (le livrable est lu colonnes utiles seulement). Ensuite : livrer le fichier ; prochaine campagne = ce notebook du haut.
+meta_f <- lire_si_present(FICHIER_LIVRABLE_META(), "etape_finalisation()")
+corpus <- lire_corpus_final(colonnes = c("branche", "population", "DPEC"))   # lecteur unique à repli (jamais un dataset arrow direct dans un notebook)
+if (is.null(corpus)) cat("livrable", CAMPAGNE, "absent (", FICHIER_LIVRABLE(), ") — produit par etape_finalisation(), pas encore exécutée (voir etat_pipeline()).\n") else {
+  cat(FICHIER_LIVRABLE(), ":", nrow(corpus), "lignes ; familles de colonnes :", paste(names(meta_f$familles_colonnes), collapse = ", "), "\n")
+  print(corpus |> dplyr::count(branche, population, DPEC))
+}
+etat_pipeline()
+```

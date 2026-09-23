@@ -53,10 +53,27 @@ BASE NATIONALE ──► EXTRACTION ──► comptes agrégés (parquet) ──
   de ce qui a déjà servi.
 
 Le détail des mécanismes et de leurs justifications : **[VISITE_GUIDEE.md](VISITE_GUIDEE.md)**.
-Le mode d'emploi opérationnel : **[RUN.md](RUN.md)** et les deux notebooks
-**[RUN.Rmd](RUN.Rmd)** (extraction) / **[RUN_aval.Rmd](RUN_aval.Rmd)**
-(exploitation). L'historique tracé de chaque modification :
-**[MODIFICATIONS_V8.md](MODIFICATIONS_V8.md)**.
+Le mode d'emploi opérationnel : trois notebooks, **un par parcours utilisateur, exécutables de haut en
+bas** (voir « Par où commencer »), et leur référence texte **[RUN.md](RUN.md)**. L'historique tracé de
+chaque modification : **[MODIFICATIONS_V8.md](MODIFICATIONS_V8.md)**.
+
+## Par où commencer
+
+Un notebook = **un** parcours, exécutable **de haut en bas sans rien sauter** : le déroulé complet est le
+mode d'emploi. Chaque notebook commence par « à qui, quand, prérequis, ce que vous aurez à la fin », puis
+la liste de ses chunks ; chaque chunk dit ce qu'il fait, ce qu'il affiche si tout va bien et combien de
+temps il prend, en français courant, pour un collègue qui découvre le projet.
+
+| Vous voulez… | Ouvrez |
+|---|---|
+| Installer le pipeline sur un répertoire de travail, étendre le périmètre (nouvelle année, nouveaux établissements), ou régénérer un magasin qu'un garde-fou vous a signalé | **[01_preparation_donnees.Rmd](01_preparation_donnees.Rmd)** (rarement ; nécessite la base) |
+| Produire une campagne de scénarios — le cycle courant | **[02_campagne.Rmd](02_campagne.Rmd)** (à chaque campagne ; sans base) |
+| Réparer ou migrer : changer de répertoire de travail, adopter une campagne ancienne, reconstruire un registre, mesurer un débit, retirer du registre une campagne disqualifiée par la revue clinique | **[03_outils_maintenance.Rmd](03_outils_maintenance.Rmd)** (seulement si une situation précise vous y envoie ; table « symptôme → chunk » en tête) |
+| Comprendre pourquoi c'est construit ainsi | **[VISITE_GUIDEE.md](VISITE_GUIDEE.md)** |
+
+Historique : les deux anciens notebooks (`RUN.Rmd` pour l'extraction, `RUN_aval.Rmd` pour l'exploitation)
+ont été supprimés au profit de ces trois parcours (chantier « notebooks par parcours utilisateur »,
+MODIFICATIONS_V8.md section 25, qui donne la correspondance chunk par chunk) ; l'historique git en garde la trace.
 
 ## Principes clés
 
@@ -113,18 +130,18 @@ cat demo/resultats/production/60_export_final/echantillon_revue_DEMO.csv
 
 **Attention : données aléatoires, aucune validité épidémiologique.** La démo sert à voir
 tourner les étapes, les garde-fous et les livrables ; le détail (profil « démo », tables,
-sorties) est dans [demo/README.md](demo/README.md). Les deux notebooks `RUN.Rmd` et `RUN_aval.Rmd`
-se déroulent aussi tels quels sur la base démo (chunk « Mode démo » en tête) : ils sont la
-documentation exécutable du projet. L'intégration continue exécute la démo et les deux notebooks
-à chaque push.
+sorties) est dans [demo/README.md](demo/README.md). Les deux notebooks de parcours `01_preparation_donnees.Rmd`
+et `02_campagne.Rmd` se déroulent aussi tels quels sur la base démo, de haut en bas (chunk « Mode démo » en
+tête) : ils sont la documentation exécutable du projet. L'intégration continue exécute la démo et les deux
+notebooks, de haut en bas, avec et sans arrow, à chaque push.
 
 **Sur la plateforme sécurisée** — créer `config_locale.R` à partir de `config_locale.exemple.R`
 (le poste : racine du dépôt, `PATH_RESULTS`, `pschema` ; jamais versionné ; ou la variable
 d'environnement `SCENARIOS_PMSI_PATH` pour la seule racine) — `config.R` ne porte que la doctrine et
-les défauts, la campagne s'ouvre depuis le notebook (`campagne.R`, chunk `ouvrir_campagne`) —
-puis suivre [RUN.md](RUN.md) : profil
-diagnostic (mesure de l'apport de chaque année/catégorie d'établissements),
-choix du périmètre, puis profil production. Prérequis non distribués ici :
+les défauts, la campagne s'ouvre depuis `02_campagne.Rmd` (`campagne.R`, chunk `ouvrir_campagne`) —
+puis dérouler `01_preparation_donnees.Rmd` (préparer les données : partiels, références, catalogue ; l'étude
+de périmètre — apport de chaque année / catégorie d'établissements — s'y lit au chunk `apports`), puis
+`02_campagne.Rmd` à chaque campagne ; [RUN.md](RUN.md) en est la référence texte. Prérequis non distribués ici :
 le paquet `pRatihque` (ATIH), et les référentiels externes attendus par
 `referentiels.R` (table CIM-10 avec libellés, caractérisation
 aigu/chronique des codes) ; `referentiels/codes_diabete.yaml` (doctrine diabète,
@@ -134,7 +151,7 @@ listes de codes) est versionné ici.
 
 | Fichier / dossier | Rôle |
 |---|---|
-| `config.R` | Paramètres, profils diagnostic/production, surcharges, bloc unique des chemins (arborescence par étapes : magasins partagés `00_partiels`…`30_courts`, dossiers par profil `40_campagnes`, `50_registre`, `60_export_final`) ; `config_locale.exemple.R` = modèle de la configuration propre au poste (`config_locale.R`, non versionné : racine du dépôt, `PATH_RESULTS`, `pschema`) ; la décision d'exploitation (`campagne.R` / `palier.R`, non versionnés) est écrite depuis `RUN_aval.Rmd` |
+| `config.R` | Paramètres, profils diagnostic/production, surcharges, bloc unique des chemins (arborescence par étapes : magasins partagés `00_partiels`…`30_courts`, dossiers par profil `40_campagnes`, `50_registre`, `60_export_final`) ; `config_locale.exemple.R` = modèle de la configuration propre au poste (`config_locale.R`, non versionné : racine du dépôt, `PATH_RESULTS`, `pschema`) ; la décision d'exploitation (`campagne.R` / `palier.R`, non versionnés) est écrite depuis les notebooks (`02_campagne.Rmd` / `03_outils_maintenance.Rmd`) |
 | `helpers.R` | Fonctions pures (sections A→I, une par chantier ; gardes des magasins, livrable, plan de réorganisation) |
 | `etapes.R` | Requêtes base + fonctions d'étape + tableau de bord + `etape_reorganiser` |
 | `extraction.R` | Lanceur extraction (46 lignes) |
@@ -143,9 +160,10 @@ listes de codes) est versionné ici.
 | `tests/` | Deux suites + instantanés de référence des versions antérieures |
 | `utils.R`, `referentiels.R`, `exclusions.R` | Héritage v7 toujours utilisé (les scripts v7 historiques, sources des diffs de la règle d'or, sont relus par `git show e9f70c7:<fichier>`) |
 | `demo/` | Mode démo hors plateforme : générateur de données fictives, mock `pRatihque`, base SQLite, lanceur, session démo pour les notebooks et lanceur de notebooks ([demo/README.md](demo/README.md)) |
-| `.github/workflows/tests.yml` | Intégration continue : les deux suites puis la démo bout en bout |
+| `.github/workflows/tests.yml` | Intégration continue : les deux suites, la démo bout en bout, puis les notebooks 01 et 02 déroulés de haut en bas, avec et sans arrow |
 | `VISITE_GUIDEE.md` | La visite guidée : où est chaque chose et pourquoi |
-| `RUN.md`, `RUN.Rmd`, `RUN_aval.Rmd` | Séquences opérationnelles |
+| `01_preparation_donnees.Rmd`, `02_campagne.Rmd`, `03_outils_maintenance.Rmd` | Les trois parcours utilisateur (préparer les données / produire une campagne / outils d'exception) |
+| `RUN.md` | La référence texte des trois parcours + tables de référence (étapes, arborescence, règles de cache) |
 | `MODIFICATIONS_V8.md` | Journal exhaustif : provenance des blocs, écarts, questions Q1…Q40 |
 
 ## Données et confidentialité

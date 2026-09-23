@@ -1572,7 +1572,7 @@ if(!exists("%||%")) `%||%` <- function(a, b) if(is.null(a)) b else a
 message_courts_absent <- function(dir_courts_campagne){
   paste0("etape_finalisation : scénarios courts de la campagne absents (", sub("/$", "", dir_courts_campagne), "). ",
          "Lancez etape_tirage_courts() — étape DE CAMPAGNE, sans base, après etape_selection_longs() (budget = NB_CRH_CIBLE_COURTS, ou RATIO_COURTS × volume longs attendu) ; ",
-         "le tirable (30_courts/ref_pivots_courts.parquet, magasin partagé) et les refs viennent d'etape_refs() (extraction, RUN.Rmd).")
+         "le tirable (30_courts/ref_pivots_courts.parquet, magasin partagé) et les refs viennent d'etape_refs() (extraction, 01_preparation_donnees.Rmd).")
 }
 
 # --- H2. Corpus final nommé par CAMPAGNE : garde-fou sur le dossier existant --------------------
@@ -1803,7 +1803,7 @@ imprimer_plan_reorganisation <- function(plan){
 
 ## ---- J. Trois niveaux de paramètres : doctrine (config.R) / poste (config_locale.R) / campagne (campagne.R) ----
 # La décision d'exploitation d'une campagne ne s'édite plus dans config.R : elle s'écrit dans campagne.R (gitignoré),
-# depuis le notebook (chunk ouvrir_campagne), et s'active par SCENARIOS_PMSI_SURCHARGE — même mécanique que palier.R.
+# depuis le notebook 02_campagne.Rmd (chunk ouvrir_campagne), et s'active par SCENARIOS_PMSI_SURCHARGE — même mécanique que palier.R.
 # Les deux surcharges sont EXCLUSIVES ; la surcharge démo (troisième cas légitime) est hors de cette exclusivité.
 PARAMETRES_CAMPAGNE <- c("CAMPAGNE", "NB_CRH_CIBLE", "NB_LIGNES_PAR_DP", "REGISTRE_ACTIF", "PLAFONDS_DPEC", "NB_CRH_CIBLE_COURTS", "RATIO_COURTS", "NB_VARIANTES_ADMIN_LONGS", "NB_VARIANTES_ADMIN_COURTS")
 MARQUEUR_CAMPAGNE <- "SURCHARGE_CAMPAGNE_ACTIVE <- TRUE"
@@ -1813,7 +1813,7 @@ contenu_surcharge_campagne <- function(campagne, nb_crh_cible, nb_lignes_par_dp 
   if(!is.null(nb_variantes_admin) && length(nb_variantes_admin) != 1) stop("NB_VARIANTES_ADMIN_LONGS : entier >= 1 ou NA attendu", call. = FALSE)
   if(!is.character(campagne) || length(campagne) != 1 || !nzchar(campagne) || grepl("[^A-Za-z0-9_-]", campagne)) stop("CAMPAGNE : identifiant court obligatoire ([A-Za-z0-9_-])", call. = FALSE)
   if(!is.null(ratio_courts) && (!is.numeric(ratio_courts) || length(ratio_courts) != 1 || is.na(ratio_courts) || ratio_courts <= 0)) stop("RATIO_COURTS : nombre > 0 attendu", call. = FALSE)
-  c("# campagne.R — DÉCISION D'EXPLOITATION de la campagne (niveau campagne ; gitignoré ; écrit par le chunk ouvrir_campagne de RUN_aval.Rmd).",
+  c("# campagne.R — DÉCISION D'EXPLOITATION de la campagne (niveau campagne ; gitignoré ; écrit par le chunk ouvrir_campagne de 02_campagne.Rmd).",
     "# Activé par SCENARIOS_PMSI_SURCHARGE ; exclusif du palier (palier.R). Les défauts vivent dans config.R, le poste dans config_locale.R.",
     MARQUEUR_CAMPAGNE,
     "CAMPAGNE <- \"" %+% campagne %+% "\"",
@@ -1827,7 +1827,7 @@ contenu_surcharge_campagne <- function(campagne, nb_crh_cible, nb_lignes_par_dp 
     if(!is.null(nb_variantes_admin_courts)) "NB_VARIANTES_ADMIN_COURTS <- " %+% entier_R(nb_variantes_admin_courts, "NB_VARIANTES_ADMIN_COURTS") %+% "   # tenues admin par scénario court (N > 1 : id_scenario suffixé -aN ; 2 = v7.1.2)")
 }
 contenu_surcharge_palier <- function(nb_crh_cible = 100000L){
-  c("# palier.R — PALIER DE MESURE (budget réduit, hors registre) ; gitignoré ; écrit par le chunk palier_surcharge de RUN_aval.Rmd.",
+  c("# palier.R — PALIER DE MESURE (budget réduit, hors registre) ; gitignoré ; écrit par le chunk palier_surcharge de 03_outils_maintenance.Rmd.",
     "NB_CRH_CIBLE <- " %+% entier_R(nb_crh_cible, "NB_CRH_CIBLE"), MARQUEUR_PALIER, "REGISTRE_ACTIF <- FALSE   # imposé : un palier n'écrit jamais au registre")
 }
 # Type d'une surcharge d'après son contenu : "palier", "campagne", "autre" (ex. démo), "aucune" (vide / absente).
@@ -1844,7 +1844,7 @@ verifier_exclusivite_surcharges <- function(type_demande, chemin_actif, lignes_a
   if(type_actif %in% c("aucune", "autre") || type_actif == type_demande) return(list(ok = TRUE, message = NULL))
   autre <- if(type_actif == "palier") "le PALIER (" %+% chemin_actif %+% ")" else "la CAMPAGNE (" %+% chemin_actif %+% ")"
   list(ok = FALSE, message = "surcharge " %+% type_demande %+% " refusée : " %+% autre %+% " est actif. Retirez-le d'abord : " %+%
-         (if(type_actif == "palier") "chunk vider_palier (JE_CONFIRME) de RUN_aval.Rmd §5, ou Sys.setenv(SCENARIOS_PMSI_SURCHARGE = \"\") puis Restart R"
+         (if(type_actif == "palier") "chunk vider_palier (JE_CONFIRME_VIDAGE_PALIER) de 03_outils_maintenance.Rmd, ou Sys.setenv(SCENARIOS_PMSI_SURCHARGE = \"\") puis Restart R"
           else "Sys.setenv(SCENARIOS_PMSI_SURCHARGE = \"\") puis Restart R (campagne.R peut rester : il n'est actif que par SCENARIOS_PMSI_SURCHARGE)") %+% ", puis relancez ce chunk.")
 }
 # Source de chaque paramètre de campagne : "défaut config" ou "surcharge <type> (<fichier>)" si la surcharge active le définit.
@@ -2001,4 +2001,20 @@ verifier_adoption <- function(df_livrable, registre_lignes){
   reg <- vapply(b, function(x) sum(registre_lignes$branche == x), integer(1))
   list(ok = all(liv == reg), livrable = liv, registre = reg,
        texte = paste(sprintf("%s : livrable %d scénarios distincts / registre %d (%s)", b, liv, reg, ifelse(liv == reg, "égaux", "ÉCART")), collapse = " ; "))
+}
+
+## ---- L. Chantier « notebooks par parcours utilisateur » : empreinte de version du code ----
+# Empreinte affichée par le chunk `session` de chaque notebook : nombre de fonctions etape_* chargées + hash court (8 hex,
+# sha256) de la concaténation des fichiers de code. Pour les déploiements par copie manuelle : le cas réel « notebook à jour
+# + etapes.R ancien = fonction inconnue » doit se lire d'un coup d'œil (deux postes à jour affichent la même empreinte ;
+# 03_outils_maintenance.Rmd y renvoie). Pure : lit des fichiers, inspecte un environnement, n'écrit rien.
+FICHIERS_CODE <- c("config.R", "helpers.R", "etapes.R", "extraction.R", "tirage.R", "utils.R", "referentiels.R", "exclusions.R")
+empreinte_version <- function(racine, fichiers = FICHIERS_CODE, env = globalenv()){
+  chemins <- file.path(racine, fichiers); presents <- file.exists(chemins)
+  contenu <- unlist(lapply(chemins[presents], readLines, warn = FALSE), use.names = FALSE)
+  hash <- if(length(contenu)) substr(sha256_vec(paste(contenu, collapse = "\n")), 1, 8) else NA_character_
+  noms <- sort(grep("^etape_", ls(env), value = TRUE)); noms <- noms[vapply(noms, function(n) is.function(get(n, envir = env, inherits = FALSE)), logical(1))]
+  list(hash = hash, nb_etapes = length(noms), etapes = noms, fichiers = fichiers[presents], manquants = fichiers[!presents],
+       texte = sprintf("code : empreinte %s (%d fichiers%s) ; %d fonctions etape_* chargées", hash, sum(presents),
+                       if(any(!presents)) " ; ABSENTS : " %+% paste(fichiers[!presents], collapse = ", ") else "", length(noms)))
 }

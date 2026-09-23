@@ -871,13 +871,55 @@ dx <- file.path(tempdir(), "chunks_extrap"); unlink(dx, recursive = TRUE)
 lg <- utils::capture.output(r <- pmap_chunks(tibble::tibble(v = 1:25), function(v) tibble::tibble(v = v), chunk_size = 1, dossier = dx, prefixe = "t", seed_base = 1))
 ok("pmap_chunks : débit par chunk et extrapolation tous les 10 chunks (25 chunks -> 2 bannières, restant 15 puis 5)",
    sum(grepl("— débit", lg)) == 25 && sum(grepl("restant dans la plage", lg)) == 2 && any(grepl("restant dans la plage : 15 ", lg)) && any(grepl("restant dans la plage : 5 ", lg)) && nrow(r) == 25)
-rmd <- lapply(c("RUN.Rmd", "RUN_aval.Rmd"), function(f) readLines(file.path(racine, f), warn = FALSE))
+# ---- chantier « notebooks par parcours utilisateur » (section 25) : trois notebooks, un parcours chacun, exécutables de haut en bas
+NOTEBOOKS <- c("01_preparation_donnees.Rmd", "02_campagne.Rmd", "03_outils_maintenance.Rmd")
+rmd <- lapply(NOTEBOOKS, function(f) readLines(file.path(racine, f), warn = FALSE)); names(rmd) <- NOTEBOOKS
+chunks_rmd <- function(l){ deb <- grep("^```\\{r", l); lapply(deb, function(i){ fin <- i + which(grepl("^```\\s*$", l[(i + 1):length(l)]))[1]; ent <- sub("^```\\{r\\s*([^}]*)\\}.*$", "\\1", l[i])
+  list(nom = trimws(strsplit(ent, ",")[[1]][1]), options = ent, code = l[(i + 1):(fin - 1)]) }) }
+ch_nb <- lapply(rmd, chunks_rmd); noms_nb <- lapply(ch_nb, function(x) vapply(x, `[[`, character(1), "nom"))
+code_chunk <- function(nb, nom) ch_nb[[nb]][[match(nom, noms_nb[[nb]])]]$code
 ok("notebooks : aucun appel direct à un dataset arrow (open_dataset / write_dataset) — lecteurs à repli seulement", !any(grepl("arrow::open_dataset|arrow::write_dataset|open_dataset\\(", unlist(rmd))))
-ok("notebooks : le chunk palier_surcharge passe par ecrire_surcharge_palier (REGISTRE_ACTIF <- FALSE imposé par contenu_surcharge_palier) ; chunk ouvrir_campagne avec paramètres en clair et ecrire_surcharge_campagne",
-   { l <- rmd[[2]]; i <- grep("^```\\{r palier_surcharge", l); j <- i + which(grepl("^```\\s*$", l[(i + 1):length(l)]))[1]
-     i2 <- grep("^```\\{r ouvrir_campagne", l); j2 <- i2 + which(grepl("^```\\s*$", l[(i2 + 1):length(l)]))[1]
-     any(grepl("ecrire_surcharge_palier\\(", l[i:j])) && !any(grepl("writeLines", l[i:j])) && length(i2) == 1 && i2 < i &&
-       any(grepl("^CAMPAGNE_A_OUVRIR\\s*<-\\s*\"", l[i2:j2])) && any(grepl("^NB_CRH_CIBLE_CAMP\\s*<-\\s*[0-9]+L", l[i2:j2])) && any(grepl("ecrire_surcharge_campagne\\(", l[i2:j2])) && !any(grepl("^CAMPAGNE\\s*<-", l)) })
+ok("notebooks : les trois parcours existent, les anciens notebooks sont supprimés, le principe « un notebook = UN parcours » est gravé en tête de chacun, noms de chunks uniques, bloc « À qui, quand, prérequis » en tête",
+   all(file.exists(file.path(racine, NOTEBOOKS))) && !any(file.exists(file.path(racine, c("RUN.Rmd", "RUN_aval.Rmd")))) && all(vapply(rmd, function(l) any(grepl("un notebook = UN parcours utilisateur", l)), logical(1))) &&
+     all(vapply(noms_nb, function(n) !anyDuplicated(n), logical(1))) && all(vapply(rmd, function(l) any(grepl("^## À qui, quand, prérequis", l)), logical(1))))
+ok("01 et 02 : parcours nominal — aucun chunk demo=FALSE, eval=FALSE seulement sur opts et mode_demo, chaque chunk ouvre sur un en-tête d'au moins deux lignes de commentaire (ce qu'il fait, ce qu'on verra, durée)",
+   all(vapply(NOTEBOOKS[1:2], function(nb){ x <- ch_nb[[nb]]; opt <- vapply(x, `[[`, character(1), "options"); n <- noms_nb[[nb]]
+     !any(grepl("demo\\s*=\\s*FALSE", opt)) && all(n[grepl("eval\\s*=\\s*FALSE", opt)] %in% c("opts", "mode_demo")) &&
+       all(vapply(x[n != "opts"], function(c) sum(grepl("^\\s*#", c$code[1:min(2, length(c$code))])) == 2, logical(1))) }, logical(1))))
+ok("03 : boîte à outils hors parcours — TOUS les chunks en eval=FALSE, chacun avec QUAND s'en servir / quand pas en tête, table « symptôme -> chunk » avec le cas « fonction inconnue -> version du code »",
+   { x <- ch_nb[[3]]; opt <- vapply(x, `[[`, character(1), "options"); all(grepl("eval\\s*=\\s*FALSE", opt[noms_nb[[3]] != "opts"])) &&
+     all(vapply(x[noms_nb[[3]] != "opts"], function(c) any(grepl("QUAND", c$code[1:min(6, length(c$code))])), logical(1))) && any(grepl("^## Symptôme", rmd[[3]])) && any(grepl("fonction inconnue", rmd[[3]])) })
+ok("02 : ordre nominal des chunks (session, ouvrir_campagne, session_campagne, selection, tirage_longs, tirage_courts, habillage, finalisation, registre, rapport, revue, etat_final) ; chunk registre = etape_registre_campagne gardé par REGISTRE_ACTIF (« registre inactif — rien à inscrire »), après la finalisation",
+   { n <- noms_nb[["02_campagne.Rmd"]]; attendu <- c("session", "ouvrir_campagne", "session_campagne", "selection", "tirage_longs", "tirage_courts", "habillage", "finalisation", "registre", "rapport", "revue", "etat_final"); r <- code_chunk("02_campagne.Rmd", "registre")
+     all(attendu %in% n) && !is.unsorted(match(attendu, n)) && any(grepl("^if \\(isTRUE\\(REGISTRE_ACTIF\\)\\) etape_registre_campagne\\(\\)", r)) && any(grepl("registre inactif", r)) })
+ok("02 : chunk ouvrir_campagne = LA décision — paramètres en clair (identifiant, budget, k, registre, ratio et budget courts, tenues admin = 1L), ecrire_surcharge_campagne, vidage des transitoires derrière JE_CONFIRME_NOUVELLE_CAMPAGNE <- FALSE, branche démo ; aucun `CAMPAGNE <-` en dur dans les notebooks",
+   { c2 <- code_chunk("02_campagne.Rmd", "ouvrir_campagne")
+     any(grepl("^CAMPAGNE_A_OUVRIR\\s*<-\\s*\"", c2)) && any(grepl("^NB_CRH_CIBLE_CAMP\\s*<-\\s*[0-9]+L", c2)) && any(grepl("^NB_LIGNES_PAR_DP_CAMP\\s*<-", c2)) && any(grepl("^REGISTRE_ACTIF_CAMP\\s*<-", c2)) &&
+       any(grepl("^RATIO_COURTS_CAMP\\s*<-", c2)) && any(grepl("^NB_CRH_CIBLE_COURTS_CAMP\\s*<-", c2)) && any(grepl("^NB_VARIANTES_ADMIN_LONGS_CAMP\\s*<-\\s*1L", c2)) && any(grepl("^NB_VARIANTES_ADMIN_COURTS_CAMP\\s*<-\\s*1L", c2)) &&
+       any(grepl("ecrire_surcharge_campagne\\(", c2)) && any(grepl("^JE_CONFIRME_NOUVELLE_CAMPAGNE\\s*<-\\s*FALSE", c2)) && any(grepl("SCENARIOS_PMSI_DEMO", c2)) && !any(grepl("^CAMPAGNE\\s*<-", unlist(rmd))) })
+ok("03 : palier_surcharge passe par ecrire_surcharge_palier (jamais writeLines) ; adoption = appel ACTIF d'etape_adopter_campagne avec arguments en tête (plus rien à décommenter) ; oublier_campagne = etape_oublier_campagne derrière JE_CONFIRME_OUBLI <- FALSE ; rétro-inscriptions longs et courts actives",
+   { p <- code_chunk("03_outils_maintenance.Rmd", "palier_surcharge"); a <- code_chunk("03_outils_maintenance.Rmd", "adoption"); o <- code_chunk("03_outils_maintenance.Rmd", "oublier_campagne")
+     rl <- code_chunk("03_outils_maintenance.Rmd", "retro_inscription_longs"); rc <- code_chunk("03_outils_maintenance.Rmd", "retro_inscription_courts")
+     any(grepl("ecrire_surcharge_palier\\(", p)) && !any(grepl("writeLines", p)) && any(grepl("^etape_adopter_campagne\\(", a)) && any(grepl("^CAMPAGNE_A_ADOPTER\\s*<-", a)) && any(grepl("^SOURCE_LONGS\\s*<-", a)) &&
+       any(grepl("^etape_oublier_campagne\\(", o)) && any(grepl("^JE_CONFIRME_OUBLI\\s*<-\\s*FALSE", o)) && any(grepl("^etape_retro_inscrire\\(", rl)) && any(grepl("^etape_retro_inscrire_courts\\(", rc)) })
+ok("01 : partiels puis références AVANT le catalogue (dépendance ref_distribution_e660), aucun tirage des courts, chunk tirable_courts de vérification, encadré FORCER_* ; le chunk session de chaque notebook affiche l'empreinte de version",
+   { n1 <- noms_nb[["01_preparation_donnees.Rmd"]]; match("partiels", n1) < match("references", n1) && match("references", n1) < match("catalogue", n1) && !any(grepl("^etape_tirage_courts\\(", rmd[[1]])) && "tirable_courts" %in% n1 &&
+     any(grepl("FORCER_CATALOGUE <- TRUE", rmd[[1]])) && all(vapply(NOTEBOOKS, function(nb) any(grepl("empreinte_version\\(", code_chunk(nb, "session"))), logical(1))) })
+ok("balayage : plus aucune référence aux anciens notebooks (RUN.Rmd, RUN_aval.Rmd) dans le code, les notebooks, la démo, la CI et la documentation courante (hors journal, instantanés et ligne « historique » du README)",
+   { fs <- c(list.files(racine, pattern = "\\.(R|Rmd|md|yml)$", full.names = TRUE), list.files(file.path(racine, "demo"), pattern = "\\.(R|md)$", full.names = TRUE), file.path(racine, ".github", "workflows", "tests.yml"))
+     fs <- fs[basename(fs) != "MODIFICATIONS_V8.md"]
+     !any(vapply(fs, function(f){ l <- readLines(f, warn = FALSE); any(grepl("RUN\\.Rmd|RUN_aval\\.Rmd", l[!grepl("[Hh]istorique", l)])) }, logical(1))) })
+cat("\n# empreinte de version du code (chunk session des notebooks)\n")
+dv <- file.path(tempdir(), "version_code"); unlink(dv, recursive = TRUE); dir.create(dv)
+writeLines(c("a <- 1", "b <- 2"), file.path(dv, "config.R")); writeLines("f <- function() 1", file.path(dv, "helpers.R"))
+env_v <- new.env(); assign("etape_a", function() 1, envir = env_v); assign("etape_b", function() 2, envir = env_v); assign("etape_pas_fonction", 3, envir = env_v); assign("autre", function() 4, envir = env_v)
+e1 <- empreinte_version(dv, c("config.R", "helpers.R", "absent.R"), env_v); e1b <- empreinte_version(dv, c("config.R", "helpers.R", "absent.R"), env_v)
+writeLines(c("a <- 1", "b <- 3"), file.path(dv, "config.R")); e2 <- empreinte_version(dv, c("config.R", "helpers.R", "absent.R"), env_v)
+ok("empreinte_version : hash court 8 hex déterministe, change avec le contenu d'un fichier, 2 fonctions etape_* comptées (objet non-fonction et autres noms ignorés), fichiers absents listés, texte prêt à afficher",
+   grepl("^[0-9a-f]{8}$", e1$hash) && identical(e1$hash, e1b$hash) && !identical(e1$hash, e2$hash) && e1$nb_etapes == 2L && identical(e1$etapes, c("etape_a", "etape_b")) && identical(e1$manquants, "absent.R") &&
+     grepl("ABSENTS : absent.R", e1$texte) && grepl("2 fonctions etape_\\* chargées", e1$texte) && grepl("^code : empreinte [0-9a-f]{8} \\(2 fichiers", e1$texte))
+ev <- empreinte_version(racine)
+ok("empreinte_version sur le dépôt : les 8 fichiers de code présents, hash 8 hex", length(ev$manquants) == 0 && length(ev$fichiers) == 8 && grepl("^[0-9a-f]{8}$", ev$hash))
 
 
 # ============================ lot « trois niveaux de paramètres » : surcharges campagne / palier, sources, frontière de config.R ==
@@ -1050,9 +1092,8 @@ ok("contenu_surcharge_campagne : NB_CRH_CIBLE_COURTS (entier L) et RATIO_COURTS 
    any(grepl("^NB_CRH_CIBLE_COURTS <- 250000L", lc2)) && any(grepl("^RATIO_COURTS <- 0.5", lc2)) && !any(grepl("COURTS", contenu_surcharge_campagne("C3", 10L))) &&
      grepl("RATIO_COURTS", tryCatch(contenu_surcharge_campagne("C3", 10L, ratio_courts = 0), error = function(e) conditionMessage(e))) &&
      all(c("NB_CRH_CIBLE_COURTS", "RATIO_COURTS") %in% PARAMETRES_CAMPAGNE) && sources_parametres(PARAMETRES_CAMPAGNE, lc2, "/p/campagne.R")[["RATIO_COURTS"]] == "surcharge campagne (campagne.R)")
-ok("notebooks : chunk ouvrir_campagne expose RATIO_COURTS et NB_CRH_CIBLE_COURTS ; chunk tirage_courts en §4b après la sélection ; chunk adoption_c1 (demo=FALSE) ; RUN.Rmd sans tirage des courts",
-   { l <- rmd[[2]]; i2 <- grep("^```\\{r ouvrir_campagne", l); j2 <- i2 + which(grepl("^```\\s*$", l[(i2 + 1):length(l)]))[1]
-     any(grepl("^RATIO_COURTS_CAMP\\s*<-", l[i2:j2])) && any(grepl("^NB_CRH_CIBLE_COURTS_CAMP\\s*<-", l[i2:j2])) && any(grepl("^NB_VARIANTES_ADMIN_LONGS_CAMP\\s*<-\\s*1L", l[i2:j2])) && any(grepl("^NB_VARIANTES_ADMIN_COURTS_CAMP\\s*<-\\s*1L", l[i2:j2])) && grep("^```\\{r tirage_courts", l) > grep("^```\\{r selection\\}", l) && length(grep("^```\\{r adoption_c1, demo=FALSE", l)) == 1 &&
-       !any(grepl("^etape_tirage_courts\\(", rmd[[1]])) && any(grepl("^```\\{r tirable_courts", rmd[[1]])) })
+ok("notebooks : chunk tirage_courts de 02 après la sélection et avant l'habillage ; adoption dans 03 seulement ; 01 sans tirage des courts (tirable_courts = vérification)",
+   { n2 <- noms_nb[["02_campagne.Rmd"]]; match("tirage_courts", n2) > match("selection", n2) && match("tirage_courts", n2) < match("habillage", n2) && !any(grepl("etape_adopter_campagne\\(", c(rmd[[1]], rmd[[2]]))) &&
+       "adoption" %in% noms_nb[["03_outils_maintenance.Rmd"]] && !any(grepl("^etape_tirage_courts\\(", rmd[[1]])) && any(grepl("^```\\{r tirable_courts", rmd[[1]])) })
 
 cat("\nTOUS LES TESTS SONT VERTS :", n_ok, "assertions\n")

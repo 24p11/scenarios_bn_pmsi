@@ -1,0 +1,304 @@
+---
+title: "03 — Outils de maintenance (exceptions et réparations)"
+output: html_notebook
+---
+
+```{r opts, include=FALSE}
+# Sécurité : un Knit ne doit JAMAIS lancer le pipeline. Ici, TOUS les chunks portent eval=FALSE :
+# rien ne s'exécute autrement qu'au clic, un chunk à la fois, en connaissance de cause.
+knitr::opts_chunk$set(eval = FALSE)
+```
+
+> **Principe directeur : un notebook = UN parcours utilisateur.** Celui-ci n'est PAS un parcours : c'est la
+> boîte à outils des situations d'exception. **N'ouvrez ce fichier que si une situation précise vous y envoie**
+> (un message d'erreur, un verdict de revue, un changement de poste). Le quotidien vit dans
+> `01_preparation_donnees.Rmd` (préparer les données) et `02_campagne.Rmd` (produire une campagne).
+> Ce fichier est hors mode démo : ses outils supposent un répertoire de travail réel.
+
+## À qui, quand, prérequis
+
+**À qui.** À la personne qui exploite le pipeline (médecin DIM, data manager) confrontée à une situation
+que les deux parcours ne couvrent pas : un message d'erreur qui renvoie ici, une campagne à retirer du
+registre après une revue défavorable, un ancien répertoire de résultats à reprendre, une mesure de débit avant
+une grosse campagne.
+
+**Quand.** Jamais « au cas où ». Chaque chunk dit **quand s'en servir** et **quand surtout pas**. Chaque chunk
+s'exécute seul, après le chunk `session` de ce fichier.
+
+**Prérequis.** Un `config_locale.R` à la racine du dépôt (voir 01). Aucune connexion base (tous ces outils lisent
+des fichiers). Les chunks qui modifient quelque chose annoncent ce qu'ils touchent et ce qu'ils ne touchent jamais,
+et les gestes destructeurs exigent une confirmation explicite (`JE_CONFIRME_… <- TRUE`).
+
+## Symptôme → chunk
+
+| Vous constatez… | Allez au chunk | Pourquoi |
+|---|---|---|
+| « could not find function "etape_…" » (fonction inconnue) | `session` de ce fichier | Vérifier la **version du code** : l'empreinte affichée doit être celle d'un poste à jour ; sinon les fichiers de code déployés (copie manuelle) sont plus anciens que le notebook. |
+| « magasin partagé … en écart … FORCER_… » | `01_preparation_donnees.Rmd`, encadré FORCER_* | Régénérer le magasin cité, sous le drapeau cité, et seulement lui. |
+| « campagne … CLOSE » / « déjà inscrite — changez d'identifiant » | `02_campagne.Rmd`, chunk `ouvrir_campagne` | Une campagne inscrite ne se re-tire jamais : nouvel identifiant. |
+| « selection/_meta.yaml : paramètres différents » ou « sidecar … attendu / reçu » sur une campagne **non inscrite** | `vider_campagne_courante` | Le dossier de travail de la campagne a été produit sous d'autres paramètres ; on le vide, puis on rejoue 02 depuis `selection`. |
+| Je veux mesurer le débit **sans consommer** de campagne | `palier_surcharge` → `palier_tirage` → `vider_palier` | Un palier tire sur un budget réduit, hors registre, puis se nettoie. |
+| « surcharge campagne refusée : le PALIER … est actif » | `vider_palier` | Un palier et une campagne ne cohabitent pas. |
+| La revue clinique est **défavorable** : la campagne est disqualifiée | `oublier_campagne` | Retirer ses lignes du registre pour que ses scénarios ne bloquent pas les campagnes suivantes (le livrable n'est pas touché). |
+| Nouveau répertoire de travail, ancien `results/` à reprendre | `reorganisation_plan` puis `reorganisation_executer` | Range l'ancien contenu dans l'arborescence par étapes, sans rien perdre. |
+| Une campagne produite par l'ancienne génération de scripts à intégrer au corpus | `adoption` | Reconstruit son livrable et l'inscrit au registre (longs ET courts), sans re-tirage. |
+| Le registre est perdu ou incomplet pour une campagne dont les fichiers de tirage existent | `retro_inscription_longs` et `retro_inscription_courts` | Reconstruit le registre depuis les fichiers (les identifiants se recalculent). |
+| Je veux voir l'état du registre, la couverture des diagnostics, la mémoire | `registre_etat`, `couverture_dp`, `memoire` | Lecture seule. |
+| Comprendre pourquoi c'est construit ainsi | `VISITE_GUIDEE.md` | L'orientation ; `MODIFICATIONS_V8.md` pour l'historique des décisions. |
+
+---
+
+# 0. Session (obligatoire avant tout outil)
+
+```{r session, eval=FALSE}
+# Ce que fait ce chunk : charge config + code (profil production, aucune connexion), affiche l'EMPREINTE DE VERSION du code,
+#   le dernier commit git s'il est connu, la campagne courante, son statut au registre, la surcharge active, le tableau de bord.
+# QUAND : avant tout chunk de ce fichier, et après chaque Restart R. QUAND PAS : jamais de contre-indication (lecture seule).
+# Ce que vous verrez : « code : empreinte xxxxxxxx (8 fichiers) ; N fonctions etape_* chargées » — comparez avec un poste à jour :
+#   une empreinte différente explique une « fonction inconnue » (fichiers de code plus anciens que le notebook). Durée : secondes.
+rm(list = ls())
+Sys.setenv(SCENARIOS_PMSI_PROFIL = "production")   # les outils de campagne travaillent sur le profil qui porte le registre
+Sys.setenv(SCENARIOS_PMSI_ETAPES_SEULEMENT = "1")
+source("tirage.R")
+cat(empreinte_version(PATH_PROJET)$texte, "\n")
+cat("git :", suppressWarnings(tryCatch(system2("git", c("-C", shQuote(PATH_PROJET), "log", "--oneline", "-1"), stdout = TRUE, stderr = FALSE), error = function(e) character(0))), "(vide = pas de dépôt git sur ce poste : déploiement par copie)\n")
+cat("CAMPAGNE =", CAMPAGNE, "|", statut_campagne_registre(CAMPAGNE, lire_registre(DIR_REGISTRE()))$texte, "| surcharge active :", surcharge_active(), "\n")
+afficher_sources_campagne()
+etat_pipeline()
+```
+
+---
+
+# 1. Changer de répertoire de travail : réorganiser un ancien `results/`
+
+Le pipeline range ses résultats dans une **arborescence par étapes** (`00_partiels/`, `10_references/`,
+`20_catalogue/`, `30_courts/`, `<profil>/40_campagnes/`, `50_registre/`, `60_export_final/`). Un répertoire
+de l'ancienne génération (`partiels/`, `exports/`, `exports_diagnostic/`) se reprend en deux temps : d'abord
+le **plan** (rien n'est déplacé : trois tables — reconnus et leur destination, ignorés volontairement, non
+reconnus à arbitrer), puis l'**exécution** derrière confirmation.
+
+Geste préalable, à la main : poser le nouveau `PATH_RESULTS` dans `config_locale.R` (répertoire vide), Restart R,
+puis copier (`cp -r`) les TROIS dossiers de l'ancien `results/` — `partiels/`, `exports/`, `exports_diagnostic/` —
+dans `<PATH_RESULTS>/_a_reorganiser/`. L'ancien répertoire n'est jamais touché par le code.
+
+```{r reorganisation_plan, eval=FALSE}
+# Ce que fait ce chunk : inventorie <PATH_RESULTS>/_a_reorganiser/ et imprime le PLAN (trois tables). NE DÉPLACE RIEN.
+# QUAND : une fois, au changement de répertoire de travail, après la copie manuelle décrite ci-dessus.
+# QUAND PAS : s'il n'y a pas d'ancien results/ à reprendre (le message « dossier … absent » vous le dira, sans dommage).
+# Ce que vous verrez : trois tables puis « N fichiers inventoriés : … reconnus, … ignorés, … non reconnus » et « mode plan : RIEN
+#   n'a été déplacé ». Lisez la table des NON RECONNUS : ils ne seront jamais déplacés en silence. Durée : secondes.
+plan <- etape_reorganiser(mode = "plan", migrer_registre = FALSE)   # migrer_registre : voir le chunk suivant
+```
+
+`migrer_registre` : `TRUE` = les campagnes passées **comptent** (l'ancien registre est repris sous
+`production/50_registre/` : la prochaine sélection les considère consommées) ; `FALSE` = registre vierge (les
+campagnes passées ne comptent pas). Décision liée au verdict de la revue clinique des campagnes antérieures.
+
+```{r reorganisation_executer, eval=FALSE}
+# Ce que ce chunk TOUCHE : COPIE depuis _a_reorganiser/ vers 00_partiels, 10_references, 20_catalogue, 30_courts, 90_diagnostics
+#   (+ production/50_registre si MIGRER_REGISTRE) ; métas convertis. _a_reorganiser/ reste intact (à supprimer à la main après contrôle).
+# Ce qu'il ne touche JAMAIS : l'ancien results/ (jamais lu par le code), les fichiers ignorés ou non reconnus.
+# QUAND : après avoir lu le plan et décidé MIGRER_REGISTRE. QUAND PAS : tant qu'un « non reconnu » n'est pas arbitré.
+# Garde-fou : un magasin différent déjà présent -> stop (« magasin différent déjà présent »). Idempotent (relance : « 0 fichiers copiés »).
+# Ce que vous verrez : le plan, puis « exécuté : N fichiers copiés / convertis », les vérifications (partiels, références, catalogue == méta).
+JE_CONFIRME_REORGANISATION <- FALSE   # TRUE en connaissance de cause
+MIGRER_REGISTRE <- FALSE              # TRUE : les campagnes passées comptent
+if (JE_CONFIRME_REORGANISATION) {
+  etape_reorganiser(mode = "executer", migrer_registre = MIGRER_REGISTRE)
+  etat_pipeline()
+} else cat("Rien fait : lire le plan (chunk précédent), poser MIGRER_REGISTRE, puis passer JE_CONFIRME_REORGANISATION à TRUE.\n")
+```
+
+---
+
+# 2. Adopter une campagne de l'ancienne génération (longs + courts, sans re-tirage)
+
+Une campagne produite par les anciens scripts (un dossier daté `scenarios_longs_tirage_v8_<AAAAMMJJ>/` avec
+`adulte/` et `pediatrie/`, et le corpus courts historique `30_courts/scenarios_courts.parquet` posé par la
+réorganisation) devient une campagne à part entière : livrable unique reconstruit (`scenarios_<C>.parquet`,
+méta `origine = adoption`), identifiants recalculés, **inscription au registre des deux branches — les courts
+sont inclus**, annexes datées renommées. Aucun scénario n'est re-tiré. Idempotent. Garde-fous : plusieurs corpus
+datés → le chemin `SOURCE_LONGS` est obligatoire (jamais de choix silencieux) ; un livrable du même nom qui n'est
+pas une adoption → stop, rien écrasé.
+
+```{r adoption, eval=FALSE}
+# Ce que ce chunk TOUCHE : 60_export_final/scenarios_<C>.parquet (+ méta, annexes) et registre_<C>.parquet (ajout append-only,
+#   les DEUX branches : les courts historiques sont inscrits avec les longs).
+# Ce qu'il ne touche JAMAIS : les corpus sources, le catalogue, le tirable, les autres campagnes.
+# QUAND : une fois, après la réorganisation, pour que la campagne historique compte au registre et ait son livrable unique.
+# QUAND PAS : si la campagne a déjà été adoptée depuis les mêmes sources (relance = « réécriture idempotente », sans dommage) ;
+#   si un palier est actif (refus). Ce que vous verrez : « longs adoptés : … », « courts adoptés : … », « vérifications livrable /
+#   registre : long : … (égaux) ; court : … (égaux) », « livrable adopté … ». Durée : minutes.
+CAMPAGNE_A_ADOPTER <- "C1"                                                                                   # identifiant de la campagne adoptée
+SOURCE_LONGS <- file.path(PATH_RESULTS, "_a_reorganiser", "exports", "scenarios_longs_tirage_v8_AAAAMMJJ")   # <- À ÉDITER : le dossier daté (ou le fichier .parquet) des longs
+FICHIER_COURTS <- FICHIER_COURTS_HISTORIQUE()                                                                # 30_courts/scenarios_courts.parquet (posé par la réorganisation)
+etape_adopter_campagne(CAMPAGNE_A_ADOPTER, source_longs = SOURCE_LONGS, fichier_courts = FICHIER_COURTS)
+```
+
+---
+
+# 3. Reconstruire le registre d'une campagne (registre seul, cas « registre perdu »)
+
+Les identifiants des scénarios se **recalculent** depuis les fichiers de tirage (ils sont une empreinte du
+contenu) : un registre perdu ou jamais écrit se reconstruit depuis la sélection et les paquets d'une campagne,
+et depuis un corpus courts. Idempotent ; append-only (un registre existant différent → stop).
+
+```{r retro_inscription_longs, eval=FALSE}
+# Ce que ce chunk TOUCHE : registre_<C>.parquet (branche long ; ajout ; stop si un contenu différent existe déjà).
+# Ce qu'il ne touche JAMAIS : la sélection et les paquets lus, le catalogue, les livrables.
+# QUAND : registre absent ou incomplet pour une campagne dont 40_campagnes/<C>/selection/ et chunks/ existent (ou une campagne
+#   tirée avant l'existence du registre). QUAND PAS : si 02, chunk `registre`, suffit (campagne courante avec ses paquets : c'est le cas normal).
+# Ce que vous verrez : « vérifications : scénarios inscrits = N ; lignes des chunks = N (égaux) ; DP couverts = … ». Durée : minutes.
+CAMPAGNE_A_INSCRIRE <- "C0"                                                          # identifiant à donner à cette campagne au registre
+DOSSIER_SELECTION_ANTERIEURE <- file.path(DIR_CAMPAGNES, CAMPAGNE_A_INSCRIRE, "selection")   # <- À ÉDITER si la sélection est ailleurs
+DOSSIER_CHUNKS_ANTERIEURS    <- file.path(DIR_CAMPAGNES, CAMPAGNE_A_INSCRIRE, "chunks")      # <- idem pour les paquets longs
+etape_retro_inscrire(DOSSIER_SELECTION_ANTERIEURE, DOSSIER_CHUNKS_ANTERIEURS, campagne = CAMPAGNE_A_INSCRIRE)
+```
+
+```{r retro_inscription_courts, eval=FALSE}
+# Ce que ce chunk TOUCHE : registre_<C>.parquet, branche court (extension append-only si les longs y sont déjà).
+# Ce qu'il ne touche JAMAIS : le corpus courts lu, le tirable, les livrables.
+# QUAND : registre perdu côté courts, ou corpus courts historique à inscrire SANS adoption (sinon : chunk `adoption`, qui inclut les courts).
+# QUAND PAS : campagne courante normale (02, chunk `registre`). Ce que vous verrez : « scénarios courts inscrits = N ; scénarios distincts
+#   du corpus = N (égaux) ». Durée : secondes à minutes.
+CAMPAGNE_COURTS <- "C0"                                        # identifiant de la campagne au registre
+FICHIER_COURTS_A_INSCRIRE <- FICHIER_COURTS_CAMPAGNE(CAMPAGNE_COURTS)   # <- À ÉDITER : ou FICHIER_COURTS_HISTORIQUE() pour le corpus courts historique
+etape_retro_inscrire_courts(CAMPAGNE_COURTS, FICHIER_COURTS_A_INSCRIRE)
+```
+
+---
+
+# 4. Palier de mesure : mesurer le débit sans consommer de campagne
+
+Un **palier** tire un petit budget (100 000 par défaut) pour mesurer le débit (scénarios par seconde) et
+extrapoler le temps d'une vraie campagne et le nombre de sessions parallèles à prévoir. Il vit dans un fichier
+`palier.R` (jamais versionné) qui impose `REGISTRE_ACTIF <- FALSE` : **une mesure n'écrit jamais au registre**
+(défense en profondeur : le code refuse aussi d'inscrire sous palier). Un palier et une campagne (`campagne.R`)
+ne cohabitent pas : l'un refuse de s'écrire tant que l'autre est actif, le message dit lequel retirer.
+
+```{r palier_surcharge, eval=FALSE}
+# Ce que ce chunk TOUCHE : écrit palier.R à la racine (non versionné) et pose SCENARIOS_PMSI_SURCHARGE pour la session.
+# Ce qu'il ne touche JAMAIS : la config versionnée, le registre (palier.R impose REGISTRE_ACTIF <- FALSE), le catalogue, les livrables.
+# QUAND : avant une grosse campagne, pour mesurer. QUAND PAS : pendant une campagne réelle (refus si campagne.R est actif :
+#   « surcharge palier refusée : la CAMPAGNE … est active » -> Sys.setenv(SCENARIOS_PMSI_SURCHARGE = "") puis Restart R d'abord).
+# Ce que vous verrez : « surcharge palier écrite : … — Restart R puis chunk session ». Puis : Restart R, chunk `session` de ce fichier
+#   (la surcharge active doit afficher palier.R « PALIER de mesure »), puis le chunk suivant.
+ecrire_surcharge_palier(100000L)   # budget du palier ; écrit NB_CRH_CIBLE, PALIER_ACTIF, REGISTRE_ACTIF <- FALSE
+```
+
+```{r palier_tirage, eval=FALSE}
+# Ce que ce chunk TOUCHE : 40_campagnes/<CAMPAGNE>/ (sélection, paquets) — sous le BUDGET DE PALIER (à vider ensuite, chunk suivant).
+# Ce qu'il ne touche JAMAIS : le registre (refus mécanique sous palier), les livrables des campagnes passées, le catalogue.
+# Garde : ne tire QUE si la surcharge palier est active ; sinon il affiche la marche à suivre et n'exécute rien.
+# QUAND : après palier_surcharge + Restart R + session. QUAND PAS : si les paquets présents sont ceux d'une campagne réelle en cours.
+# Ce que vous verrez : la sélection, une ligne par paquet avec son débit, puis « débit ≈ … scénarios/s ; campagne complète ≈ … h ;
+#   sessions parallèles suggérées … ». Durée : selon le budget (minutes à heure).
+if (!palier_actif()) {
+  cat("Palier NON actif : rien exécuté. Marche à suivre : (1) chunk palier_surcharge ; (2) Restart R ; (3) chunk session de ce fichier",
+      "(la surcharge active doit afficher palier.R) ; (4) ce chunk. Surcharge courante :", surcharge_active(), "\n")
+} else {
+  etape_selection_longs()
+  t0 <- Sys.time()
+  etape_tirage_das_longs()                 # tout, ou chunk_range = c(1, 5) pour un échantillon de paquets
+  duree_s <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+  mt <- yaml::read_yaml(FICHIER_SELECTION_META())
+  debit <- mt$volume_attendu / duree_s
+  cat(sprintf("débit ≈ %.0f scénarios/s ; campagne complète (%d) ≈ %.1f h ; sessions parallèles suggérées pour tenir en 4 h : %d\n",
+              debit, NB_CRH_CIBLE, NB_CRH_CIBLE / debit / 3600, ceiling(NB_CRH_CIBLE / debit / 3600 / 4)))
+}
+```
+
+```{r vider_palier, eval=FALSE}
+# Ce que ce chunk TOUCHE (SUPPRIME) : 40_campagnes/<CAMPAGNE>/ tiré sous le palier ; palier.R ; la surcharge de session.
+# Ce qu'il ne touche JAMAIS : 50_registre/, les livrables 60_export_final/, les magasins partagés.
+# QUAND : après la mesure, avant la campagne réelle (le garde-fou refuserait de mélanger des paquets tirés sous un autre budget).
+# QUAND PAS : si les paquets présents sont ceux d'une campagne réelle en cours. Ce que vous verrez : « Vidé : Restart R puis 02 ».
+JE_CONFIRME_VIDAGE_PALIER <- FALSE   # TRUE en connaissance de cause
+if (JE_CONFIRME_VIDAGE_PALIER) {
+  unlink(DIR_CAMPAGNE(), recursive = TRUE)
+  Sys.setenv(SCENARIOS_PMSI_SURCHARGE = ""); unlink("palier.R")
+  cat("Vidé : Restart R, puis 02_campagne.Rmd depuis le haut (ouvrir_campagne).\n")
+} else cat("Rien fait : passer JE_CONFIRME_VIDAGE_PALIER à TRUE d'abord.\n")
+```
+
+---
+
+# 5. Vider le dossier de travail de la campagne courante (changement de budget d'une campagne NON inscrite)
+
+Changer le budget ou k d'une campagne en cours change son découpage : le garde-fou de `selection/_meta.yaml`
+refuse de mélanger des paquets tirés sous d'autres paramètres. Deux issues : ouvrir un autre identifiant
+(02, `ouvrir_campagne`) — la voie normale —, ou vider le dossier de travail de cette campagne pour la rejouer.
+
+```{r vider_campagne_courante, eval=FALSE}
+# Ce que ce chunk TOUCHE (SUPPRIME) : <profil>/40_campagnes/<CAMPAGNE>/ (sélection, paquets longs et courts, habillé) de la campagne COURANTE.
+# Ce qu'il ne touche JAMAIS : 50_registre/, les livrables 60_export_final/, les magasins partagés, les autres campagnes.
+# QUAND : campagne NON inscrite au registre dont on change le budget / k avant de la rejouer depuis 02, chunk `selection`.
+# QUAND PAS : campagne déjà inscrite (elle est close : son dossier est la preuve de reprise ; ouvrez un autre identifiant) ;
+#   campagne en cours de tirage qu'on veut reprendre (les paquets présents SONT la reprise).
+# Ce que vous verrez : le statut au registre de la campagne courante, puis « Vidé : … » ou « Rien fait ».
+JE_CONFIRME_VIDAGE_CAMPAGNE <- FALSE   # TRUE en connaissance de cause
+st <- statut_campagne_registre(CAMPAGNE, lire_registre(DIR_REGISTRE()))
+cat("campagne courante :", CAMPAGNE, "|", st$texte, "\n")
+if (JE_CONFIRME_VIDAGE_CAMPAGNE && !st$inscrite) {
+  unlink(DIR_CAMPAGNE(), recursive = TRUE); cat("Vidé :", DIR_CAMPAGNE(), "— rejouer 02_campagne.Rmd depuis session_campagne puis selection.\n")
+} else if (st$inscrite) cat("Rien fait : la campagne est inscrite au registre (close) ; ouvrez un autre identifiant (02, ouvrir_campagne).\n") else cat("Rien fait : passer JE_CONFIRME_VIDAGE_CAMPAGNE à TRUE d'abord.\n")
+```
+
+---
+
+# 6. Oublier une campagne au registre (revue clinique défavorable)
+
+Le registre est le livre de comptes du corpus : une campagne inscrite bloque ses profils et ses jeux de
+diagnostics pour les campagnes suivantes. Quand la **revue clinique la disqualifie**, ses scénarios ne doivent
+plus bloquer les tirages futurs : cet outil retire du registre **toutes** les lignes de la campagne nommée (les
+deux branches), après avoir affiché ce qu'il va oublier et sous confirmation explicite. Il **ne touche ni le
+livrable ni les annexes** : on oublie la comptabilité, pas les fichiers — leur sort (archiver, supprimer) est
+une décision séparée, à prendre à la main. Idempotent : une campagne absente donne « rien à oublier ». C'est la
+contrepartie de l'inscription systématique de `02_campagne.Rmd` : inscrire par défaut n'est sain que parce
+que cette marche arrière existe, bruyante et confirmée.
+
+```{r oublier_campagne, eval=FALSE}
+# Ce que ce chunk TOUCHE (SUPPRIME) : 50_registre/registre_tirages/registre_<C>.parquet — toutes les lignes de la campagne, longs ET courts.
+# Ce qu'il ne touche JAMAIS : le livrable scenarios_<C>.parquet et ses annexes (60_export_final/), les registres des autres campagnes,
+#   les dossiers de travail, les magasins partagés.
+# QUAND : revue clinique défavorable, campagne disqualifiée ; ou campagne d'essai inscrite par erreur.
+# QUAND PAS : campagne livrée et validée (ses scénarios DOIVENT rester bloqués). Un fichier de registre qui mêlerait plusieurs campagnes
+#   -> stop (« ne se réécrit jamais partiellement ») : arbitrage humain.
+# Ce que vous verrez : « campagne C : N scénarios au registre (L longs, K courts) … » puis « Rien fait : relancez … JE_CONFIRME_OUBLI = TRUE »,
+#   ou, confirmé, « campagne C OUBLIÉE : N scénarios retirés … redeviennent tirables ». Durée : secondes.
+CAMPAGNE_A_OUBLIER <- "C2"    # <- À ÉDITER : l'identifiant de la campagne disqualifiée
+JE_CONFIRME_OUBLI <- FALSE    # TRUE en connaissance de cause, après lecture du compte affiché
+etape_oublier_campagne(CAMPAGNE_A_OUBLIER, JE_CONFIRME_OUBLI = JE_CONFIRME_OUBLI)
+```
+
+---
+
+# 7. Lectures : registre, couverture des diagnostics, mémoire
+
+```{r registre_etat, eval=FALSE}
+# Ce que fait ce chunk : agrégats du registre (lecture seule). QUAND : pour savoir ce qui a déjà servi. QUAND PAS : aucune contre-indication.
+# Ce que vous verrez : « campagnes : n ; scénarios cumulés : … ; profils consommés : … », une table par campagne (longs / courts),
+#   les 20 classes DPEC les plus consommées. Durée : secondes.
+reg <- lire_registre(DIR_REGISTRE())
+cat("campagnes :", reg$nb_campagnes, "; scénarios cumulés :", reg$nb_scenarios, "; profils consommés :", nrow(reg$par_profil), "\n")
+reg$par_campagne; head(reg$par_dpec[order(-reg$par_dpec$nb_scenarios), ], 20)
+```
+
+```{r couverture_dp, eval=FALSE}
+# Ce que fait ce chunk : compare les diagnostics principaux du catalogue à ceux du corpus de la campagne courante (registre). Lecture seule.
+# QUAND : pour vérifier qu'aucun diagnostic n'est absent d'une campagne sans cause admise (strate de référence vide, recyclages
+#   entièrement éliminés — comptés au rapport). QUAND PAS : aucune contre-indication.
+# Ce que vous verrez : « DP du catalogue : … ; DP dans le corpus C : … ; absents : … » et la liste des absents. Durée : secondes.
+reg <- lire_registre(DIR_REGISTRE())
+dp_cat <- unique(lire_catalogue(DIR_CATALOGUE(), MONO_CATALOGUE(), colonnes = "diag2")$diag2)
+dp_corpus <- unique(reg$lignes$diag2[reg$lignes$campagne == CAMPAGNE])
+cat("DP du catalogue :", length(dp_cat), "; DP dans le corpus", CAMPAGNE, ":", length(dp_corpus), "; absents :", length(setdiff(dp_cat, dp_corpus)), "\n"); head(setdiff(dp_cat, dp_corpus), 50)
+```
+
+```{r memoire, eval=FALSE}
+# Ce que fait ce chunk : liste les objets en mémoire par taille (Mo), puis libère ce qui peut l'être. Lecture seule.
+# QUAND : la mémoire monte pendant une étape lourde (la plateforme limite à 15 GiB). QUAND PAS : aucune contre-indication.
+# Ce que vous verrez : une table objet × taille. Le remède est toujours le même : Restart R (l'état utile est sur disque,
+#   le tableau de bord réoriente). Durée : instantané.
+memoire_session()
+```

@@ -1,0 +1,312 @@
+---
+title: "01 — Préparer les données (à lancer rarement)"
+output: html_notebook
+---
+
+```{r opts, include=FALSE}
+# Sécurité : un Knit ne doit JAMAIS lancer le pipeline (heures de calcul).
+# Les chunks s'exécutent uniquement au clic (bouton Run), pas au tricotage.
+knitr::opts_chunk$set(eval = FALSE)
+```
+
+> **Principe directeur : un notebook = UN parcours utilisateur, exécutable DE HAUT EN BAS sans rien
+> sauter.** Le déroulé complet est le mode d'emploi. Tout ce qui n'est pas ce parcours vit ailleurs :
+> produire une campagne → `02_campagne.Rmd` ; réparer, migrer, mesurer → `03_outils_maintenance.Rmd`.
+
+## À qui, quand, prérequis, ce que vous aurez à la fin
+
+**À qui.** À la personne (médecin DIM, data manager) qui prépare la matière première du pipeline sur la
+plateforme sécurisée. Aucune notion de R avancé n'est nécessaire : on exécute les chunks dans l'ordre,
+en lisant ce qui s'affiche.
+
+**Quand.** Rarement : à la **première installation**, à une **extension du périmètre** (une nouvelle
+année de données, une nouvelle catégorie d'établissements), ou quand un **garde-fou** vous le demande
+(un garde-fou est un contrôle automatique qui arrête le programme avec un message explicite plutôt que
+de laisser passer une incohérence ; le message dit toujours quoi faire). Pour produire des scénarios,
+ce n'est pas ici : c'est `02_campagne.Rmd`.
+
+**Prérequis.** Être sur la plateforme (accès à la base nationale par le paquet `pRatihque`) ; un
+fichier `config_locale.R` à la racine du dépôt (copie de `config_locale.exemple.R`, jamais versionné) qui
+dit où est le dépôt et où écrire les résultats (`PATH_RESULTS`). Comptez plusieurs heures pour une
+première installation complète : lancez ce notebook au début d'une demi-journée.
+
+**Ce que vous aurez à la fin.** Sous `PATH_RESULTS`, les quatre « magasins partagés » remplis (un magasin
+est un dossier de résultats qui ne dépend que de paramètres, pas de la personne qui l'a produit : tout le
+monde s'en sert) : les **comptes partiels** (`00_partiels/`), les **tables de référence** (`10_references/`),
+le **catalogue des séjours longs** (`20_catalogue/`) et le **catalogue des séjours courts** (`30_courts/`).
+Le tableau de bord final (`etat_pipeline()`) affiche FAIT sur chaque ligne d'amont.
+
+**Relancer ce notebook entier est toujours sûr.** Chaque étape regarde d'abord ce qui existe déjà sur le
+disque : elle dit « déjà présent, sauté » ou elle agit. Après un plantage ou une déconnexion, relancez du
+haut : seul le manquant est refait.
+
+**Les chunks de ce notebook, dans l'ordre** (tout s'exécute) :
+
+| Chunk | Ce qu'il fait |
+|---|---|
+| `mode_demo` | *Hors plateforme seulement* : bascule sur une base fictive (à NE PAS exécuter sur la plateforme). |
+| `session` | Charge le code, se connecte à la base, affiche l'empreinte de version et le tableau de bord. |
+| `prep_data` | Prépare en base une table temporaire par année : une ligne par séjour. |
+| `partiels` | Compte, par catégorie d'établissements et par année, les profils de séjours longs. |
+| `apports` | Affiche ce que chaque année apporte de nouveau (aide à décider le périmètre). |
+| `references` | Construit les tables de référence, dont le catalogue des courts. |
+| `catalogue` | Assemble le catalogue des séjours longs sur le périmètre décidé, avec seuil de confidentialité. |
+| `repartitionner` | Découpe le catalogue par lettre de diagnostic et le type (médecine, chirurgie…). |
+| `verif_catalogue` | Vérifie le catalogue : taille, typologie, diagnostics perdus au seuil. |
+| `tirable_courts` | Vérifie le catalogue des courts (les « pivots »). |
+| `etat_final` | Le tableau de bord de fin : tout doit être FAIT. |
+
+**Quand un garde-fou vous demande de régénérer (les drapeaux `FORCER_*`) — et seulement lui.** Chaque
+magasin partagé porte un petit fichier compagnon `_meta.yaml` qui mémorise les paramètres sous lesquels il a
+été fabriqué. Si vous relancez avec d'autres paramètres, l'étape s'arrête avec un message qui commence par
+« magasin partagé … en écart » et nomme la clé qui diffère : c'est normal, c'est le garde-fou qui empêche de
+mélanger deux générations de résultats. Il propose deux issues ; la première est de régénérer le magasin en
+posant, dans la console, le drapeau qu'il cite AVANT de relancer le chunk concerné :
+
+| Message du garde-fou | Drapeau à poser dans la console, puis relancer le chunk | Coût |
+|---|---|---|
+| magasin `00_partiels` en écart | `FORCER_PARTIELS <- TRUE` puis chunk `prep_data` et `partiels` | des heures (tout est recompté) |
+| magasin `10_references` en écart | `FORCER_REFS <- TRUE` puis chunk `references` | quelques minutes à dizaines de minutes |
+| magasin `30_courts` en écart | `FORCER_COURTS <- TRUE` puis chunk `references` | quelques minutes |
+| magasin `20_catalogue` en écart | `FORCER_CATALOGUE <- TRUE` puis chunk `catalogue` et `repartitionner` | dizaines de minutes |
+
+Ces drapeaux servent **tous les profils** (le magasin est partagé) : ne les posez que sur demande d'un
+garde-fou, jamais « pour être sûr ». Ils s'oublient au prochain Restart R.
+
+---
+
+# 0. Mode démo (hors plateforme uniquement)
+
+```{r mode_demo, eval=FALSE}
+# MODE DÉMO (optionnel) — données FICTIVES et ALÉATOIRES : aucune validité épidémiologique.
+# Sur la plateforme : NE PAS exécuter ce chunk. Hors plateforme : l'exécuter AVANT le chunk `session`.
+# Il installe un faux paquet pRatihque sur demo/base_demo.sqlite (créée si absente), copie le code dans
+# demo/resultats/projet_demo/ (stubs utils/referentiels), active la surcharge du profil « démo » (sorties
+# sous demo/resultats/) et pose SCENARIOS_PMSI_DEMO = 1 (le chunk `session` l'affiche). Voir demo/README.md.
+source("demo/session_demo.R")
+```
+
+# 1. Session : charger le code et se connecter
+
+Une « session » R, c'est l'état de la mémoire de R : quand vous faites *Session → Restart R*, tout est
+oublié et il faut rejouer ce chunk. Il charge les fichiers de code, se connecte à la base (une seule
+connexion, ouverte ici et nulle part ailleurs) et n'exécute **aucune** étape.
+
+Il affiche l'**empreinte de version** du code : un nombre de fonctions `etape_*` et un code de 8 caractères
+calculé sur les fichiers de code. Si un jour un chunk répond « could not find function "etape_…" »
+(fonction inconnue), c'est que ce notebook et les fichiers de code ne sont pas de la même version :
+comparez cette empreinte avec celle d'un poste à jour (voir `03_outils_maintenance.Rmd`, table des symptômes).
+
+```{r session}
+# Ce que fait ce chunk : charge config + code, ouvre la connexion base, affiche version et tableau de bord. N'exécute rien.
+# Ce que vous verrez : PROFIL, années, PATH_RESULTS, « Session chargée sans exécution », l'empreinte de version,
+#   puis le tableau de bord etat_pipeline() (À FAIRE partout à la première installation : normal).
+# Durée : quelques secondes. À rejouer après chaque Restart R.
+PROFIL_01 <- "production"   # <- profil de la session ; "diagnostic" seulement pour l'étude de périmètre (mêmes magasins partagés)
+rm(list = setdiff(ls(), "PROFIL_01"))
+if (nzchar(Sys.getenv("SCENARIOS_PMSI_DEMO"))) {
+  cat("################  MODE DÉMO : base fictive (faux pRatihque), sorties sous demo/resultats/ — AUCUNE validité épidémiologique  ################\n")
+} else Sys.setenv(SCENARIOS_PMSI_PROFIL = PROFIL_01)
+Sys.setenv(SCENARIOS_PMSI_ETAPES_SEULEMENT = "1")   # charger sans exécuter : les étapes se lancent chunk par chunk ci-dessous
+source("extraction.R")                              # connecte la base (objet `conn`) ; racine du dépôt : SCENARIOS_PMSI_PATH ou config_locale.R
+cat(empreinte_version(PATH_PROJET)$texte, "\n")     # à comparer entre postes en cas de « fonction inconnue »
+etat_pipeline()
+```
+
+*Si vous voyez* « Racine du projet inconnue » : `config_locale.R` manque à la racine du dépôt (copiez
+`config_locale.exemple.R` et remplissez-le). *Si vous voyez* « Paquet manquant » : installez-le (`install.packages`).
+
+# 2. Préparer les tables de travail en base (`prep_data`)
+
+Le pipeline ne travaille jamais directement sur les vues nationales : il fabrique d'abord, **en base et en
+mémoire temporaire**, une table par année avec **une ligne par séjour** (l'unité la plus « prioritaire »
+retenue quand un séjour passe par plusieurs unités, la réanimation d'abord ; des indicateurs diabète et
+hypertension ; l'âge, le sexe, le GHM, la durée). Ces tables disparaissent quand la session se déconnecte :
+c'est voulu (rien de niveau séjour n'est jamais écrit sur le disque), et c'est pourquoi ce chunk se rejoue à
+chaque session d'extraction. Il commence par dresser le **plan** : quels comptes partiels et quelles tables
+de référence manquent, donc quelles années préparer. Quand tout est déjà là, il l'annonce et ne prépare rien.
+
+```{r prep_data}
+# Ce que fait ce chunk : le plan (ce qui manque), puis une table temporaire prep_data_<an> par année nécessaire.
+# Ce que vous verrez : « plan : N itérations à faire, M refs à faire, années à préparer : … », puis une bannière par année.
+#   Tout déjà présent -> « rien à préparer ». Durée : quelques minutes par année (ordre de grandeur), rien si tout est là.
+etape_prep_data()          # ans = c(24, 25) pour forcer des années précises (rare)
+```
+
+*Si vous voyez* une erreur SQL : la base a changé de dialecte ou une vue manque ; notez le message complet
+et signalez-le (les requêtes sont des copies tracées des scripts historiques, voir `VISITE_GUIDEE.md` §7).
+
+# 3. Compter les séjours longs par catégorie et par année (`partiels`)
+
+Un **séjour long** dure 3 nuits ou plus ; c'est là que le codage des diagnostics associés est le plus
+complet. Pour chaque **catégorie d'établissements** (CHR/U, CH) et chaque **année**, cette étape compte les
+séjours par **profil** — un profil, c'est la combinaison âge × sexe × GHM × diagnostic principal × … plus la
+« graine » : les deux diagnostics associés les plus sévères réellement observés. Elle n'écrit que des
+**comptes** (jamais une ligne de séjour) dans `00_partiels/`, un fichier par (catégorie × année). Ces
+fichiers sont un cache : une fois écrits, ils ne sont jamais recalculés (sauf `FORCER_PARTIELS`).
+
+```{r partiels}
+# Ce que fait ce chunk : un fichier de comptes catalogue_partiel_<etbs>_<an>.parquet par (catégorie × année) manquant.
+# Ce que vous verrez : une bannière par itération avec le nombre de profils, « déjà présent, sauté » pour les autres.
+# Durée : de plusieurs minutes à plus d'une heure PAR itération sur la base réelle (des heures pour dix années) ;
+#   quelques secondes en démo. Interrompu ? Relancez tel quel : les fichiers écrits sont conservés.
+etape_partiels_longs()     # iterations = data.frame(etbs = "CHR/U", an = 25) pour une itération isolée
+```
+
+## 3b. Ce que chaque année apporte (`apports`)
+
+Trois fichiers de diagnostic aident à décider le **périmètre** (combien d'années, quelles catégories) :
+`diagnostic_apports.csv` (par itération : combien de diagnostics principaux jamais vus avant), `recouvrement.csv`
+(qu'apporte l'année B par rapport à l'année A : part des combinaisons déjà vues) et `diagnostic_memoire_<profil>.csv`
+(le pic de mémoire de chaque calcul : au-dessus de 10 Go, on approche la limite de la plateforme).
+
+```{r apports}
+# Ce que fait ce chunk : lit et affiche les trois fichiers de diagnostic écrits par `partiels` (lecture seule).
+# Ce que vous verrez : trois tables et une courbe des diagnostics nouveaux cumulés ; un fichier absent est annoncé
+#   (« absent — produit par … ») sans erreur. Durée : instantané.
+apports <- lire_si_present(FICHIER_APPORTS(), "etape_partiels_longs()"); apports   # 90_diagnostics/ [partagé]
+if (!is.null(apports)) plot(seq_len(nrow(apports)), cumsum(apports$nb_diag2_nouveaux), type = "b",
+                            xlab = "itération (CHR/U puis CH, années croissantes)", ylab = "diagnostics principaux nouveaux, cumulés")
+recouvrement <- lire_si_present(FICHIER_RECOUVREMENT(), "etape_partiels_longs()"); recouvrement
+memoire <- lire_si_present(FICHIER_DIAG_MEMOIRE(), "etape_refs() / etape_partiels_longs() / etape_catalogue()")
+if (!is.null(memoire)) memoire[order(-memoire$pic_go), ][seq_len(min(10, nrow(memoire))), ]
+```
+
+# 4. Les tables de référence, dont le catalogue des courts (`references`)
+
+Les **tables de référence** sont les comptes agrégés dans lesquels le tirage des scénarios puisera : quels
+diagnostics associés sont fréquents pour tel diagnostic principal, tel âge, tel sexe (les candidats de
+complétion) ; combien de maladies chroniques porte un patient de tel âge ; comment se répartissent les
+complications du diabète ; les modes d'entrée et de sortie et les durées observés (« l'habillage administratif »).
+Neuf tables vont dans `10_references/`. La dixième, `ref_pivots_courts`, est **le catalogue des séjours courts**
+(0 à 2 nuits) : la liste de leurs **pivots** — un pivot est un profil de séjour court (mode d'hospitalisation,
+sexe, classe d'âge, GHM, diagnostic principal, durée) avec son effectif — rangée dans `30_courts/`.
+
+Cette étape vient **avant** le catalogue des longs parce que celui-ci a besoin d'une de ces tables (la
+répartition des classes d'obésité, pour convertir les codes E669 « sans précision » — doctrine : ces codes sont
+des erreurs de codage, remplacés par la distribution réelle des codes précis).
+
+```{r references}
+# Ce que fait ce chunk : calcule les tables de référence manquantes (10_references/) et le catalogue des courts (30_courts/).
+# Ce que vous verrez : une ligne par table (« calculée » ou « déjà présente, sautée »), le nombre de pivots du tirable.
+# Durée : quelques minutes à quelques dizaines de minutes sur la base réelle ; secondes en démo.
+etape_refs()               # forcer = TRUE uniquement si un garde-fou vous l'a demandé (voir l'encadré FORCER_* en tête)
+```
+
+*Si vous voyez* « magasin partagé references … en écart » ou « … courts … en écart » : le garde-fou a détecté
+qu'un magasin existant a été fabriqué avec d'autres paramètres (année de référence, seuils, années du
+tirable) ; suivez l'encadré en tête (`FORCER_REFS` ou `FORCER_COURTS`, puis relancez ce chunk).
+
+# 5. Le catalogue des séjours longs (`catalogue`)
+
+Le **catalogue**, c'est la liste de tous les profils de séjours longs possibles, avec le nombre de fois où
+chacun a été vu dans la vraie base sur le périmètre choisi — comme un catalogue de vente par correspondance
+où chaque article porte sa popularité. Il est fabriqué en additionnant les comptes partiels du périmètre,
+en convertissant les E669, puis en appliquant le **seuil de confidentialité** : un profil vu 10 fois ou moins
+n'entre pas au catalogue. Le catalogue est un magasin partagé, gardé par son `_meta.yaml` : s'il existe déjà
+avec les mêmes paramètres, le chunk le dit et ne refait rien.
+
+**La décision de périmètre se prend ici**, en éditant les deux lignes en tête du chunk. Par défaut, elles
+reprennent la configuration du profil (`config.R`, bloc PROFIL) — et c'est ce qu'il faut : si vous choisissez
+un autre périmètre, la configuration devra être alignée dessus (`ANS_HISTORIQUE`, `TYPES_ETBS_LONGS`) pour
+que le catalogue soit chargeable ensuite, le garde-fou du magasin y veille. En production, le catalogue est
+un objet de 21 millions de lignes obtenu au prix d'heures de calcul : **on ne le reconstruit pas** sur le
+même périmètre (le chunk le saute de lui-même).
+
+```{r catalogue}
+# Ce que fait ce chunk : assemble le catalogue des longs (partiels du périmètre -> conversion E669 -> seuil > 10), puis
+#   affiche le rapport d'extraction (effet de la conversion, profils entrés au catalogue).
+# Ce que vous verrez : « catalogue déjà à jour … sauté » (le cas courant) ou les deux étages d'agrégation puis le rapport.
+# Durée : dizaines de minutes sur la base réelle (tout est fait hors base, depuis les fichiers) ; secondes en démo.
+ANS_CHOISIES <- ANS_HISTORIQUE      # <- À ÉDITER seulement pour changer de périmètre (ex. 22:26) ; défaut = périmètre du profil
+ETBS_CHOISIS <- TYPES_ETBS_LONGS    # <- idem (ex. "CHR/U") ; la config devra être alignée sur ce choix (garde du magasin)
+etape_catalogue(ans = ANS_CHOISIES, etbs = ETBS_CHOISIS)
+cat(lire_si_present(FICHIER_RAPPORT_EXTRACTION(), "etape_catalogue()"), sep = "\n")   # 20_catalogue/rapport_extraction.txt (date en 1re ligne)
+```
+
+*Si vous voyez* « fichier(s) manquant(s) … etape_partiels_longs() » : une itération du périmètre n'a pas
+son fichier de comptes ; remontez au chunk `partiels`. *Si vous voyez* « magasin partagé catalogue … en
+écart » : voir l'encadré `FORCER_CATALOGUE` en tête.
+
+# 6. Découper et typer le catalogue (`repartitionner`)
+
+Le catalogue est trop gros pour être chargé d'un bloc. Cette étape le range **par lettre du diagnostic
+principal** (une part par lettre), ajoute à chaque profil sa **typologie** (DPEC : « Chirurgie adultes > 3 nuits »,
+« Accouchement normal mère »… ; TPEC : Médecine, Chirurgie, Obstétrique…) et son **identifiant stable**
+(`id_profil` : une empreinte calculée sur le contenu de la ligne, la même partout et pour toujours — c'est
+elle qui permettra au registre des campagnes de savoir ce qui a déjà servi). Une fois : le chunk se saute
+lui-même si c'est fait. Restart R conseillé avant sur la base réelle (étape lourde en mémoire).
+
+```{r repartitionner}
+# Ce que fait ce chunk : écrit 20_catalogue/catalogue_longs_seuil/part_<lettre>.parquet + _meta.yaml, renomme le
+#   fichier unique en .ancien (jamais supprimé). Idempotent : « catalogue partitionné déjà présent … sauté ».
+# Ce que vous verrez : une ligne par lettre avec son nombre de lignes, puis la vérification lignes == méta.
+# Durée : dizaines de minutes en production ; secondes en démo.
+etape_repartitionner_catalogue()
+```
+
+*Si vous voyez* « le catalogue partitionné a été typé avec la typologie … » : la version de la typologie
+(`referentiels/typologie_sejours.yaml`) a changé depuis ; le message donne la marche à suivre (supprimer le
+dossier, restaurer le `.ancien`, relancer) — c'est un cas de `03_outils_maintenance.Rmd`, pas du quotidien.
+
+## 6b. Vérifier le catalogue (`verif_catalogue`)
+
+Deux contrôles de lecture seule : le fichier compagnon du catalogue (taille, typologie, recette d'identifiant,
+effectifs par classe DPEC) avec un aperçu d'une lettre ; puis la **couverture** : les diagnostics principaux
+présents dans les comptes partiels mais **perdus au seuil** de confidentialité (trop rares pour entrer au
+catalogue), triés par effectif. Cette liste est une information de périmètre, pas une anomalie.
+
+```{r verif_catalogue}
+# Ce que fait ce chunk : lit le _meta.yaml du catalogue, un aperçu léger de la lettre J, puis compare les DP des partiels
+#   (conversion E669 appliquée) aux DP du catalogue : liste des DP perdus au seuil. Lecture seule.
+# Ce que vous verrez : « lignes : … ; parts : … ; typologie : … », une table DPEC × effectif, 6 lignes d'aperçu, puis
+#   « DP distincts avant seuil : … ; après : … ; perdus : … » et les 30 premiers perdus. Durée : quelques secondes à une minute.
+side <- lire_si_present(FICHIER_CATALOGUE_META(), "etape_repartitionner_catalogue()")
+if (!is.null(side)) {
+  cat("lignes :", side$nb_lignes_total, "; parts :", length(side$nb_lignes_par_part), "; typologie :", side$version_typologie, "; recette id :", side$version_recette_id, "\n")
+  print(data.frame(DPEC = names(side$effectifs_dpec), n = unlist(side$effectifs_dpec))[order(-unlist(side$effectifs_dpec)), ])
+  print(head(lire_catalogue(DIR_CATALOGUE(), lettres = "J", colonnes = c("diag2", "ghm2", "DPEC", "TPEC", "poids"))))   # lecteur unique à repli
+}
+fichiers <- file.path(DIR_PARTIELS, nom_partiel(rep(ETBS_CHOISIS, each = length(ANS_CHOISIES)), rep(ANS_CHOISIES, times = length(ETBS_CHOISIS))))
+manquants <- basename(fichiers[!file.exists(fichiers)])
+dist_e660 <- lire_si_present(file.path(DIR_REFERENCES, nom_ref("ref_distribution_e660")), "etape_refs()")
+if (length(manquants)) cat("partiels absents :", paste(manquants, collapse = ", "), "— produits par etape_partiels_longs() (voir etat_pipeline()).\n") else {
+  piv <- agreger_partiels(fichiers, c("diag2", "cage", "sexe"), "n")
+  if (CONVERSION_E669 && !is.null(dist_e660)) piv <- convertir_e669_comptes(piv, "diag2", c("cage", "sexe"), "n", dist_e660, BARE_E669_DEFAUT)
+  avant <- piv |> dplyr::summarise(n = sum(n), .by = diag2)
+  apres <- unique(lire_catalogue(DIR_CATALOGUE(), MONO_CATALOGUE(), colonnes = "diag2")$diag2)
+  perdus <- avant[!avant$diag2 %in% apres, ] |> dplyr::arrange(dplyr::desc(n))
+  cat("DP distincts avant seuil :", nrow(avant), "; après :", length(apres), "; perdus au seuil :", nrow(perdus), "\n"); print(head(perdus, 30))
+}
+```
+
+# 7. Vérifier le catalogue des courts (`tirable_courts`)
+
+Le catalogue des courts a été produit au chunk `references`. Ce contrôle lit son fichier compagnon : années
+cumulées (`ANS_COURTS`), seuil, nombre de pivots. C'est dans ce **tirable** que chaque campagne puisera ses
+séjours courts (`02_campagne.Rmd`).
+
+```{r tirable_courts}
+# Ce que fait ce chunk : lit 30_courts/_meta.yaml et affiche années, seuil, nombre de pivots. Lecture seule.
+# Ce que vous verrez : « tirable courts : N pivots ; ANS_COURTS = … ; SEUIL_PIVOT = … ; date … » ; absent -> message
+#   « produit par etape_refs() » (remontez au chunk `references`). Durée : instantané.
+mc <- lire_si_present(FICHIER_COURTS_META(), "etape_refs()")
+if (!is.null(mc)) cat("tirable courts :", mc$n_pivots, "pivots ;", "ANS_COURTS =", paste(unlist(mc$ANS_COURTS), collapse = ","), "; SEUIL_PIVOT =", mc$SEUIL_PIVOT, "; date", mc$date, "; fichier", FICHIER_PIVOTS_COURTS(), "\n")
+```
+
+# 8. Tableau de bord final (`etat_final`)
+
+Toutes les lignes d'amont doivent être **FAIT** : `etape_refs`, `etape_partiels_longs`, `etape_catalogue`,
+`etape_repartitionner_catalogue`, `tirable_courts`, sans mention « GARDE EN ÉCART ». Les lignes de campagne
+(sélection, tirages, livrable) restent À FAIRE : c'est le travail de `02_campagne.Rmd`.
+
+```{r etat_final}
+# Ce que fait ce chunk : le tableau de bord etat_pipeline() (fichiers seulement, aucun calcul), puis la mémoire de session.
+# Ce que vous verrez : une ligne par étape avec FAIT / PARTIEL / À FAIRE, [partagé] ou [profil], et la preuve (fichiers, dates).
+# Durée : instantané. Ensuite : Restart R, puis 02_campagne.Rmd.
+etat_pipeline()
+memoire_session()   # objets par taille (Mo) ; Restart R avant de passer à 02_campagne.Rmd
+```
+
+*Si une ligne d'amont reste À FAIRE ou PARTIEL* : sa colonne « preuve » nomme les fichiers manquants et l'étape
+qui les produit ; relancez ce chunk-là (après `session` si vous avez redémarré R).

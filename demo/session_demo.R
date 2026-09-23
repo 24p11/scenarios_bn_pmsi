@@ -1,5 +1,6 @@
 ###############################################################################
-# demo/session_demo.R — prépare une SESSION en mode démo (notebooks RUN.Rmd / RUN_aval.Rmd, lancer_demo.R)
+# demo/session_demo.R — prépare une SESSION en mode démo (notebooks 01_preparation_donnees.Rmd / 02_campagne.Rmd, lancer_demo.R ;
+# 03_outils_maintenance.Rmd est hors démo)
 #
 # À sourcer AVANT le chunk `session` d'un notebook (chunk « Mode démo (optionnel) »), depuis la racine
 # du dépôt. Données FICTIVES et ALÉATOIRES : aucune validité épidémiologique. Sur la plateforme : ne

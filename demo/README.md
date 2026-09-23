@@ -46,32 +46,34 @@ comme `demo/base_demo*`.
 
 ## Dérouler les notebooks en mode démo
 
-Les deux notebooks sont la documentation **exécutable** du projet et tournent tels quels sur la base
-démo. Dans RStudio, ouvrir `RUN.Rmd` puis `RUN_aval.Rmd` et exécuter d'abord leur premier chunk
-« Mode démo (optionnel) » (il source `demo/session_demo.R` : faux `pRatihque`, base créée si absente,
-projet démo, profil « démo », variable `SCENARIOS_PMSI_DEMO`) ; le chunk `session` affiche alors
-« MODE DÉMO » en évidence. Les chunks non pertinents hors plateforme (migration inter-profils, palier
-de mesure, vidages, tests) le disent dans leur en-tête et portent l'option `demo=FALSE` ; les chunks
-`JE_CONFIRME…` restent à `FALSE`. Ordre : `RUN.Rmd` (amont : prep_data → refs (dont le tirable courts) → partiels →
-catalogue → repartitionnement) puis `RUN_aval.Rmd` (cycle de campagne : sélection → tirage →
-habillage → finalisation → registre → revue). `demo/resultats/` n'est pas vidé entre les deux
-(sauf `SCENARIOS_PMSI_DEMO_RAZ=1`).
+Les deux notebooks de parcours sont la documentation **exécutable** du projet et tournent tels quels sur la
+base démo, **de haut en bas, sans rien sauter** (un notebook = un parcours utilisateur). Dans RStudio, ouvrir
+`01_preparation_donnees.Rmd` puis `02_campagne.Rmd` et exécuter d'abord leur premier chunk « Mode démo »
+(il source `demo/session_demo.R` : faux `pRatihque`, base créée si absente, projet démo, profil « démo »,
+variable `SCENARIOS_PMSI_DEMO`) ; le chunk `session` affiche alors « MODE DÉMO » en évidence. Le chunk
+`ouvrir_campagne` de 02 reconnaît le mode démo (la campagne y est pilotée par la surcharge démo,
+`SCENARIOS_PMSI_DEMO_CAMPAGNE`, `campagne.R` n'est pas écrit) ; les `JE_CONFIRME…` restent à `FALSE`.
+Ordre : `01` (session → prep_data → partiels → références (dont le tirable courts) → catalogue → repartitionnement →
+vérifications) puis `02` (session → ouvrir_campagne → sélection → tirage longs → tirage courts → habillage →
+finalisation → registre → rapport → revue). `demo/resultats/` n'est pas vidé entre les deux (sauf
+`SCENARIOS_PMSI_DEMO_RAZ=1`). `03_outils_maintenance.Rmd` (outils d'exception, chunks en `eval=FALSE`) est hors démo.
 
 Sans RStudio (et en CI) :
 
 ```sh
-Rscript demo/executer_notebook.R --raz RUN.Rmd     # exécute les chunks dans l'ordre, comme des clics « Run »
-Rscript demo/executer_notebook.R RUN_aval.Rmd
+Rscript demo/executer_notebook.R --raz 01_preparation_donnees.Rmd   # exécute les chunks dans l'ordre, comme des clics « Run »
+Rscript demo/executer_notebook.R 02_campagne.Rmd
 ```
 
 La CI déroule suites, démo et notebooks dans deux jobs, **avec** et **sans** arrow (repli mock RDS) :
 toute lecture des notebooks passe par des lecteurs à repli (`lire_catalogue`, `lire_registre`,
-`lire_corpus_final`, `lire_si_present`), jamais par un dataset arrow direct.
+`lire_corpus_final`, `lire_si_present`), jamais par un dataset arrow direct. La promesse « tout s'exécute
+dans l'ordre » est ainsi testée à chaque push.
 
 `executer_notebook.R` n'utilise pas `rmarkdown::render` : les notebooks posent
 `knitr::opts_chunk$set(eval = FALSE)` (un Knit ne doit jamais lancer le pipeline) ; le lanceur lit les
-chunks, saute `opts` et les `demo=FALSE`, exécute `mode_demo` puis tout le reste, et s'arrête à la
-première erreur (code de sortie non nul).
+chunks, saute `opts`, exécute `mode_demo` puis tout le reste, et s'arrête à la première erreur (code de
+sortie non nul) ; il refuse `03_outils_maintenance.Rmd`.
 
 ## Tables de la base démo (`creer_base_demo.R`)
 

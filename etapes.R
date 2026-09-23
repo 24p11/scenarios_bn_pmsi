@@ -2,7 +2,8 @@
 # etapes.R — ORCHESTRATION PAR ÉTAPES du pipeline scenarios_bn_pmsi v8
 #
 # Sourcé par extraction.R et tirage.R (après config,
-# utils, exclusions, referentiels, helpers), et par RUN.Rmd. Contenu :
+# utils, exclusions, referentiels, helpers), donc par les trois notebooks (01_preparation_donnees.Rmd,
+# 02_campagne.Rmd, 03_outils_maintenance.Rmd — un notebook = un parcours utilisateur). Contenu :
 #   0. Chaînes base (définitions DÉPLACÉES telles quelles depuis le script d'extraction :
 #      prep_data, tables de référence, prep_scenarios2, fabriques ; diff vide, voir
 #      MODIFICATIONS_V8.md section 14). Aucune chaîne n'est exécutée au sourçage.
@@ -1183,7 +1184,7 @@ etape_tirage_courts <- function(chunk_range = NULL, budget = NB_CRH_CIBLE_COURTS
   f_side <- file.path(DIR_CHUNKS_COURTS(), "courts_chunks_meta.yaml")
   if(!is.null(registre)){
     st <- statut_campagne_registre(CAMPAGNE, registre, "court")
-    if(st$inscrite && !file.exists(f_side)) stop("etape_tirage_courts : campagne " %+% CAMPAGNE %+% " " %+% sub(" — changez d'identifiant$", "", st$texte) %+% " : campagne CLOSE côté courts (aucun chunk courts sur disque). Aucun re-tirage possible ; ouvrez une nouvelle campagne (RUN_aval.Rmd §3). Le registre ne se vide jamais.", call. = FALSE)
+    if(st$inscrite && !file.exists(f_side)) stop("etape_tirage_courts : campagne " %+% CAMPAGNE %+% " " %+% sub(" — changez d'identifiant$", "", st$texte) %+% " : campagne CLOSE côté courts (aucun chunk courts sur disque). Aucun re-tirage possible ; ouvrez une nouvelle campagne (chunk ouvrir_campagne de 02_campagne.Rmd). Le registre ne se vide jamais.", call. = FALSE)
     if(st$inscrite) cat("campagne ", CAMPAGNE, " : courts déjà inscrits au registre (", st$nb_courts, " scénarios) ; chunks présents relus, aucun nouveau tirage (reprise sûre)\n", sep = "")
     else cat("campagne ", CAMPAGNE, " (courts) : ", st$texte, " ; registre : ", registre$nb_campagnes, " campagne(s), ", sum(registre$lignes$branche == "court"), " scénarios courts, ", sum(grepl("^k", registre$par_profil$id_profil)), " pivots consommés\n", sep = "")
   }
@@ -1253,7 +1254,7 @@ etape_selection_longs <- function(budget = NB_CRH_CIBLE, mode = MODE_SELECTION, 
         all(vapply(names(POPULATIONS), function(pp) file.exists(FICHIER_SELECTION_POP_META(pp)), logical(1)))
       if(!sel_meme) stop("etape_selection_longs : campagne " %+% CAMPAGNE %+% " " %+% sub(" — changez d'identifiant$", "", st$texte) %+% " : campagne CLOSE (" %+%
                          (if(is.null(mt0)) "aucune sélection sur disque" else "la sélection présente porte la campagne " %+% mt0$CAMPAGNE) %+%
-                         "). Aucun re-tirage possible ; ouvrez une nouvelle campagne — section 3 du notebook RUN_aval.Rmd (CAMPAGNE <- \"Cn\", Restart R, vidage gardé). Le registre ne se vide jamais.", call. = FALSE)
+                         "). Aucun re-tirage possible ; ouvrez une nouvelle campagne — chunk ouvrir_campagne de 02_campagne.Rmd (nouvel identifiant, Restart R, vidage gardé). Le registre ne se vide jamais.", call. = FALSE)
       cat("campagne ", CAMPAGNE, " déjà inscrite au registre (", st$nb, " scénarios le ", st$date, ") ; sélection relue, aucune nouvelle sélection (reprise sûre)\n", sep = "")
     } else cat("campagne ", CAMPAGNE, " : ", st$texte, "\n", sep = "")
   }
@@ -1802,7 +1803,7 @@ rapport_finalisation <- function(fixe, rapport, resultats, meta_tirage, ctx, liv
 etape_registre_campagne <- function(campagne = CAMPAGNE, populations = names(POPULATIONS)){
   # Q53 ACTÉE : une mesure de palier n'écrit JAMAIS dans la mémoire permanente (défense en profondeur ; palier.R impose
   # aussi REGISTRE_ACTIF <- FALSE). La protection vit dans le mécanisme, pas dans la discipline.
-  if(palier_actif()) stop("etape_registre_campagne : surcharge de PALIER active (" %+% surcharge_active() %+% ") : une mesure n'écrit jamais au registre. Videz le palier (RUN_aval.Rmd §5), Restart R, puis relancez la finalisation de la campagne réelle.", call. = FALSE)
+  if(palier_actif()) stop("etape_registre_campagne : surcharge de PALIER active (" %+% surcharge_active() %+% ") : une mesure n'écrit jamais au registre. Videz le palier (chunk vider_palier de 03_outils_maintenance.Rmd), Restart R, puis relancez la finalisation de la campagne réelle.", call. = FALSE)
   t0 <- banniere_debut("etape_registre_campagne", "campagne = " %+% campagne %+% " ; " %+% DIR_REGISTRE())
   lignes <- NULL
   for(pop in populations){
@@ -2098,4 +2099,49 @@ etape_reorganiser <- function(dossier = file.path(PATH_RESULTS, "_a_reorganiser"
   cat("_a_reorganiser/ laissé intact : à supprimer à la main après contrôle (etat_pipeline()).\n")
   banniere_fin("etape_reorganiser", t0, character(0))
   invisible(plan)
+}
+
+## ---- 6. Oubli d'une campagne au registre (chantier « notebooks par parcours utilisateur ») ----
+# Retire du registre TOUTES les lignes de la campagne nommée (les deux branches, long et court). Le registre étant en
+# fichiers par campagne (registre_<C>.parquet), l'oubli = suppression de ce fichier — et de tout autre fichier du registre
+# qui ne contiendrait QUE cette campagne —, APRÈS affichage du compte de ce qui va être oublié et confirmation explicite
+# (JE_CONFIRME_OUBLI = TRUE). Un fichier mêlant cette campagne à d'autres -> stop (le registre ne se réécrit jamais
+# partiellement : arbitrage humain). Cas d'usage : une revue clinique défavorable disqualifie la campagne, ses scénarios ne
+# doivent plus bloquer les tirages futurs (ses id_profil redeviennent vierges, ses hash_das ne sont plus exclus). Le
+# livrable et les annexes (60_export_final/) ne sont PAS touchés : on oublie la comptabilité, pas les fichiers — leur sort
+# est une décision séparée. Idempotent : campagne absente du registre = « rien à oublier ». Contrepartie de l'inscription
+# dans le fil nominal de 02_campagne.Rmd : inscrire par défaut n'est sain que si la marche arrière existe, bruyante et confirmée.
+etape_oublier_campagne <- function(campagne, JE_CONFIRME_OUBLI = FALSE){
+  if(!is.character(campagne) || length(campagne) != 1 || !nzchar(campagne)) stop("etape_oublier_campagne : identifiant de campagne obligatoire (ex. \"C2\").", call. = FALSE)
+  t0 <- banniere_debut("etape_oublier_campagne", "campagne = " %+% campagne %+% " ; registre = " %+% DIR_REGISTRE() %+% " ; confirmation = " %+% isTRUE(JE_CONFIRME_OUBLI))
+  reg <- lire_registre(DIR_REGISTRE())
+  l <- reg$lignes[reg$lignes$campagne == campagne, , drop = FALSE]
+  if(nrow(l) == 0){
+    cat("campagne ", campagne, " : rien à oublier (aucune ligne à son nom dans ", DIR_REGISTRE(), " ; campagnes présentes : ",
+        if(reg$nb_scenarios > 0) paste(sort(unique(reg$lignes$campagne)), collapse = ", ") else "aucune", ")\n", sep = "")
+    return(invisible(banniere_fin("etape_oublier_campagne", t0, character(0))))
+  }
+  porteurs <- character(0); mixtes <- character(0)
+  for(f in reg$fichiers){
+    d <- normaliser_registre(arrow::read_parquet(f))
+    if(any(d$campagne == campagne)){ if(all(d$campagne == campagne)) porteurs <- c(porteurs, f) else mixtes <- c(mixtes, f) }
+  }
+  if(length(mixtes)) stop("etape_oublier_campagne : ", paste(basename(mixtes), collapse = ", "), " contient la campagne ", campagne,
+                          " ET d'autres campagnes : le registre ne se réécrit jamais partiellement (arbitrage humain). Rien fait.", call. = FALSE)
+  cat(sprintf("campagne %s : %d scénarios au registre (%d longs, %d courts), %d profils, %d DP, inscrits le %s ; fichier(s) : %s\n",
+              campagne, nrow(l), sum(l$branche == "long"), sum(l$branche == "court"), dplyr::n_distinct(l$id_profil), dplyr::n_distinct(l$diag2),
+              max(as.character(l$date)), paste(basename(porteurs), collapse = ", ")))
+  cat("le livrable et les annexes de la campagne (", ns(DIR_EXPORT_FINAL), ") ne sont PAS touchés par cet outil : on oublie la comptabilité, pas les fichiers.\n", sep = "")
+  if(!isTRUE(JE_CONFIRME_OUBLI)){
+    cat("Rien fait : relancez etape_oublier_campagne(\"", campagne, "\", JE_CONFIRME_OUBLI = TRUE) pour retirer ces ", nrow(l), " scénarios du registre.\n", sep = "")
+    return(invisible(banniere_fin("etape_oublier_campagne", t0, character(0))))
+  }
+  unlink(porteurs)
+  restant <- lire_registre(DIR_REGISTRE())
+  if(any(restant$lignes$campagne == campagne) || any(file.exists(porteurs)))
+    stop("etape_oublier_campagne : des lignes de la campagne ", campagne, " subsistent après suppression : vérifiez ", DIR_REGISTRE(), call. = FALSE)
+  cat(sprintf("campagne %s OUBLIÉE : %d scénarios retirés du registre (%s supprimé) ; registre restant : %d campagne(s), %d scénarios. Ses id_profil et hash_das redeviennent tirables par les campagnes suivantes.\n",
+              campagne, nrow(l), paste(basename(porteurs), collapse = ", "), restant$nb_campagnes, restant$nb_scenarios))
+  banniere_fin("etape_oublier_campagne", t0, character(0))
+  invisible(list(campagne = campagne, retires = nrow(l), longs = sum(l$branche == "long"), courts = sum(l$branche == "court"), fichiers = porteurs))
 }

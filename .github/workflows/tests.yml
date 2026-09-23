@@ -1,5 +1,7 @@
-# Intégration continue : les deux suites de tests hors base, la démo bout en bout, puis les deux notebooks
-# déroulés en mode démo (demo/executer_notebook.R : chunks exécutés dans l'ordre, sans rmarkdown).
+# Intégration continue : les deux suites de tests hors base, la démo bout en bout, puis les deux notebooks de parcours
+# (01_preparation_donnees.Rmd, 02_campagne.Rmd) déroulés en mode démo DE HAUT EN BAS (demo/executer_notebook.R : chunks
+# exécutés dans l'ordre, sans rmarkdown) — la promesse « un notebook = un parcours, tout s'exécute dans l'ordre » est
+# TESTÉE à chaque push, pas déclarée. 03_outils_maintenance.Rmd est hors démo (outils d'exception, eval=FALSE).
 # Le job échoue dès qu'une étape échoue (les suites et la démo terminent par stop() en cas d'échec :
 # Rscript rend alors un code non nul). Si la suite SQLite ou la démo dépasse les runners (temps ou
 # RAM ~7 Go), la scinder en job séparé sur push main seulement — sans réduire les fixtures.
@@ -45,7 +47,7 @@ jobs:
         run: Rscript demo/creer_base_demo.R
       - name: Démo — pipeline complet
         run: Rscript demo/lancer_demo.R
-      - name: Notebooks en mode démo — RUN.Rmd (amont)
-        run: Rscript demo/executer_notebook.R --raz RUN.Rmd
-      - name: Notebooks en mode démo — RUN_aval.Rmd (cycle de campagne)
-        run: Rscript demo/executer_notebook.R RUN_aval.Rmd
+      - name: Notebook 01 en mode démo, de haut en bas — préparer les données
+        run: Rscript demo/executer_notebook.R --raz 01_preparation_donnees.Rmd
+      - name: Notebook 02 en mode démo, de haut en bas — produire une campagne
+        run: Rscript demo/executer_notebook.R 02_campagne.Rmd

@@ -37,9 +37,10 @@ qui permettrait un jour de faire tourner l'aval en dehors de la plateforme.
 | `extraction.R` | Lanceur du monde extraction (46 lignes : config, chargements, connexion, 4 appels d'étapes). |
 | `tirage.R` | Lanceur du monde aval (32 lignes, aucune connexion). |
 | `utils.R`, `referentiels.R`, `exclusions.R` | Héritage v7 toujours chargé (opérateur `%+%`, codes diabète, listes d'exclusion). |
-| `RUN.Rmd` | Notebook de l'amont (extraction, passe diagnostic). |
-| `RUN_aval.Rmd` | Notebook de l'exploitation (du catalogue aux campagnes). |
-| `RUN.md` | La référence texte des deux séquences + les règles de cache. |
+| `01_preparation_donnees.Rmd` | Parcours « préparer les données » (rare : installation, extension du périmètre, régénération demandée par un garde-fou ; avec base). |
+| `02_campagne.Rmd` | Parcours « produire une campagne » (le cycle courant ; sans base ; aucun chunk optionnel). |
+| `03_outils_maintenance.Rmd` | Les outils d'exception (réorganisation, adoption, rétro-inscription, palier, oubli d'une campagne…), tous en `eval=FALSE`, table « symptôme → chunk » en tête. |
+| `RUN.md` | La référence texte des trois parcours + les tables de référence (étapes, arborescence, règles de cache). |
 | `MODIFICATIONS_V8.md` | Le journal : d'où vient chaque bloc de code, chaque écart autorisé, les questions Q1…Q40 (les cas limites déjà tranchés). |
 | `referentiels/*.yaml` | La doctrine externalisée : codes diabète, exclusions de paires, typologie des séjours. |
 | `tests/test_helpers.R` | ~300 vérifications des fonctions pures. |
@@ -371,7 +372,7 @@ et les défauts (versionné, sans chemin personnel ni valeur « courante ») ;
 `config_locale.R` porte le poste (racine, `PATH_RESULTS`, `pschema` ; une ligne
 par clé dans `config_locale.exemple.R`) ; la décision d'exploitation d'une
 campagne (identifiant, budget, k, registre) s'écrit dans `campagne.R` depuis le
-chunk `ouvrir_campagne` de `RUN_aval.Rmd`, activé par `SCENARIOS_PMSI_SURCHARGE`,
+chunk `ouvrir_campagne` de `02_campagne.Rmd`, activé par `SCENARIOS_PMSI_SURCHARGE`,
 exactement comme `palier.R` — les deux sont exclusifs, et le chunk `session`
 affiche la source de chaque paramètre à côté de sa valeur effective.
 
@@ -508,14 +509,38 @@ avant/après au journal. Tout le code **neuf** vit dans les helpers, testés.
 
 ## 8. Se repérer en pratique
 
+**Un notebook = un parcours utilisateur.** Constat d'exploitation réelle : un médecin DIM n'a pas pu
+déterminer seul, dans les deux anciens notebooks, quels chunks exécuter pour sa tâche (28 chunks dont 4
+utiles à sa session, outils d'exception mêlés au cycle courant). Depuis le chantier « notebooks par
+parcours », chaque notebook est UN parcours exécutable de haut en bas sans rien sauter — le déroulé
+complet est le mode d'emploi — et tout ce qui n'est pas le parcours nominal en est sorti :
+`01_preparation_donnees.Rmd` (préparer les données, rarement), `02_campagne.Rmd` (produire une campagne,
+le cycle courant, aucun chunk optionnel, le registre inscrit dans le fil), `03_outils_maintenance.Rmd`
+(les exceptions, chunks tous en `eval=FALSE`, table « symptôme → chunk » en tête). La prose des
+notebooks est écrite pour un nouveau collègue qui ne peut interroger personne : chaque terme du projet
+y est défini à sa première apparition, chaque chunk dit ce qu'il fait, ce qu'il affiche et combien de
+temps il prend, et chaque arrêt prévu est annoncé avant d'arriver.
+
+- **Quel notebook ouvrir ?** → installer, étendre le périmètre, régénérer un magasin : `01` ;
+  produire une campagne : `02` ; un message d'erreur, une revue défavorable, un changement de
+  poste : `03` (sa table « symptôme → chunk »). Le README le résume (« Par où commencer »).
 - **Où en suis-je ?** → `etat_pipeline()` (l'état de chaque étape, fichiers
   présents / attendus, mention [partagé] / [profil], gardes en écart, sans connexion).
+- **« Fonction inconnue »** (could not find function "etape_…") → le chunk `session` de
+  chaque notebook affiche l'**empreinte de version** du code (`empreinte_version` : nombre de
+  fonctions `etape_*` chargées + hash court des sources) ; deux postes à jour affichent la même ;
+  un déploiement par copie manuelle avec un `etapes.R` ancien se voit d'un coup d'œil.
 - **Changer de répertoire de travail** → `config_locale.R` (`PATH_RESULTS`), copie
   manuelle des trois anciens dossiers dans `_a_reorganiser/`, `etape_reorganiser()`
-  (plan puis executer) — procédure complète dans RUN.md.
+  (plan puis executer) — `03_outils_maintenance.Rmd`, procédure complète dans RUN.md.
 - **Les courts d'une campagne** → `etape_tirage_courts()` après la sélection
-  (`RUN_aval.Rmd` §4b) ; budget en bannière (ratio / absolu) ; méta dans
+  (`02_campagne.Rmd`, chunk `tirage_courts`) ; budget en bannière (ratio / absolu) ; méta dans
   `40_campagnes/<C>/habille/courts/_meta.yaml`.
+- **La revue clinique disqualifie une campagne** → `etape_oublier_campagne(campagne, JE_CONFIRME_OUBLI = TRUE)`
+  (`03`, chunk `oublier_campagne`) retire ses lignes du registre, les deux branches, après affichage du
+  compte et confirmation ; le livrable n'est pas touché. C'est la contrepartie de l'inscription
+  systématique dans le fil de `02` (asymétrie des risques : une campagne non inscrite est un poison
+  silencieux, une campagne inscrite à tort est une sur-prudence réversible).
 - **Adopter C1** (longs + courts historiques, sans re-tirage) →
   `etape_adopter_campagne("C1", source_longs = …)` une fois ; plusieurs corpus
   datés ⇒ le chemin est obligatoire.
@@ -526,8 +551,9 @@ avant/après au journal. Tout le code **neuf** vit dans les helpers, testés.
   paramètre de campagne (`défaut config` / `surcharge campagne (campagne.R)` /
   `surcharge palier (palier.R)`) ; pour le reste, `grep -n "NOM_PARAM" config.R`
   (doctrine et défauts), `config_locale.R` (poste).
-- **Ouvrir une campagne** → chunk `ouvrir_campagne` de `RUN_aval.Rmd` (paramètres en
-  clair, écrit `campagne.R`), Restart R, session ; jamais en éditant `config.R`.
+- **Ouvrir une campagne** → chunk `ouvrir_campagne` de `02_campagne.Rmd` (paramètres en
+  clair, écrit `campagne.R`, vidage confirmé des transitoires des campagnes précédentes),
+  Restart R, `session_campagne` ; jamais en éditant `config.R`.
 - **« surcharge … refusée »** → un palier et une campagne ne cohabitent pas : le
   message dit lequel retirer (`vider_palier`, ou `Sys.setenv(SCENARIOS_PMSI_SURCHARGE = "")`
   puis Restart R).
@@ -538,11 +564,12 @@ avant/après au journal. Tout le code **neuf** vit dans les helpers, testés.
   sont l'inventaire des cas limites déjà tranchés.
 - **La RAM monte** → `memoire_session()`, puis Restart R.
 - **« Objet introuvable »** → la session ne charge pas la bonne version du
-  code : `git -C <PATH_PROJET> log --oneline -1`, puis Restart R.
+  code : l'empreinte de version du chunk `session`, `git -C <PATH_PROJET> log --oneline -1`,
+  puis Restart R.
 - **Voir tourner le pipeline sans la base** → `Rscript demo/creer_base_demo.R`
   puis `Rscript demo/lancer_demo.R` (base SQLite fictive, sorties sous `demo/resultats/`) ;
-  ou les notebooks eux-mêmes, chunk « Mode démo » en tête (`demo/session_demo.R`),
-  vérifiés en CI par `demo/executer_notebook.R`.
+  ou les notebooks `01` puis `02` eux-mêmes, chunk « Mode démo » en tête (`demo/session_demo.R`),
+  déroulés de haut en bas en CI par `demo/executer_notebook.R` (`03` est hors démo).
 - **« Racine du projet inconnue »** → `SCENARIOS_PMSI_PATH` dans l'environnement,
   ou `config_locale.R` à la racine (copier `config_locale.exemple.R`).
 - **Données de la démo** → aléatoires, sans aucune validité épidémiologique :
@@ -560,7 +587,8 @@ exploitation → 11. campagnes (identifiants, registre, plafonds de classe,
 recyclage) → 12. packaging GitHub + mode démo → 13. notebook campagnes, config
 locale, démo dans les notebooks → 14. correctifs post-contrôle (lecture robuste,
 parité courts) → 15. livrable unique, nommage, arborescence par étapes → 16. trois
-niveaux de paramètres, préfixe `k` → 17. courts en campagnes + habillage robuste.
+niveaux de paramètres, préfixe `k` → 17. courts en campagnes + habillage robuste →
+18. notebooks par parcours utilisateur (trois notebooks, registre dans le fil, outil d'oubli).
 Chaque chantier = une section du journal, avec ses questions.
 
 ### I. Livrable unique, nommage, arborescence par étapes
@@ -590,3 +618,18 @@ historiques sans re-tirage (`preparer_longs_adoptes`, `preparer_courts_adoptes`,
 `verifier_adoption`, `etape_adopter_campagne`) ; et l'habillage robuste
 (`habiller_admin`, `controle_habillage`) né d'un défaut trouvé en revue
 clinique (§5e).
+
+### L. Notebooks par parcours utilisateur
+
+Décisions actées : les deux notebooks historiques sont remplacés par trois
+parcours (`01_preparation_donnees.Rmd`, `02_campagne.Rmd`,
+`03_outils_maintenance.Rmd`), chacun exécutable de haut en bas sans rien sauter,
+écrit pour un nouveau collègue qui ne peut interroger personne (§8) ; l'inscription
+au registre entre dans le fil nominal de `02` (chunk `registre`, distinct et
+visible, juste après la finalisation), et sa contrepartie existe : `etape_oublier_campagne`,
+qui retire du registre les deux branches d'une campagne disqualifiée, après
+affichage du compte et confirmation, sans toucher le livrable ; le chunk `session`
+de chaque notebook affiche l'empreinte de version du code (`empreinte_version`) ;
+la CI déroule `01` puis `02` de haut en bas, avec et sans arrow — la promesse
+« tout s'exécute dans l'ordre » est testée, pas déclarée. Aucune logique de
+calcul modifiée : les fonctions d'étape existantes sont inchangées.

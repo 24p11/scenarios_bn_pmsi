@@ -759,11 +759,11 @@ ok("Q49 (a) : reprise complète du lanceur après finalisation + registre -> no-
      log_rep <- sortie(lancer("tirage.R")); Sys.setenv(SCENARIOS_PMSI_ETAPES_SEULEMENT = "1")
      any(grepl("déjà inscrite au registre .* sélection relue, aucune nouvelle sélection", log_rep)) && any(grepl("déjà présent, sauté", log_rep)) && any(grepl("même campagne", log_rep)) && any(grepl("courts déjà inscrits au registre", log_rep)) &&
        lire_registre(DIR_REGISTRE())$nb_scenarios == reg_avant && setequal(lire_corpus_final("C2", branche = "long")$id_scenario, finaux2$id_scenario) && setequal(lire_corpus_final("C2", branche = "court")$id_scenario, sc_c2$id_scenario) })
-ok("Q49 (b) : campagne inscrite SANS sélection sur disque -> stop « campagne close », renvoi section 3 du notebook, aucun fichier touché",
+ok("Q49 (b) : campagne inscrite SANS sélection sur disque -> stop « campagne close », renvoi au chunk ouvrir_campagne de 02_campagne.Rmd, aucun fichier touché",
    { f_mt <- FICHIER_SELECTION_META(); f_bak <- f_mt %+% ".bak"; file.rename(f_mt, f_bak)
      avant <- file.info(list.files(DIR_SELECTION(), recursive = TRUE, full.names = TRUE))$mtime
      err <- tryCatch({ invisible(sortie(etape_selection_longs())); NULL }, error = function(e) conditionMessage(e)); file.rename(f_bak, f_mt)
-     !is.null(err) && grepl("campagne CLOSE \\(aucune sélection sur disque\\)", err) && grepl("section 3 du notebook", err) && identical(avant, file.info(list.files(DIR_SELECTION(), recursive = TRUE, full.names = TRUE))$mtime) })
+     !is.null(err) && grepl("campagne CLOSE \\(aucune sélection sur disque\\)", err) && grepl("chunk ouvrir_campagne de 02_campagne.Rmd", err) && identical(avant, file.info(list.files(DIR_SELECTION(), recursive = TRUE, full.names = TRUE))$mtime) })
 ok("Q49 (c) : sélection présente d'une AUTRE campagne -> stop « campagne close », aucun re-tirage",
    { f_mt <- FICHIER_SELECTION_META(); orig <- readLines(f_mt); mt_x <- yaml::read_yaml(f_mt); mt_x$CAMPAGNE <- "C1"; yaml::write_yaml(mt_x, f_mt)
      err <- tryCatch({ invisible(sortie(etape_selection_longs())); NULL }, error = function(e) conditionMessage(e)); writeLines(orig, f_mt)
@@ -771,8 +771,8 @@ ok("Q49 (c) : sélection présente d'une AUTRE campagne -> stop « campagne clos
 ok("Q53 : etape_registre_campagne refuse de s'exécuter sous PALIER_ACTIF (une mesure n'écrit jamais au registre)",
    { assign("PALIER_ACTIF", TRUE, envir = globalenv()); err <- tryCatch({ invisible(sortie(etape_registre_campagne("C2"))); NULL }, error = function(e) conditionMessage(e)); rm("PALIER_ACTIF", envir = globalenv())
      !is.null(err) && grepl("PALIER active", err) && grepl("jamais au registre", err) })
-ok("chunk `rapport` de RUN_aval.Rmd exécuté AVANT la finalisation (dossier d'exports vide) -> message actionnable, aucune erreur R",
-   { l <- readLines(file.path(racine, "RUN_aval.Rmd"), warn = FALSE); i <- grep("^```\\{r rapport\\}", l); j <- i + which(grepl("^```\\s*$", l[(i + 1):length(l)]))[1]
+ok("chunk `rapport` de 02_campagne.Rmd exécuté AVANT la finalisation (dossier d'exports vide) -> message actionnable, aucune erreur R",
+   { l <- readLines(file.path(racine, "02_campagne.Rmd"), warn = FALSE); i <- grep("^```\\{r rapport\\}", l); j <- i + which(grepl("^```\\s*$", l[(i + 1):length(l)]))[1]
      ex_sauve <- DIR_EXPORT_FINAL; d_vide <- file.path(tempdir(), "export_vide"); dir.create(d_vide, showWarnings = FALSE); assign("DIR_EXPORT_FINAL", d_vide %+% "/", envir = globalenv())
      out <- tryCatch(sortie(eval(parse(text = l[(i + 1):(j - 1)]), envir = globalenv())), error = function(e) "ERREUR : " %+% conditionMessage(e)); assign("DIR_EXPORT_FINAL", ex_sauve, envir = globalenv())
      !any(grepl("^ERREUR", out)) && any(grepl("rapport_C2.txt absent — produit par etape_finalisation\\(\\)", out)) })
@@ -878,6 +878,30 @@ ok("pipeline déroulé SANS re-extraction sur le répertoire réorganisé (mock 
        nrow(rec3) > 0 && all(rec3$variante > NB_TIRAGES_COURTS) && yaml::read_yaml(FICHIER_COURTS_CAMPAGNE_META())$n_pivots_recycles > 0 &&
          !any(lr$id_scenario[lr$campagne == "C3"] %in% lr$id_scenario[lr$campagne != "C3"]) && !anyDuplicated(lr$id_scenario[lr$campagne %in% c("C2", "C3")]) &&
          !any(paste(lr$id_profil, lr$hash_das)[lr$campagne == "C3"] %in% paste(lr$id_profil, lr$hash_das)[lr$campagne != "C3"]) })
+
+# ---- OUBLI d'une campagne au registre (chantier « notebooks par parcours ») : contrepartie de l'inscription dans le fil nominal de 02
+cat("\n# oubli d'une campagne : confirmation exigée, les deux branches retirées, livrable intact, identifiants de nouveau tirables, idempotence\n")
+reg_av <- lire_registre(DIR_REGISTRE()); c3 <- reg_av$lignes[reg_av$lignes$campagne == "C3", ]; liv3 <- lire_corpus_final("C3"); mt_liv3 <- file.info(FICHIER_LIVRABLE("C3"))$mtime; f_reg3 <- file.path(DIR_REGISTRE(), nom_registre("C3"))
+o_non <- sortie(etape_oublier_campagne("C3"))
+ok("oubli SANS confirmation : le compte est affiché (longs et courts ; livrable annoncé non touché), rien n'est fait, registre_C3 intact",
+   any(grepl(sprintf("campagne C3 : %d scénarios au registre \\(%d longs, %d courts\\)", nrow(c3), sum(c3$branche == "long"), sum(c3$branche == "court")), o_non)) && any(grepl("Rien fait", o_non)) && any(grepl("ne sont PAS touchés", o_non)) &&
+     file.exists(f_reg3) && lire_registre(DIR_REGISTRE())$nb_scenarios == reg_av$nb_scenarios && sum(c3$branche == "court") > 0 && sum(c3$branche == "long") > 0)
+o_oui <- sortie(etape_oublier_campagne("C3", JE_CONFIRME_OUBLI = TRUE)); reg_ap <- lire_registre(DIR_REGISTRE())
+ok("oubli CONFIRMÉ : registre_C3 supprimé, les deux branches retirées, les cinq autres campagnes intactes, livrable et annexes de C3 intacts, statut « jamais inscrite »",
+   any(grepl("campagne C3 OUBLIÉE", o_oui)) && !file.exists(f_reg3) && !any(reg_ap$lignes$campagne == "C3") && reg_ap$nb_campagnes == 5 && reg_ap$nb_scenarios == reg_av$nb_scenarios - nrow(c3) &&
+     meme_contenu(reg_ap$lignes, reg_av$lignes[reg_av$lignes$campagne != "C3", ]) && file.exists(FICHIER_LIVRABLE("C3")) && file.info(FICHIER_LIVRABLE("C3"))$mtime == mt_liv3 && file.exists(FICHIER_LIVRABLE_META("C3")) && file.exists(FICHIER_RAPPORT("C3")) &&
+     meme_contenu(lire_corpus_final("C3"), liv3) && !statut_campagne_registre("C3", reg_ap)$inscrite)
+ok("oubli idempotent : campagne absente -> « rien à oublier », aucune erreur, registre inchangé", { o3 <- sortie(etape_oublier_campagne("C3", JE_CONFIRME_OUBLI = TRUE)); any(grepl("rien à oublier", o3)) && lire_registre(DIR_REGISTRE())$nb_scenarios == reg_ap$nb_scenarios })
+# les identifiants redeviennent tirables : une campagne C4 ouverte après l'oubli retrouve VIERGES les profils et pivots que seule C3 avait consommés
+seuls_c3 <- setdiff(unique(c3$id_profil), reg_ap$lignes$id_profil)
+surcharger(SURCHARGE_PROD_ISOLE, "CAMPAGNE <- 'C4'", "REGISTRE_ACTIF <- TRUE"); invisible(sortie(lancer("tirage.R")))
+invisible(sortie(etape_selection_longs())); sel_c4 <- purrr::list_rbind(purrr::compact(lapply(names(POPULATIONS), function(pp) lire_catalogue(DIR_SELECTION(pp)))))
+invisible(sortie(etape_tirage_courts())); sc_c4 <- arrow::read_parquet(FICHIER_COURTS_CAMPAGNE())
+ok("après l'oubli, C4 re-tire les identifiants libérés : profils longs que seule C3 avait consommés -> sélectionnés VIERGES (variante_debut = 1, non recyclés) ; pivots courts libérés -> variantes reprises à 1 ; C3 absente du registre",
+   { v4 <- sel_c4[sel_c4$id_profil %in% seuls_c3, ]; p4 <- sc_c4[sc_c4$id_profil %in% seuls_c3, ]
+     cat("   profils libérés par l'oubli :", length(seuls_c3), "; re-sélectionnés en C4 :", nrow(v4), "; pivots courts libérés re-tirés :", dplyr::n_distinct(p4$id_profil), "\n")
+     length(seuls_c3) > 0 && nrow(v4) > 0 && all(v4$origine_profil == "vierge") && all(v4$variante_debut == 1L) && (nrow(p4) == 0 || all(tapply(p4$variante, p4$id_profil, min) == 1L)) &&
+       !"C3" %in% lire_registre(DIR_REGISTRE())$lignes$campagne })
 
 Sys.unsetenv("SCENARIOS_PMSI_ETAPES_SEULEMENT")
 Sys.setenv(SCENARIOS_PMSI_PATH = proj, SCENARIOS_PMSI_PROFIL = "diagnostic"); surcharger("ANS_HISTORIQUE <- c(17L, 20L, 26L)"); source(file.path(proj, "config.R"))

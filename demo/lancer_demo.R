@@ -7,7 +7,7 @@
 # (prep_data, refs dont le tirable courts, partiels, catalogue) -> repartitionnement (typologie DPEC/TPEC) -> tirage SANS base
 # (sélection, courts de la campagne, DAS longs, habillage, finalisation) -> résumé. Toutes les sorties sous
 # demo/resultats/ (vidé au départ : la démo repart toujours de zéro). Pour dérouler les mêmes étapes
-# chunk par chunk : notebooks RUN.Rmd / RUN_aval.Rmd, chunk « Mode démo » (demo/README.md).
+# chunk par chunk : notebooks 01_preparation_donnees.Rmd puis 02_campagne.Rmd, chunk « Mode démo » (demo/README.md).
 # Les scénarios produits sont ALÉATOIRES : aucune validité épidémiologique.
 ###############################################################################
 racine_depot <- function(){   # dupliqué de creer_base_demo.R (les scripts doivent se suffire)

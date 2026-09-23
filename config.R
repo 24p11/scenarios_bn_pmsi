@@ -7,8 +7,8 @@
 #                                 absolu, pschema, identifiant) ni valeur « courante » d'exploitation ;
 #   2. config_locale.R         = le POSTE (racine du dépôt, PATH_RESULTS, pschema) — local, gitignoré, modèle
 #                                 config_locale.exemple.R ; sourcé AVANT le bloc PROFIL ;
-#   3. SCENARIOS_PMSI_SURCHARGE = la DÉCISION D'EXPLOITATION : campagne.R (chunk ouvrir_campagne de RUN_aval.Rmd)
-#                                 OU palier.R (chunk palier_surcharge) — exclusifs ; locaux, gitignorés ; sourcés
+#   3. SCENARIOS_PMSI_SURCHARGE = la DÉCISION D'EXPLOITATION : campagne.R (chunk ouvrir_campagne de 02_campagne.Rmd)
+#                                 OU palier.R (chunk palier_surcharge de 03_outils_maintenance.Rmd) — exclusifs ; locaux, gitignorés ; sourcés
 #                                 après le bloc PROFIL ; la surcharge démo (demo/session_demo.R) est le troisième cas ;
 #   puis les dérivés (chemins) et les vérifications, enfin set.seed(SEED).
 # Toutes les constantes paramétrables ; aucun nombre magique dans les scripts.
@@ -194,7 +194,7 @@ POPULATIONS <- list(              # partition EXACTE des modalités de cage (vé
 PLAFONDS_DPEC <- list("Accouchement normal mère" = 100L, "Bébé normal" = 100L)   # extensible
 # Campagnes itératives (registre des tirages, append-only). DÉFAUTS documentés : la décision d'exploitation d'une
 # campagne (CAMPAGNE, NB_CRH_CIBLE, NB_LIGNES_PAR_DP, REGISTRE_ACTIF, PLAFONDS_DPEC ajustés) ne s'édite PAS ici mais
-# dans campagne.R, écrit depuis le notebook (chunk ouvrir_campagne) et activé par SCENARIOS_PMSI_SURCHARGE.
+# dans campagne.R, écrit depuis le notebook 02_campagne.Rmd (chunk ouvrir_campagne) et activé par SCENARIOS_PMSI_SURCHARGE.
 CAMPAGNE       <- "C1"    # DÉFAUT : identifiant court de la campagne, OBLIGATOIRE, tracé partout (sélection, livrable, registre)
 REGISTRE_ACTIF <- TRUE    # DÉFAUT : FALSE = comportement sans registre (tests / diagnostic / palier)
 # Séjours courts EN CAMPAGNE (même statut que les longs dans le corpus ; tirage par campagne à variantes nouvelles, registre commun).

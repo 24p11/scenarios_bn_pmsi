@@ -39,9 +39,9 @@ Toute livraison (compte rendu de fin de chantier) est précédée, dans l'ordre,
 2. `Rscript tests/test_chaines_sqlite.R` — sans arrow ;
 3. les deux mêmes suites AVEC arrow ;
 4. la démo (`Rscript demo/creer_base_demo.R` puis `Rscript demo/lancer_demo.R`) et les deux
-   notebooks en mode démo (`Rscript demo/executer_notebook.R --raz RUN.Rmd` puis
-   `Rscript demo/executer_notebook.R RUN_aval.Rmd`), avec et sans arrow, comme la CI
-   (`.github/workflows/tests.yml`).
+   notebooks de parcours en mode démo, de haut en bas (`Rscript demo/executer_notebook.R --raz 01_preparation_donnees.Rmd`
+   puis `Rscript demo/executer_notebook.R 02_campagne.Rmd`), avec et sans arrow, comme la CI
+   (`.github/workflows/tests.yml`). `03_outils_maintenance.Rmd` est hors démo (outils d'exception).
 
 Les résultats chiffrés (assertions vertes par passe, volumes de la démo) figurent au compte rendu et
 dans la sous-section « Vérifications » de la section du journal.

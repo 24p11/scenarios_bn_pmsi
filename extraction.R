@@ -9,7 +9,7 @@
 # Ce script n'appelle que les étapes, dans l'ordre : etape_prep_data() ; etape_refs() ;
 # etape_partiels_longs() ; etape_catalogue(). Comportement bout-en-bout identique au flux
 # antérieur (prouvé par tests/test_chaines_sqlite.R). Pour charger la session sans rien
-# exécuter (RUN.Rmd, étapes individuelles) : SCENARIOS_PMSI_ETAPES_SEULEMENT=1.
+# exécuter (notebook 01_preparation_donnees.Rmd, étapes individuelles) : SCENARIOS_PMSI_ETAPES_SEULEMENT=1.
 ###############################################################################
 
 ## ---- 0. Bootstrap : config, sources, connexion ----

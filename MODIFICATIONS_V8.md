@@ -1872,3 +1872,223 @@ Une seule fabrique rouverte par branche, une seule régénération de magasin.
   courts N = 2 -> suffixes `-a2`, lignes = scénarios × 2 au rapport, retour à N = 1 identique ; adoption C1 inchangée
   (doublons historiques informés, méta noté) ; helpers : surcharge et suffixe courts.
   Vérifications : helpers 373 / 370, SQLite 192 / 192, démo et notebooks ± arrow verts (zéro identifiant dupliqué au rapport).
+
+## 25. Chantier « notebooks par parcours utilisateur »
+
+**Constat d'exploitation réelle.** L'utilisateur du projet (médecin DIM, pas développeur) n'a pas pu déterminer seul,
+dans `RUN.Rmd` et `RUN_aval.Rmd`, quels chunks exécuter pour sa tâche : 28 chunks dont 4 utiles à sa session, outils
+d'exception mêlés au cycle courant ; il a fallu une assistance extérieure pour lister les chunks à passer. Objectif du
+chantier : des utilisateurs AUTONOMES, sans assistance.
+
+**Principe directeur** (gravé en tête de chaque notebook, dans le README, RUN.md et VISITE_GUIDEE.md §8) : **un notebook =
+UN parcours utilisateur, exécutable DE HAUT EN BAS sans rien sauter — le déroulé complet est le mode d'emploi.** Tout chunk
+qui ne fait pas partie du parcours nominal n'a pas sa place dans le notebook. Aucun changement de logique de calcul :
+réorganisation de l'existant, en-têtes, documentation, plus UN outil nouveau (`etape_oublier_campagne`) et une fonction
+d'affichage (`empreinte_version`). Les autres fonctions d'étape ne bougent pas ; aucune chaîne base touchée ;
+`tests/ancien_20260914/` intact ; recettes d'identifiants intactes.
+
+### 25.1 Les trois notebooks (remplacent `RUN.Rmd` et `RUN_aval.Rmd`, supprimés par `git rm`)
+
+- **`01_preparation_donnees.Rmd`** — « à lancer rarement : première installation, extension du périmètre, régénération
+  demandée par un garde-fou ». Tout s'exécute, dans l'ordre : `session` (connexion base, `PROFIL_01` en tête, empreinte de
+  version, `etat_pipeline`) → `prep_data` → `partiels` → `apports` (lecture des trois diagnostics) → `references` → `catalogue`
+  (décision de périmètre en tête du chunk, défaut = config) → `repartitionner` → `verif_catalogue` (sidecar + couverture des
+  DP perdus au seuil) → `tirable_courts` (vérification par le méta) → `etat_final`. L'idempotence est écrite en tête (« relancer
+  ENTIER est toujours sûr ») ; les `FORCER_*` sont documentés dans un encadré unique (« quand un garde-fou vous le demande —
+  et seulement lui »), avec le coût de chaque régénération. Aucun chunk `demo=FALSE`.
+  **Écart au brief, imposé par le code** : le brief plaçait les références APRÈS le repartitionnement ; or `etape_catalogue`
+  exige `ref_distribution_e660` (produite par `etape_refs`) dès que `CONVERSION_E669` est vrai (`exiger_fichiers`, etapes.R).
+  L'ordre retenu est donc prep_data → partiels → **références** → catalogue → repartitionnement → vérifications → tirable, la
+  dépendance étant expliquée dans la prose du chunk `references` et garantie par un test (Q77).
+- **`02_campagne.Rmd`** — « le cycle courant : produire une campagne ». Tout s'exécute, AUCUN chunk optionnel : `session`
+  (sans base, campagne + statut au registre + surcharge + sources + empreinte) → `ouvrir_campagne` (paramètres EN CLAIR :
+  identifiant, budgets longs et courts, ratio, k, registre, tenues admin ; écrit `campagne.R` ; **intègre le vidage** des
+  transitoires des campagnes précédentes derrière `JE_CONFIRME_NOUVELLE_CAMPAGNE`, en-tête « touche / ne touche jamais » ;
+  en mode démo, branche explicite : la campagne est pilotée par la surcharge démo et `campagne.R` n'est pas écrit — Q64
+  conservée, mais le chunk s'exécute dans le fil au lieu d'être sauté) → « Restart R » documenté → `session_campagne` (même
+  code que `session`, à rejouer après le Restart) → `selection` → `verif_selection` → `tirage_longs` (mono-session par défaut ;
+  `chunk_range` documenté en commentaire pour le parallélisme ; refus sous palier conservé) → `tirage_courts` → `habillage` →
+  `finalisation` → **`registre`** (`etape_registre_campagne()` DANS le fil nominal, juste après la finalisation, gardé par
+  `REGISTRE_ACTIF` : sous `FALSE` il affiche « registre inactif — rien à inscrire ») → `rapport` → `revue` (ouvre l'échantillon ;
+  **grille de lecture** en cinq points dans la prose) → `etat_final` (livrable compté + tableau de bord).
+- **`03_outils_maintenance.Rmd`** — « exceptions et réparations : n'ouvrez ce fichier que si une situation précise vous y
+  envoie ». Table « symptôme → chunk » en tête (fonction inconnue → version du code ; garde-fou de magasin → 01, FORCER ;
+  campagne close → 02, ouvrir_campagne ; paramètres différents → vider_campagne_courante ; mesurer sans consommer → palier ;
+  revue défavorable → oublier la campagne ; nouveau répertoire → réorganisation ; campagne ancienne → adoption ; registre
+  perdu → rétro-inscription). Chunks TOUS en `eval=FALSE`, chacun avec « QUAND s'en servir / quand SURTOUT PAS » : `session`
+  (empreinte de version + dernier commit git si connu), `reorganisation_plan` / `reorganisation_executer`, `adoption` (appel
+  ACTIF derrière l'`eval=FALSE`, arguments en tête, plus de lignes à décommenter ; en-tête : l'inscription des courts est
+  incluse), `retro_inscription_longs` et `retro_inscription_courts` (appels actifs), `palier_surcharge` / `palier_tirage` /
+  `vider_palier`, `vider_campagne_courante` (ex `vider_chunks`, refusé si la campagne est inscrite), **`oublier_campagne`**
+  (nouveau), `registre_etat`, `couverture_dp`, `memoire`. Hors démo : `demo/executer_notebook.R` le refuse explicitement.
+
+### 25.2 Registre dans le fil + outil d'oubli : l'asymétrie des risques
+
+Décision : l'inscription au registre est un chunk du parcours nominal, distinct et visible, avec un en-tête qui dit ce qu'il
+grave. Raisonnement : une campagne finalisée mais **non inscrite** est un poison silencieux (ses scénarios sont re-tirés à la
+campagne suivante sans que rien ne l'indique — constaté en réel) ; une campagne **inscrite à tort** est une sur-prudence
+réversible. Inscrire par défaut n'est sain que si la marche arrière existe, bruyante et confirmée : c'est
+`etape_oublier_campagne(campagne, JE_CONFIRME_OUBLI = FALSE)` (etapes.R, section 6) — retire du registre TOUTES les lignes
+de la campagne nommée (les deux branches). Mécanique : le registre étant en fichiers par campagne, l'oubli = suppression de
+`registre_<C>.parquet` (et de tout autre fichier du registre qui ne contiendrait QUE cette campagne), APRÈS affichage du
+compte (scénarios, longs, courts, profils, DP, date, fichiers) et confirmation explicite ; un fichier mêlant plusieurs
+campagnes ⇒ stop (le registre ne se réécrit jamais partiellement). Le livrable et les annexes ne sont PAS touchés (on oublie
+la comptabilité, pas les fichiers — leur sort est une décision séparée, dit l'en-tête). Idempotent (campagne absente =
+« rien à oublier »). Note : `etape_finalisation` écrit déjà le registre en fin de course quand le registre est actif ; le
+chunk `registre` le confirme (append-only : même contenu = rien réécrit) et l'écrit s'il manquait (Q81).
+
+### 25.3 En-têtes, autonomie, empreinte de version
+
+- Chaque notebook commence par le principe, puis le bloc « À QUI, QUAND, PRÉREQUIS, CE QUE VOUS AUREZ À LA FIN » en français
+  courant (public : médecin DIM / data manager, pas développeur), puis la liste de ses chunks avec une ligne chacun.
+- Chaque chunk ouvre sur un en-tête en commentaires (2 à 6 lignes) : ce qu'il fait, ce qu'on verra s'afficher si tout va
+  bien, combien de temps ça prend ; les chunks à décision portent leurs paramètres EN TÊTE, un commentaire par paramètre,
+  avec un exemple chiffré dans la prose (budget 500 000 / 20 000 pour un essai ; k = 5 recommandé, leçon du premier tirage réel).
+- Niveau d'explication « nouveau collègue » : chaque terme du projet est défini à sa première apparition dans chaque notebook
+  (catalogue = « la liste de tous les profils possibles avec le nombre de fois où chacun a été vu dans la vraie base, comme un
+  catalogue de vente par correspondance » ; registre = livre de comptes ; magasin ; campagne ; pivot ; variante ; habillage ;
+  garde-fou ; paquet / plage ; session / Restart R) ; les messages d'erreur prévus sont ANNONCÉS (« si vous voyez <message>,
+  c'est normal dans tel cas, faites ceci ») avec leur libellé réel ; le jargon R est évité ou expliqué entre parenthèses.
+- **Empreinte de version** (`helpers.R`, section L, `empreinte_version(racine, fichiers = FICHIERS_CODE, env)`) : nombre de
+  fonctions `etape_*` chargées + hash court (8 hex, sha256) de la concaténation des huit fichiers de code ; affichée par le
+  chunk `session` de chaque notebook (« code : empreinte 2c1d1e3c (8 fichiers) ; 16 fonctions etape_* chargées ») — le cas
+  réel « notebook à jour + etapes.R ancien = fonction inconnue » se lit d'un coup d'œil ; la table des symptômes de 03 y renvoie.
+
+### 25.4 Épreuve du nouveau collègue (faite, consignée)
+
+Relecture de chaque notebook, chunk par chunk, avec la question « un nouveau collègue qui ne peut interroger personne
+saurait-il quoi faire, quoi attendre, et quoi faire si ça s'arrête ? ». Verdict « oui » sur les 11 chunks de 01, les 15 de 02
+et les 15 de 03 après correction des défauts trouvés à la relecture : (a) trois messages annoncés dans la prose de 02 ne
+reprenaient pas le libellé réel du code — « sidecar … attendu / reçu » (réel : « découpage incompatible avec les chunks
+existants … attendu … ; reçu … »), « etape_tirage_courts : … aucune sélection » (réel : « budget courts : NB_CRH_CIBLE_COURTS
+est NULL et le volume longs attendu de la campagne est inconnu ») et « jeu de chunks incomplet » (réel : « population … :
+n / N chunks présents. Lancez etape_tirage_das_longs() ») — corrigés, chaque annonce dit désormais ce que l'utilisateur
+lira ; (b) le message d'exclusivité des surcharges citait `JE_CONFIRME` alors que le chunk `vider_palier` de 03 s'appelle
+désormais `JE_CONFIRME_VIDAGE_PALIER` (drapeaux distincts par chunk destructeur, pour qu'un `TRUE` oublié dans un chunk ne
+serve jamais un autre) — corrigé ; (c) une coquille d'affichage (« Rien vidé . ») — corrigée. Points restés « à surveiller »
+en exploitation réelle : les durées annoncées sur la base réelle sont des ordres de grandeur (les seules mesures disponibles
+ici sont celles de la démo), à ajuster après une première campagne sur plateforme (Q78).
+
+### 25.5 Documentation et outillage alignés
+
+README (section « Par où commencer » = la table « vous voulez… → ouvrez tel notebook » ; ligne « historique » sur la
+suppression des anciens notebooks ; carte du dépôt) ; `RUN.md` refondu en référence des trois parcours (même découpage, même
+ordre : Parcours 01 / 02 / 03, plus les tables de référence : étapes — avec `etape_registre_campagne`, `etape_oublier_campagne`,
+les rétro-inscriptions —, arborescence, règles de cache) ; `VISITE_GUIDEE.md` (§2 table des fichiers, §4H, §8 « se repérer »
+avec le principe et les nouvelles entrées « quel notebook ouvrir », « fonction inconnue », « revue défavorable », §9
+chronologie, section L) ; `demo/README.md`, `demo/session_demo.R`, `demo/lancer_demo.R` ; `demo/executer_notebook.R`
+(nouveaux noms, refus de 03, message d'usage) ; CI : exécute `01` puis `02` en mode démo DE HAUT EN BAS, avec et sans arrow —
+la promesse « tout s'exécute dans l'ordre » est testée à chaque push ; `CLAUDE.md` (commandes des passes) ; messages du code
+qui citaient un notebook (`etapes.R` : campagne close côté longs et côté courts, palier sous registre ; `helpers.R` :
+`message_courts_absent`, en-têtes de `campagne.R` / `palier.R`, exclusivité ; `config.R`, `extraction.R`, `tirage.R`).
+Balayage garanti par un test : plus aucune occurrence de `RUN.Rmd` / `RUN_aval.Rmd` hors journal, instantanés et ligne
+« historique » du README.
+
+### 25.6 Correspondance complète ancien chunk → nouveau notebook / chunk
+
+`RUN.Rmd` (20 chunks) :
+
+| Ancien chunk | Nouveau |
+|---|---|
+| `opts`, `mode_demo` | `01` `opts`, `mode_demo` |
+| `session` | `01` `session` (+ `PROFIL_01` en tête, empreinte de version) |
+| `etat` | fusionné : `etat_pipeline()` en fin de `session` et chunk `etat_final` |
+| `prep_data` | `01` `prep_data` |
+| `refs` | `01` `references` (déplacé après `partiels`, avant `catalogue`) |
+| `tirable_courts` | `01` `tirable_courts` (vérification par le méta ; plus de `source("tirage.R")`) |
+| `partiels` | `01` `partiels` |
+| `apports` | `01` `apports` |
+| `catalogue` | `01` `catalogue` |
+| `couverture_dp` | `01` `verif_catalogue` (fusionné avec `verif_repartitionnement`) |
+| `repartitionner` | `01` `repartitionner` |
+| `selection`, `tirage_das`, `habillage`, `finalisation`, `revue` (`demo=FALSE`, doublon raccourci du cycle) | `02` `selection`, `tirage_longs`, `habillage`, `finalisation`, `revue` — le doublon disparaît (Q52 soldée) |
+| `palier_100k` (`demo=FALSE`) | `03` `palier_surcharge` / `palier_tirage` / `vider_palier` |
+| `vider_chunks` (`demo=FALSE`) | `03` `vider_campagne_courante` (`JE_CONFIRME_VIDAGE_CAMPAGNE`, refusé si inscrite) |
+| `tests` (`demo=FALSE`) | supprimé : les suites se lancent par `Rscript` (RUN.md « Tests hors base ») |
+
+`RUN_aval.Rmd` (29 chunks) :
+
+| Ancien chunk | Nouveau |
+|---|---|
+| `opts`, `mode_demo` | `02` `opts`, `mode_demo` |
+| `session` | `02` `session` et `02` `session_campagne` (après le Restart R) ; `03` `session` |
+| `etat` | `02` `etat_final` (+ `etat_pipeline()` en fin de session) |
+| `parametres` | `02` `session` (`afficher_sources_campagne` : paramètres de campagne et leur source) ; les constantes de doctrine se lisent dans `config.R` — supprimé |
+| `reorganisation_plan`, `reorganisation_executer` (`demo=FALSE`) | `03` mêmes noms |
+| `repartitionner`, `verif_repartitionnement` | `01` `repartitionner`, `verif_catalogue` (une fois, après le catalogue : retirés du cycle de campagne) |
+| `ouvrir_campagne` (`demo=FALSE`) + `nouvelle_campagne` | `02` `ouvrir_campagne` (fusionnés : décision + vidage confirmé ; branche démo au lieu de `demo=FALSE`) |
+| `selection`, `verif_selection` | `02` mêmes noms |
+| `tirage_complet` | `02` `tirage_longs` |
+| `tirage_parallele` | `02` `tirage_longs` (mode d'emploi des plages en commentaire ; le nombre de chunks se lit dans `longs_chunks_meta.yaml`) — supprimé comme chunk |
+| `tirage_courts` | `02` `tirage_courts` |
+| `palier_surcharge`, `palier_tirage`, `vider_palier` (`demo=FALSE`) | `03` mêmes noms (`vider_palier` : `JE_CONFIRME_VIDAGE_PALIER`) |
+| `habillage`, `finalisation` | `02` mêmes noms |
+| — (registre écrit automatiquement en fin de finalisation, sans chunk) | `02` `registre` — NOUVEAU chunk dans le fil |
+| `rapport` | `02` `rapport` (code identique ; test SQLite conservé) |
+| `revue` | `02` `revue` (+ grille de lecture) |
+| `corpus` | `02` `etat_final` |
+| `adoption_c1` (`demo=FALSE`, appel commenté) | `03` `adoption` (appel actif, arguments en tête) |
+| `retro_inscription` (appel commenté) | `03` `retro_inscription_longs` (actif) + `03` `retro_inscription_courts` (nouveau : `etape_retro_inscrire_courts`) |
+| `registre_etat`, `couverture_dp`, `memoire` | `03` mêmes noms (`memoire_session()` aussi en fin de `01`) |
+| — | `03` `oublier_campagne` — NOUVEAU (`etape_oublier_campagne`) |
+
+### 25.7 Tests
+
+- Helpers (+9, 382 avec arrow / 379 sans) : existence des trois notebooks et absence des anciens, principe gravé, noms de
+  chunks uniques, bloc « À qui » ; 01 et 02 sans `demo=FALSE`, `eval=FALSE` seulement sur `opts` / `mode_demo`, en-tête de
+  deux lignes de commentaire minimum par chunk ; 03 tout en `eval=FALSE` avec QUAND / QUAND PAS et la table des symptômes ;
+  ordre nominal de 02 et chunk `registre` gardé par `REGISTRE_ACTIF` ; `ouvrir_campagne` (paramètres en clair, tenues = 1L,
+  `JE_CONFIRME_NOUVELLE_CAMPAGNE <- FALSE`, branche démo, aucun `CAMPAGNE <-` en dur) ; 03 (palier via
+  `ecrire_surcharge_palier`, adoption active, oubli derrière `JE_CONFIRME_OUBLI <- FALSE`, rétro-inscriptions actives) ; 01
+  (partiels → références → catalogue, `tirable_courts`, encadré FORCER, empreinte affichée par chaque `session`) ; balayage des
+  anciens noms ; `empreinte_version` (hash 8 hex déterministe, sensible au contenu, comptage des `etape_*`, absents listés) et
+  sur le dépôt (8 fichiers présents). Assertions antérieures sur les notebooks réécrites sur les nouveaux fichiers.
+- SQLite (+4, 196 / 196) : `etape_oublier_campagne("C3")` sans confirmation → compte affiché (longs et courts), rien fait ;
+  confirmé → `registre_C3.parquet` supprimé, les deux branches retirées, les cinq autres campagnes intactes (contenu comparé),
+  livrable et annexes de C3 intacts (mtime et contenu), statut « jamais inscrite » ; idempotence (« rien à oublier ») ; puis
+  campagne C4 ouverte après l'oubli : les profils que seule C3 avait consommés sont sélectionnés VIERGES (`variante_debut = 1`,
+  non recyclés : 18 profils libérés, 1 re-sélectionné sur la fixture) — les identifiants redeviennent tirables ; les pivots
+  courts libérés repartent de la variante 1 (aucun pivot n'était propre à C3 sur la fixture : assertion conditionnelle, Q85) ;
+  message « campagne close » recadré sur `ouvrir_campagne de 02_campagne.Rmd` ; test du chunk `rapport` porté sur 02.
+- Démo et notebooks : 01 puis 02 déroulés de haut en bas en mode démo, avec et sans arrow (01 : 11 chunks exécutés, 1 sauté
+  — `opts` ; 02 : 14 exécutés, 1 sauté — `opts`) ; `executer_notebook.R` refuse 03. **Épreuve d'autonomie** : le déroulé
+  nominal de 02 en démo ne requiert AUCUNE décision hors `ouvrir_campagne` (tous les `JE_CONFIRME…` à `FALSE`, aucun chunk
+  sauté hors `opts`), vérifié par l'exécution CI top-to-bottom.
+
+### 25.8 Vérifications
+
+| Passe | Résultat |
+|---|---|
+| `tests/test_helpers.R` avec / sans arrow | 382 / 379 |
+| `tests/test_chaines_sqlite.R` avec / sans arrow | 196 / 196 |
+| `demo/lancer_demo.R` avec / sans arrow | verts : 277 longs (35 pédiatrie, 242 adulte), 1963 courts |
+| `demo/executer_notebook.R --raz 01_preparation_donnees.Rmd` puis `02_campagne.Rmd`, avec / sans arrow | verts, de haut en bas (01 : 11 chunks exécutés / 1 sauté ; 02 : 14 / 1) |
+
+### 25.9 Questions (aucune action non autorisée)
+
+- **Q77** — Ordre de 01 : le brief plaçait les références après le repartitionnement ; `etape_catalogue` exige
+  `ref_distribution_e660` (conversion E669) — les références sont donc avant le catalogue (après les partiels). À confirmer ;
+  l'alternative (catalogue sans conversion puis conversion différée) toucherait la logique de calcul, hors brief.
+- **Q78** — Les durées annoncées dans les en-têtes pour la base réelle sont des ordres de grandeur (secondes en démo, heures
+  pour les partiels et le tirage de 500 000) ; à ajuster après une première campagne réelle sous les nouveaux notebooks.
+- **Q79** — `session_campagne` duplique le code de `session` (deux copies à garder synchrones) : c'est le prix de la séquence
+  « ouvrir_campagne → Restart R → session » lisible de haut en bas ; une alternative serait un unique chunk `session` que la
+  prose demande de rejouer, au détriment du « sans rien sauter ». Non tranché.
+- **Q80** — En mode démo, `ouvrir_campagne` n'écrit pas `campagne.R` (Q64 conservée) : la branche réelle
+  (`ecrire_surcharge_campagne` + Restart) est couverte par la suite SQLite, pas par l'exécution CI du notebook.
+- **Q81** — `etape_finalisation` écrit toujours le registre en fin de course (inchangé, « les autres fonctions ne bougent
+  pas ») ; le chunk `registre` est donc une confirmation visible et idempotente, et le filet quand la finalisation ne l'a pas
+  écrit (méta de sélection sous `REGISTRE_ACTIF = FALSE`, ou reprise). Faut-il à terme que le chunk soit le SEUL point
+  d'inscription (retirer l'écriture automatique de la finalisation) ? Non fait.
+- **Q82** — Le chunk `parametres` (constantes de doctrine affichées) n'a pas de successeur : `session` affiche les paramètres
+  de campagne et leur source ; les constantes se lisent dans `config.R`. Au passage : `SEUIL_EXPORT_MONOFICHIER` y subsiste
+  à côté de `SEUIL_MONOFICHIER` (résidu Q62), non touché.
+- **Q83** — `PROFIL_01` vaut `"production"` par défaut dans 01 (`RUN.Rmd` posait `diagnostic`) : les magasins sont partagés
+  et identiques sous les deux profils (seul le nom de `diagnostic_memoire_<profil>.csv` change) ; le profil diagnostic reste
+  disponible pour l'étude de périmètre. À confirmer.
+- **Q84** — `demo/executer_notebook.R` refuse `03_outils_maintenance.Rmd` (interprétation mécanique de « 03 hors démo,
+  documenté ») ; le lanceur reconnaît toujours `demo=FALSE` bien qu'aucun chunk de 01 / 02 ne le porte plus.
+- **Q85** — Test « les pivots courts libérés repartent de la variante 1 » : sur la fixture, C3 n'avait recyclé que des pivots
+  du corpus historique (aucun pivot propre à C3), l'assertion courts est donc vacuité ; la mécanique est commune aux deux
+  branches (`pivots_sous_registre` relit le registre). Un test avec un pivot propre à la campagne oubliée exigerait une
+  fixture dédiée — non fait.

@@ -5,8 +5,8 @@
 # les magasins partagés (10_references, 20_catalogue, 30_courts) écrits par extraction.R (etapes.R,
 # famille tirage). Ce script n'appelle que les étapes, dans l'ordre : etape_selection_longs() ;
 # etape_tirage_courts() (étape DE CAMPAGNE : budget = NB_CRH_CIBLE_COURTS ou RATIO_COURTS × volume longs
-# attendu) ; etape_tirage_das_longs() ; etape_habillage_longs() ; etape_finalisation(). Pour charger la session sans rien exécuter (RUN.Rmd) :
-# SCENARIOS_PMSI_ETAPES_SEULEMENT=1.
+# attendu) ; etape_tirage_das_longs() ; etape_habillage_longs() ; etape_finalisation(). Pour charger la session sans rien exécuter
+# (notebooks 02_campagne.Rmd et 03_outils_maintenance.Rmd) : SCENARIOS_PMSI_ETAPES_SEULEMENT=1.
 ###############################################################################
 
 ## ---- 0. Bootstrap ----
