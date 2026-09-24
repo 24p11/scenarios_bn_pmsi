@@ -110,7 +110,7 @@ dans le livrable de la campagne et inscrit au registre (branche `court`).
 | `00_partiels/catalogue_partiel_<etbs>_<an>.parquet` | `etape_partiels_longs` | les **comptes** par profil × graine d'UNE catégorie d'établissements × UNE année, codes bruts | catalogue |
 | `20_catalogue/catalogue_longs_seuil/` | `etape_catalogue` puis `etape_repartitionner_catalogue` | le catalogue des longs : **concaténation** des partiels du périmètre, puis **fusion** (ré-agrégation des comptes des mêmes profils entre années et catégories, conversion E669 avant, seuil de confidentialité après — voir §5a) ; parts par lettre du DP, typologie, `id_profil` | sélection, rétro-inscription |
 | `30_courts/ref_pivots_courts.parquet` | `etape_refs` | le catalogue des courts : les pivots (6 clés) et leur effectif, cumul de `ANS_COURTS`, seuil en base | tirage courts de chaque campagne |
-| `10_references/ref_*.parquet` | `etape_refs` | les dix tables de référence moins le tirable (§5b) ; `ref_v_admin_longs` sans `nbda` | tirage, habillage |
+| `10_references/ref_*.parquet` | `etape_refs` | les dix tables de référence moins le tirable (§5b) ; `ref_v_admin_longs` sans `nbda` ; `ref_v_admin_courts` avec `type_unite` (§5e) | tirage, habillage |
 | `40_campagnes/<C>/selection/` | `etape_selection_longs` | le contrat du tirage : lignes retenues, variantes attendues, origine (vierge / recyclée) | tirage des DAS, registre |
 | `40_campagnes/<C>/chunks/`, `chunks_courts/` | tirages | les scénarios (DAS complets) par paquets, reprise fichier par fichier | habillage, registre |
 | `40_campagnes/<C>/habille/` | `etape_habillage_longs`, `etape_tirage_courts` | les lignes habillées (modes, durée, `repli_admin`) | finalisation |
@@ -423,7 +423,8 @@ sous-codage des séjours courts ne doit pas être reproduit),
 nus), `pivots_courts` — **le tirable, rangé dans `30_courts/`** —,
 `v_admin_courts` / `v_admin_longs` (modes d'entrée, de sortie, mode de prise en
 charge, durée ; `v_admin_longs` photographié SANS `nbda` depuis le chantier
-« habillage robuste »), et deux référentiels de mesure pour l'aval Python :
+« habillage robuste » ; `v_admin_courts` photographié AVEC `type_unite` depuis le
+chantier « type_unite côté courts », §5e), et deux référentiels de mesure pour l'aval Python :
 `referentiel_substitution_imprecis` (la future substitution des codes « sans
 précision » — elle ne se fait PAS ici) et `referentiel_paires_chroniques`.
 Le tirable courts et ses refs de saturation (`ref_das_chronique`,
@@ -475,6 +476,25 @@ bouton de campagne (`NB_VARIANTES_ADMIN_LONGS`, N tenues et suffixe `-aN`). Le
 rapport ajoute les contrôles « zéro NA d'habillage », « durée dans le
 périmètre », « lignes = scénarios × N » et la distribution du repli. La leçon de processus : la revue clinique a validé son
 rôle, et le contrôle qui manquait existe désormais.
+
+**`type_unite` côté courts, via l'habillage** (besoin aval : la règle de
+substitution des DP imprécis exempte les séjours UHCD, qui vivent surtout dans
+la branche courts). Décision d'architecture : `type_unite` est un pivot des
+longs mais N'ENTRE PAS dans les pivots courts — `PIVOTS_COURTS` et la recette
+`id_courts_v1` sont figés ; un pivot de plus changerait tous les identifiants,
+orphelinerait les inscriptions courts de C1 au registre et casserait le
+recyclage. Il entre dans l'**habillage** des courts, comme les modes d'entrée
+et de sortie : une colonne de plus dans la photographie `ref_v_admin_courts`
+(le compte en base l'inclut ; `prep_data` le porte déjà avec la doctrine UHCD
+de l'extraction — seuls les séjours entièrement UHCD sont « UHCD »), tirée
+**avec** la tenue admin (même tirage pondéré par `n`, même repli, même
+`repli_admin`) : une unité UHCD vient avec les modes et le mode de prise en
+charge observés avec elle, jamais un tirage séparé. Conséquence épistémique
+documentée au méta du livrable (« provenance par branche ») : chez les longs,
+`type_unite` est un pivot du profil, tiré du réel avec la graine ; chez les
+courts, il est tiré à l'habillage sur les effectifs réels de la strate. Les
+courts historiques adoptés (C1) n'en ont pas : NA assumé, listé au méta
+(`colonnes_na_par_branche`), et la règle aval par défaut (substituer) s'y applique.
 
 ## 6. La robustesse : pourquoi « relancer la même commande » marche toujours
 

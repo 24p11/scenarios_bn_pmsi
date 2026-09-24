@@ -282,10 +282,15 @@ leurs diagnostics associés sont notoirement sous-codés en routine, donc on ne 
 âge et sexe hospitalisés longtemps (là où le codage est complet). Le **budget** = `RATIO_COURTS` × volume longs
 attendu de la sélection (ou le budget absolu posé à l'ouverture), réparti sur les **pivots** du catalogue des
 courts au prorata de leur effectif ; sous registre, les variantes reprennent après celles déjà inscrites (aucun
-re-tirage). Même mécanique de paquets et de plages que les longs (`chunk_range`).
+re-tirage). Même mécanique de paquets et de plages que les longs (`chunk_range`). Chaque scénario court reçoit
+ensuite sa **tenue administrative** (modes d'entrée et de sortie, mode de prise en charge) **et son type d'unité**
+(`type_unite` : UHCD ou non), tirés ensemble parmi les combinaisons réellement observées dans sa strate — les courts
+portent ainsi `type_unite` comme les longs, mais par l'habillage et non par le profil (le fichier compagnon du livrable
+le dit ; l'aval s'en sert pour la règle des diagnostics imprécis, qui exempte les séjours UHCD).
 
 ```{r tirage_courts}
-# Ce que fait ce chunk : écrit 40_campagnes/<C>/chunks_courts/ puis habille/courts/scenarios_courts.parquet + _meta.yaml.
+# Ce que fait ce chunk : écrit 40_campagnes/<C>/chunks_courts/ puis habille/courts/scenarios_courts.parquet + _meta.yaml (tenue admin
+#   ET type_unite tirés ensemble, au poids des effectifs de la strate ; jamais de case vide).
 # Ce que vous verrez : « CAMPAGNE = … ; budget courts = N (source : ratio … ) », « tirable P pivots, T tirés (vierges = …,
 #   recyclés = …) », une ligne par paquet, puis le nombre de scénarios gardés / demandés.
 # Durée : de quelques minutes à une heure sur la base réelle selon le budget ; secondes en démo.
@@ -387,7 +392,9 @@ reg$par_campagne   # nb_longs / nb_courts par campagne (registre commun aux deux
 L'échantillon (`echantillon_revue_<C>.csv`, 50 scénarios, moitié courts moitié longs) est fait pour être **lu par
 un médecin** : une ligne par scénario avec le diagnostic principal et son libellé, les diagnostics associés avec
 leurs libellés (`[G]` marque les deux codes de la graine, issus du réel ; les autres sont la complétion tirée),
-l'âge, le sexe, le GHM, la durée, les modes d'entrée et de sortie.
+l'âge, le sexe, le GHM, la durée, les modes d'entrée et de sortie, le type d'unité (`type_unite` : chez les longs
+c'est un pivot du profil, chez les courts il est tiré à l'habillage avec la tenue ; vide seulement pour les courts d'une
+campagne adoptée de l'ancienne génération).
 
 **Grille de lecture**, scénario par scénario :
 
@@ -396,8 +403,8 @@ l'âge, le sexe, le GHM, la durée, les modes d'entrée et de sortie.
    maladie, pas d'incompatibilité de sexe ou d'âge, chronicités plausibles) ?
 3. La durée et les modes d'entrée / sortie sont-ils cohérents avec le type de séjour (un décès ou un
    transfert en réanimation sur un séjour de 0 nuit doit vous arrêter) ?
-4. Aucune case vide sur la durée et les modes (les contrôles automatiques l'interdisent : le voir ici serait
-   une anomalie à signaler).
+4. Aucune case vide sur la durée, les modes et le type d'unité (les contrôles automatiques l'interdisent : le voir
+   ici serait une anomalie à signaler).
 5. Le scénario pris dans son ensemble raconte-t-il un séjour crédible ?
 
 Notez chaque anomalie avec l'`id_scenario`. Une ou deux invraisemblances isolées : à consigner. Un défaut

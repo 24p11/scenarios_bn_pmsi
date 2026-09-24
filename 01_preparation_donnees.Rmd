@@ -66,7 +66,7 @@ posant, dans la console, le drapeau qu'il cite AVANT de relancer le chunk concer
 | Message du garde-fou | Drapeau à poser dans la console, puis relancer le chunk | Coût |
 |---|---|---|
 | magasin `00_partiels` en écart | `FORCER_PARTIELS <- TRUE` puis chunk `prep_data` et `partiels` | des heures (tout est recompté) |
-| magasin `10_references` en écart | `FORCER_REFS <- TRUE` puis chunk `references` | quelques minutes à dizaines de minutes |
+| magasin `10_references` en écart | `FORCER_REFS <- TRUE` puis chunk `references` (attendu UNE fois après une mise à jour du code qui change une photographie, ex. `type_unite` ajouté à celle des courts : la clé `COLS_ADMIN_COURTS` est citée) | quelques minutes à dizaines de minutes |
 | magasin `30_courts` en écart | `FORCER_COURTS <- TRUE` puis chunk `references` | quelques minutes |
 | magasin `20_catalogue` en écart | `FORCER_CATALOGUE <- TRUE` puis chunk `catalogue` et `repartitionner` | dizaines de minutes |
 
@@ -177,7 +177,9 @@ if (!is.null(memoire)) memoire[order(-memoire$pic_go), ][seq_len(min(10, nrow(me
 Les **tables de référence** sont les comptes agrégés dans lesquels le tirage des scénarios puisera : quels
 diagnostics associés sont fréquents pour tel diagnostic principal, tel âge, tel sexe (les candidats de
 complétion) ; combien de maladies chroniques porte un patient de tel âge ; comment se répartissent les
-complications du diabète ; les modes d'entrée et de sortie et les durées observés (« l'habillage administratif »).
+complications du diabète ; les modes d'entrée et de sortie, les durées et, pour les séjours courts, le type d'unité
+(UHCD ou non, tel que l'extraction le retient : seuls les séjours entièrement en UHCD sont « UHCD ») observés — c'est
+« l'habillage administratif », tiré plus tard avec la tenue de chaque scénario.
 Neuf tables vont dans `10_references/`. La dixième, `ref_pivots_courts`, est **le catalogue des séjours courts**
 (0 à 2 nuits) : la liste de leurs **pivots** — un pivot est un profil de séjour court (mode d'hospitalisation,
 sexe, classe d'âge, GHM, diagnostic principal, durée) avec son effectif — rangée dans `30_courts/`.
@@ -195,7 +197,9 @@ etape_refs()               # forcer = TRUE uniquement si un garde-fou vous l'a d
 
 *Si vous voyez* « magasin partagé references … en écart » ou « … courts … en écart » : le garde-fou a détecté
 qu'un magasin existant a été fabriqué avec d'autres paramètres (année de référence, seuils, années du
-tirable) ; suivez l'encadré en tête (`FORCER_REFS` ou `FORCER_COURTS`, puis relancez ce chunk).
+tirable) ou par une version antérieure du code (la clé citée est alors `COLS_ADMIN_COURTS` ou `CLES_ADMIN_LONGS` :
+une photographie a changé de colonnes) ; suivez l'encadré en tête (`FORCER_REFS` ou `FORCER_COURTS`, puis relancez
+ce chunk).
 
 # 5. Le catalogue des séjours longs (`catalogue`)
 

@@ -121,6 +121,12 @@ PIVOTS_LONGS       <- c("mode_hospit", "sexe", "age", "cage", "racine", "ghm2", 
                         "diag2", "nbda", "type_unite", "prep_sc")                       # v7.2 l.483 + §2.8
 PIVOTS_LONGS_SEUIL <- setdiff(PIVOTS_LONGS, "nbda")                                     # v7.2 l.528-529
 COLS_ADMIN         <- c("mode_entree", "mode_sortie", "mdp")                            # colonnes d'habillage
+# Chantier « type_unite côté courts, via l'habillage » (journal §26) : besoin aval (la substitution des DP imprécis exempte
+# les UHCD, qui vivent surtout chez les courts). type_unite N'ENTRE PAS dans PIVOTS_COURTS ni dans la recette id_courts_v1
+# (figées : un pivot de plus changerait tous les identifiants, orphelinerait C1 au registre, casserait le recyclage) ; il est
+# une colonne de plus de la photographie ref_v_admin_courts, tirée AVEC la tenue admin (même tirage pondéré, même repli).
+# Clé du magasin 10_references : un magasin photographié sans type_unite est en écart -> FORCER_REFS (le méta l'impose).
+COLS_ADMIN_COURTS  <- c(COLS_ADMIN, "type_unite")                                       # colonnes apportées à l'habillage des COURTS
 # Clés de l'habillage admin des longs (chantier « courts en campagnes + habillage robuste », défaut trouvé en revue clinique) :
 # nbda SORT des clés (ref_v_admin_longs sans nbda : la table rétrécit, les variantes se cumulent entre valeurs de nbda) ;
 # repli hiérarchique (helpers K2) : (0) ces 6 clés -> (1) cage au lieu de l'âge exact -> (2) mode_hospit × cage × racine.
@@ -262,7 +268,7 @@ MAGASINS_PARTAGES <- c(partiels = DIR_PARTIELS, references = DIR_REFERENCES, cat
 NOMS_CONFIG_META <- c("PROFIL", "VERSION_SCRIPT", "AN_REF", "ANS_COURTS", "ANS_HISTORIQUE", "TYPES_ETBS_LONGS", "SEED",
                       "SEUIL_PIVOT", "SEUIL_REF_DAS", "SEUIL_REF_IMPRECIS", "SEUIL_REF_PAIRES",
                       "DUREE_COURTS", "DUREE_LONGS", "DUREE_MIN_REF", "NBDA_MAX", "K_GRAINE_LONGS",
-                      "NB_TIRAGES_COURTS", "NB_VARIANTES_ADMIN_COURTS", "NB_VARIANTES_ADMIN_LONGS", "PIVOTS_COURTS", "CLES_ADMIN_LONGS", "RATIO_COURTS", "NB_CRH_CIBLE_COURTS",
+                      "NB_TIRAGES_COURTS", "NB_VARIANTES_ADMIN_COURTS", "NB_VARIANTES_ADMIN_LONGS", "PIVOTS_COURTS", "CLES_ADMIN_LONGS", "COLS_ADMIN_COURTS", "RATIO_COURTS", "NB_CRH_CIBLE_COURTS",
                       "MODE_SELECTION", "NB_CRH_CIBLE", "NB_LIGNES_PAR_DP", "CAMPAGNE", "REGISTRE_ACTIF", "QUOTA_MIN_PAR_UNITE", "NB_CHUNKS_MAX", "CHUNK_SIZE_MIN", "CHUNK_SIZE_FIXE",
                       "GARDER_CHUNKS", "FORCER_REFS", "PIVOTS_LONGS",
                       "CONVERSION_E669", "BARE_E669_DEFAUT", "COLLECT_PAR_MORCEAUX", "SEUIL_ALERTE_GO")

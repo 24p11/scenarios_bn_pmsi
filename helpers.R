@@ -1654,7 +1654,7 @@ lire_si_present <- function(chemin, produit_par = "l'étape amont", mode = "auto
 # clés bloquantes historiques ; les références les 6 clés de l'ancienne condition Q13.
 CLES_MAGASINS <- list(
   partiels   = c("K_GRAINE_LONGS", "NBDA_MAX", "DUREE_LONGS", "PIVOTS_LONGS"),
-  references = c("AN_REF", "ANS_COURTS", "SEUIL_REF_DAS", "SEUIL_REF_IMPRECIS", "SEUIL_REF_PAIRES", "CONVERSION_E669", "BARE_E669_DEFAUT", "CLES_ADMIN_LONGS", "DUREE_LONGS", "DUREE_COURTS"),
+  references = c("AN_REF", "ANS_COURTS", "SEUIL_REF_DAS", "SEUIL_REF_IMPRECIS", "SEUIL_REF_PAIRES", "CONVERSION_E669", "BARE_E669_DEFAUT", "CLES_ADMIN_LONGS", "DUREE_LONGS", "DUREE_COURTS", "COLS_ADMIN_COURTS"),   # COLS_ADMIN_COURTS : photographie courts AVEC type_unite (§26)
   catalogue  = c("ANS_HISTORIQUE", "TYPES_ETBS_LONGS", "SEUIL_PIVOT", "CONVERSION_E669", "BARE_E669_DEFAUT", "K_GRAINE_LONGS", "NBDA_MAX", "DUREE_LONGS", "PIVOTS_LONGS"),
   courts     = c("ANS_COURTS", "SEUIL_PIVOT", "DUREE_COURTS", "PIVOTS_COURTS", "CONVERSION_E669", "BARE_E669_DEFAUT"))   # 30_courts = le TIRABLE (pivots), plus le tirage
 DRAPEAUX_MAGASINS <- c(partiels = "FORCER_PARTIELS", references = "FORCER_REFS", catalogue = "FORCER_CATALOGUE", courts = "FORCER_COURTS")
@@ -1706,6 +1706,12 @@ NOTE_POIDS <- paste0("poids = effectif réel du profil dans la base sur le péri
                      "la colonne de ré-échantillonnage : le corpus est construit à couverture équitable (quota par DP), l'entraînement peut restituer la ",
                      "distribution réelle en échantillonnant proportionnellement à poids (ou poids^alpha, curseur réalisme / couverture — décision équipe apprentissage) ; ",
                      "numérique, jamais NA sur les deux branches")
+# Provenance PAR BRANCHE de type_unite (chantier « type_unite côté courts, via l'habillage », journal §26) : nuance épistémique
+# que l'aval doit connaître (règle de substitution des DP imprécis : les UHCD sont exemptés).
+NOTE_TYPE_UNITE <- paste0("type_unite : provenance PAR BRANCHE — longs : pivot du profil (PIVOTS_LONGS, tiré du réel avec la graine) ; ",
+                          "courts : tiré à l'habillage sur les effectifs réels de la strate, AVEC la tenue admin (modes, mdp : une unité UHCD vient avec les modes ",
+                          "observés avec elle), jamais un pivot (PIVOTS_COURTS et la recette id_courts_v1 sont figés) ; campagnes adoptées (courts historiques) : ",
+                          "NA assumé — la règle aval par défaut (substituer les DP imprécis) s'y applique ; doctrine UHCD de l'extraction : seuls les séjours entièrement UHCD sont « UHCD »")
 FAMILLES_COLONNES <- list(
   identite_livrable = c("branche", "population", "campagne"),
   profil_clinique   = c("sexe", "age", "cage", "cage2"),

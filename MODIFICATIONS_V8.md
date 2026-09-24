@@ -2092,3 +2092,112 @@ Balayage garanti par un test : plus aucune occurrence de `RUN.Rmd` / `RUN_aval.R
   du corpus historique (aucun pivot propre à C3), l'assertion courts est donc vacuité ; la mécanique est commune aux deux
   branches (`pivots_sous_registre` relit le registre). Un test avec un pivot propre à la campagne oubliée exigerait une
   fixture dédiée — non fait.
+
+## 26. Chantier « type_unite côté courts, via l'habillage »
+
+**Besoin aval.** La règle de substitution des DP imprécis (aval Python) exempte les séjours UHCD ; or `type_unite` est un
+pivot des LONGS (`PIVOTS_LONGS`, recette `id_v1`) mais n'existe pas dans la branche courts — où vivent pourtant la plupart
+des séjours UHCD. Le livrable unifié portait donc `type_unite` = NA pour tous les courts.
+
+**Décision d'architecture actée : `type_unite` N'ENTRE PAS dans les pivots courts.** `PIVOTS_COURTS` et la recette
+`id_courts_v1` sont FIGÉS : un pivot de plus changerait tous les identifiants `k…`, orphelinerait les inscriptions courts
+de C1 au registre (rétro-inscrites et adoptées sur les six pivots) et casserait le recyclage à variantes nouvelles (la
+continuité inter-campagnes repose sur l'identité des pivots). Il entre dans **l'habillage** des courts, comme les modes
+d'entrée / sortie et le mode de prise en charge : une colonne de plus dans la photographie `ref_v_admin_courts`, tirée
+pondérée par strate AVEC la tenue admin. Aucun autre changement de logique : doctrines de tirage, sélection, longs,
+identifiants intacts ; `tests/ancien_20260914/` intact.
+
+### 26.1 La photographie (écart B7, consigné)
+
+- `fabrique_v_admin_courts` (chaîne B7) : `type_unite` ajouté aux colonnes du compte en base
+  (`summarise(n = n(), .by = c(mode_hospit, mode_entree, mode_sortie, sexe, cage, ghm2, diag2, mdp, duree, type_unite))`) ;
+  `prep_data` le porte déjà, doctrine UHCD de l'extraction comprise (filtre `(nbrum == 1 & type_unite == "UHCD") | type_unite
+  != "UHCD"` : seuls les séjours entièrement UHCD sont « UHCD »). `fabrique_v_admin_courts_cumul` (multi-années) ré-agrège sur
+  les mêmes clés. Le filtre de durée `DUREE_COURTS` (Q72) et la conversion E669 par comptes (`convertir_e669_comptes`, strates =
+  toutes les colonnes hors `diag2` et `n` : `type_unite` est pris en compte sans modification) s'appliquent comme avant.
+- Config : `COLS_ADMIN_COURTS <- c(COLS_ADMIN, "type_unite")` (doctrine : colonnes apportées à l'habillage des courts ; les
+  longs gardent `COLS_ADMIN` + `duree`). Clé du magasin `10_references` (`CLES_MAGASINS$references`, `NOMS_CONFIG_META`) :
+  un magasin photographié avant ce chantier n'a pas la clé ⇒ écart nommant `COLS_ADMIN_COURTS` ⇒ `FORCER_REFS` (une requête
+  `count` côté courts). Noté dans `01_preparation_donnees.Rmd` (encadré FORCER_*, prose du chunk `references`, message
+  annoncé) et dans RUN.md.
+
+### 26.2 Le tirage (habillage des courts)
+
+`etape_tirage_courts` : `habiller_admin(df_tirage, df_v_admin_courts, niveaux = list(PIVOTS_COURTS), cols_apport =
+COLS_ADMIN_COURTS, …)` — `type_unite` est tiré AVEC la tenue admin : même tirage pondéré par `n`, même repli, même colonne
+`repli_admin` ; pas de tirage séparé (la tenue est cohérente en bloc : une unité UHCD vient avec les modes et le mdp observés
+avec elle). `habiller_admin` et `controle_habillage` sont inchangés (la colonne apportée est un paramètre) — les longs ne
+passent pas par ce code avec cette liste. Finalisation : le contrôle « zéro NA sur les colonnes d'habillage » des courts
+porte désormais `COLS_ADMIN_COURTS` (campagnes nouvelles) ; `controle_habillage(df_c, COLS_ADMIN_COURTS, DUREE_COURTS, N)`.
+
+### 26.3 Le livrable
+
+- `type_unite` existait déjà dans l'union de schémas (pivot des longs, famille `contexte_sejour`) : les courts la remplissent
+  désormais au lieu de NA ; aucun changement de schéma ni de type (texte).
+- **Provenance par branche** documentée au méta (`notes_familles$contexte_sejour`, constante `NOTE_TYPE_UNITE`) : « longs :
+  pivot du profil (tiré du réel avec la graine) ; courts : tiré à l'habillage sur les effectifs réels de la strate, avec la
+  tenue admin ; campagnes adoptées (courts historiques) : NA — la règle aval par défaut (substituer les DP imprécis) s'y
+  applique ». Nuance épistémique que l'aval doit connaître.
+- **Colonnes entièrement NA par branche** listées au méta (`colonnes_na_par_branche`, calculé par `ecrire_livrable` sur les
+  frames harmonisés) : pour une campagne nouvelle, `type_unite` n'y figure plus côté courts ; pour C1 ADOPTÉE, le corpus courts
+  historique n'a pas de `type_unite` → NA assumé, listé ; AUCUNE re-fabrication de C1.
+- L'échantillon de revue montre la colonne pour les deux branches (`formater_revue` la portait déjà, NA chez les courts
+  jusqu'ici).
+
+### 26.4 Tests
+
+- Helpers (+3, 385 avec arrow / 382 sans) : doctrine (`COLS_ADMIN_COURTS` = `COLS_ADMIN` + `type_unite` ; `type_unite` hors de
+  `PIVOTS_COURTS` et de `COLONNES_RECETTE_ID_COURTS` ; **valeur en dur de la recette `id_courts_v1` INCHANGÉE** (`ke3839ff42c0f1ca`
+  sur la ligne de référence — la preuve que les identifiants n'ont pas bougé) ; clé du magasin `10_references` ; un méta antérieur
+  sans la clé est en écart, nommant `COLS_ADMIN_COURTS` et `FORCER_REFS` ; `NOTE_TYPE_UNITE` documente les deux branches et les
+  adoptées) ; habillage courts sur une fixture 90 HC / 10 UHCD dans la même strate : `type_unite` tiré AVEC la tenue (UHCD ⇔
+  URGENCES, jamais de mélange), proportions sous graine (13 % d'UHCD sur 400 tirages, borne 4-18 %), zéro NA avec
+  `COLS_ADMIN_COURTS` (colonnes contrôlées = les quatre), `repli_admin` = 0, déterminisme ; au repli (niveau 1), la colonne suit la
+  tenue ; photographie sans `type_unite` → stop « colonnes apportées absentes » ; habillage des longs inchangé (`cols_apport` par
+  défaut = `COLS_ADMIN` + `duree`, fixture longs sans `type_unite`).
+- SQLite (+5, 201 / 201) : photographie — `type_unite` présent dans `ref_v_admin_courts`, absent de `ref_v_admin_longs` ;
+  effectifs par (strate × type_unite) == séjours courts de `prep_data` (hors codes E66x convertis) ; sur la fixture, 1308
+  combinaisons, 132 strates portant plusieurs types d'unité, 116 séjours UHCD ; filtre de durée et somme des effectifs inchangés ;
+  méta des références porte `COLS_ADMIN_COURTS` ; identité avec les anciens scripts recadrée (photographie courts == ancienne
+  modulo `type_unite` : distinct des anciennes colonnes) ; livrable C1 — courts peuplés (valeurs de la photographie, tenue
+  cohérente au niveau fin : (pivots, modes, mdp, type_unite) observés ensemble), longs = pivot du profil, méta (provenance par
+  branche, `colonnes_na_par_branche` sans `type_unite` côté courts, `habillage_courts$colonnes_controlees` avec), revue remplie
+  sur les deux branches ; adoption C0 — courts historiques NA, listé au méta, note « campagnes adoptées », longs du pivot ; garde —
+  un méta des références ANTÉRIEUR au chantier (clé retirée) fait stopper `etape_tirage_courts` en nommant `COLS_ADMIN_COURTS` et
+  `FORCER_REFS`, méta restauré ; **identité de la branche longs avant / après** : empreinte canonique (sha256 des lignes triées,
+  toutes colonnes, NA → "") de la branche longs de la campagne fixture C2 (54 lignes, 36 colonnes) FIGÉE AVANT le chantier sur
+  le commit f02ea8a — `a54029641743361a`, identique avec et sans arrow — et assertée après : inchangée.
+- Démo et notebooks 01 / 02 déroulés de haut en bas, avec et sans arrow : livrable démo avec `type_unite` peuplé sur les deux
+  branches, `colonnes_na_par_branche` au méta, colonne remplie dans l'échantillon de revue.
+
+### 26.5 Vérifications
+
+| Passe | Résultat |
+|---|---|
+| `tests/test_helpers.R` avec / sans arrow | 385 / 382 |
+| `tests/test_chaines_sqlite.R` avec / sans arrow | 201 / 201 (empreinte longs C2 = `a54029641743361a` dans les deux modes, avant comme après) |
+| `demo/lancer_demo.R` avec / sans arrow | verts : 277 longs (35 pédiatrie, 242 adulte), 1963 courts |
+| `01_preparation_donnees.Rmd` puis `02_campagne.Rmd` en mode démo, avec / sans arrow | verts, de haut en bas (11 chunks / 1 sauté ; 14 / 1) |
+
+### 26.6 Questions (aucune action non autorisée)
+
+- **Q86** — L'empreinte figée de la branche longs (`a54029641743361a`) est propre à la fixture, aux graines et au schéma du
+  livrable : tout chantier futur qui touche légitimement les longs (ou le générateur de données fictives, ou une colonne du
+  livrable) devra la re-figer explicitement, avec la décision consignée. C'est voulu (une identité qui ne casse jamais ne prouve
+  rien) ; à confirmer comme discipline.
+- **Q87** — Doctrine UHCD héritée de `prep_data` : seuls les séjours ENTIÈREMENT en UHCD (un seul RUM, UHCD) sont typés « UHCD » ;
+  un séjour passé par l'UHCD puis hospitalisé est typé par son autre unité. La règle aval de substitution exempte donc les
+  seuls séjours entièrement UHCD — à confirmer avec l'équipe aval que c'est bien l'intention.
+- **Q88** — La photographie des courts n'est pas seuillée (agrégat de comptes, jamais de grain séjour) ; l'ajout de `type_unite`
+  éclate les combinaisons (plus de combinaisons à petit `n`). Elle ne quitte pas la plateforme (magasin partagé) ; le livrable
+  n'en porte que des tirages. À confirmer qu'aucune règle de divulgation ne s'y applique.
+- **Q89** — `FORCER_REFS` régénère les neuf références du magasin `10_references`, pas seulement la photographie des courts
+  (une clé de magasin est globale) : quelques minutes de requêtes sur la plateforme, une fois. Une régénération ciblée par
+  référence exigerait des clés par référence — non fait.
+- **Q90** — « Listé au méta comme aujourd'hui » : le méta ne listait pas les colonnes NA par branche (seule la note générique
+  « NA typés où une colonne ne s'applique pas ») ; `colonnes_na_par_branche` est ajouté aux métas de finalisation ET d'adoption
+  (calcul sans copie sur les frames bruts). À confirmer.
+- **Q91** — `habillage_courts$colonnes_controlees` et `na_habillage` ajoutés au méta du livrable (traçabilité du contrôle « zéro
+  NA » étendu à `type_unite`) : petite extension au-delà du brief, à confirmer.
+- **Q92** — Dans l'échantillon de revue d'une campagne ADOPTÉE, la colonne `type_unite` des courts reste vide (NA assumé) ; la
+  grille de lecture de 02 le dit. Faut-il un marqueur explicite (« non renseigné : corpus historique ») plutôt qu'une case vide ?

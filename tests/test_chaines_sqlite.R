@@ -121,6 +121,15 @@ ok("Q72 : aucun candidat admin hors du périmètre de durée de sa branche (long
      pd <- dplyr::collect(dplyr::tbl(conn, "prep_data_26")); prof <- do.call(paste, pd[, CLES_ADMIN_LONGS])
      all(va$duree %in% DUREE_LONGS) && all(vc$duree %in% DUREE_COURTS) && sum(va$n) == sum(pd$duree %in% DUREE_LONGS) && sum(vc$n) == sum(pd$duree %in% DUREE_COURTS) &&
        length(intersect(unique(prof[pd$duree %in% DUREE_COURTS]), unique(prof[pd$duree %in% DUREE_LONGS]))) > 0 })
+ok("type_unite côté courts (§26) : ref_v_admin_courts photographié AVEC type_unite (doctrine UHCD de prep_data), ref_v_admin_longs sans ; effectifs par (strate × type_unite) == séjours courts de prep_data (hors E66x convertis) ; des strates portent UHCD ET HC ; filtre de durée et somme des effectifs inchangés ; méta des références porte COLS_ADMIN_COURTS",
+   { vc <- arrow::read_parquet(file.path(DIR_REFERENCES, "ref_v_admin_courts.parquet")); va <- arrow::read_parquet(file.path(DIR_REFERENCES, "ref_v_admin_longs.parquet")); mr <- yaml::read_yaml(FICHIER_REFERENCES_META())
+     pd <- dplyr::collect(dplyr::tbl(conn, "prep_data_26")); pdc <- pd[pd$duree %in% DUREE_COURTS & !grepl("^E66", pd$diag2), ]; cles <- c("mode_hospit", "sexe", "cage", "ghm2", "diag2", "duree", "type_unite")
+     att <- pdc |> dplyr::count(dplyr::across(dplyr::all_of(cles)), name = "n_att"); obs <- vc[!grepl("^E66", vc$diag2), ] |> dplyr::summarise(n_obs = sum(n), .by = dplyr::all_of(cles))
+     j <- dplyr::full_join(att, obs, by = cles); multi <- vc |> dplyr::summarise(k = dplyr::n_distinct(type_unite), .by = dplyr::all_of(c("mode_hospit", "sexe", "cage", "ghm2", "diag2", "duree")))
+     cat("   photographie courts :", nrow(vc), "combinaisons ;", sum(multi$k >= 2), "strates avec plusieurs types d'unité ; UHCD :", sum(vc$n[vc$type_unite == "UHCD"]), "séjours\n")
+     "type_unite" %in% names(vc) && !"type_unite" %in% names(va) && setequal(names(vc), c(PIVOTS_COURTS, COLS_ADMIN_COURTS, "n")) && all(!is.na(vc$type_unite)) && all(vc$duree %in% DUREE_COURTS) &&
+       nrow(j) == nrow(att) && !any(is.na(j$n_obs)) && all(j$n_att == j$n_obs) && any(multi$k >= 2) && "UHCD" %in% vc$type_unite && sum(vc$n) == sum(pd$duree %in% DUREE_COURTS) &&
+       identical(unlist(mr$COLS_ADMIN_COURTS), COLS_ADMIN_COURTS) && !"type_unite" %in% PIVOTS_COURTS })
 ok("ref_comp_diabete : effectifs bruts (pas de pénalisation côté extraction)", { r <- arrow::read_parquet(file.path(DIR_REFERENCES, "ref_comp_diabete.parquet")); all(r$nb == round(r$nb)) && all(c("cage","diabete","comp","nb") %in% names(r)) })
 cat1 <- lire_cat(DIR_CATALOGUE_M)
 ok("catalogue seuil : poids > SEUIL_PIVOT, pas de colonne n, graine <= K sans diabète/I10",
@@ -429,7 +438,8 @@ ok("(a) catalogue, 7 refs et le tirable courts identiques aux anciens scripts (a
      { va <- as.data.frame(arrow::read_parquet(file.path(EXPORTS_ANC, "v_admin_longs.parquet"))); vn <- as.data.frame(arrow::read_parquet(FICHIER_REF("ref_v_admin_longs"))); va2 <- unique(va[va$duree %in% DUREE_LONGS, setdiff(names(va), "nbda"), drop = FALSE])
        "nbda" %in% names(va) && !"nbda" %in% names(vn) && any(!va$duree %in% DUREE_LONGS) && nrow(vn) < nrow(va) && "n" %in% names(vn) && meme_contenu(va2, vn[, names(va2), drop = FALSE]) } &&
      { vc <- as.data.frame(arrow::read_parquet(file.path(EXPORTS_ANC, "v_admin_courts.parquet"))); vcn <- as.data.frame(arrow::read_parquet(FICHIER_REF("ref_v_admin_courts"))); vc2 <- unique(vc[vc$duree %in% DUREE_COURTS, , drop = FALSE])
-       any(!vc$duree %in% DUREE_COURTS) && "n" %in% names(vcn) && meme_contenu(vc2, vcn[, names(vc2), drop = FALSE]) })
+       # §26 : la photographie courts porte type_unite en plus (combinaisons éclatées par type d'unité) : identité modulo cette colonne (distinct des anciennes colonnes)
+       any(!vc$duree %in% DUREE_COURTS) && "n" %in% names(vcn) && "type_unite" %in% names(vcn) && !"type_unite" %in% names(vc) && meme_contenu(vc2, unique(vcn[, names(vc2), drop = FALSE])) })
 COLS_ID_COURTS <- c("id_profil", "id_scenario", "hash_das")
 f_courts_anc <- file.path(EXPORTS_ANC, "scenarios_courts_v8_" %+% format(Sys.Date(), "%Y%m%d") %+% ".parquet"); f_longs_anc <- file.path(EXPORTS_ANC, "scenarios_longs_tirage_v8_" %+% format(Sys.Date(), "%Y%m%d") %+% ".parquet")
 lire_chunks_longs <- function(d) purrr::map(sort(list.files(d, pattern = "^longs_chunk_[0-9]{4}\\.parquet$", full.names = TRUE)), function(f) as.data.frame(arrow::read_parquet(f))) |> purrr::list_rbind()
@@ -631,6 +641,13 @@ ok("habillage robuste : zéro NA (durée, modes) sur les longs ET les courts du 
      NB_VARIANTES_ADMIN_COURTS == 1L && sum(liv1$branche == "court") == dplyr::n_distinct(liv1$id_scenario[liv1$branche == "court"]) && !anyDuplicated(liv1$id_scenario) && ml1$id_scenario_dupliques == 0 && any(grepl("id_scenario dupliqués dans le livrable \\(toutes branches\\) = 0$", rap_f)) &&
      ml1$habillage_courts$NB_VARIANTES_ADMIN_COURTS == 1L && ml1$habillage_courts$lignes_attendues == ml1$n_court && sum(grepl("tenues admin N = 1 : .* lignes_hors_multiplication = 0$", rap_f)) == 3 &&
      any(grepl("== 5b\\. Habillage admin", rap_f)) && all(grepl("na_habillage = 0", grep("na_habillage", rap_f, value = TRUE))) && sum(grepl("na_habillage", rap_f)) == 3 && ml1$habillage_longs$na_habillage == 0 && any(grepl("TOTAL anomalies = 0", rap_f)))
+ok("type_unite côté courts (livrable C1, §26) : courts peuplés (valeurs de la photographie, zéro NA, tirés AVEC la tenue : (pivots, modes, mdp, type_unite) observés ensemble dans la photographie au niveau fin) ; longs = pivot du profil ; méta : provenance par branche (notes_familles$contexte_sejour), colonnes_na_par_branche sans type_unite côté courts ; revue : colonne remplie sur les deux branches ; rapport na_habillage = 0 avec la colonne",
+   { vc <- arrow::read_parquet(FICHIER_REF("ref_v_admin_courts")); lc <- liv1[liv1$branche == "court", ]; ll <- liv1[liv1$branche == "long", ]
+     cle_v <- do.call(paste, c(lapply(vc[, c(PIVOTS_COURTS, COLS_ADMIN_COURTS)], as.character), sep = "|")); cle_l <- do.call(paste, c(lapply(lc[, c(PIVOTS_COURTS, COLS_ADMIN_COURTS)], as.character), sep = "|"))
+     rv <- utils::read.csv2(FICHIER_REVUE(), stringsAsFactors = FALSE); cat_tu <- unique(lire_catalogue(DIR_CATALOGUE(), colonnes = "type_unite")$type_unite)
+     all(!is.na(lc$type_unite)) && all(lc$type_unite %in% vc$type_unite) && all(cle_l[lc$repli_admin == 0] %in% cle_v) && all(!is.na(ll$type_unite)) && all(ll$type_unite %in% cat_tu) &&
+       grepl("provenance PAR BRANCHE", ml1$notes_familles$contexte_sejour) && !"type_unite" %in% unlist(ml1$colonnes_na_par_branche$court) && all(c("court", "long") %in% names(ml1$colonnes_na_par_branche)) &&
+       "type_unite" %in% names(rv) && all(!is.na(rv$type_unite) & nzchar(rv$type_unite)) && all(c("court", "long") %in% rv$branche) && "type_unite" %in% ml1$habillage_courts$colonnes_controlees })
 ok("repli parts au-delà de SEUIL_MONOFICHIER : scenarios_C1/part_*.parquet + méta (forme parts) ; lire_corpus_final identique ; retour au monofichier (idempotence)",
    { assign("SEUIL_MONOFICHIER", 10L, envir = globalenv()); invisible(sortie(etape_finalisation())); mlp <- yaml::read_yaml(FICHIER_LIVRABLE_META()); lp <- lire_corpus_final("C1")
      etat_parts <- !file.exists(FICHIER_LIVRABLE()) && dir.exists(DIR_LIVRABLE_PARTS()) && length(list.files(DIR_LIVRABLE_PARTS(), pattern = "^part_")) >= 2
@@ -718,6 +735,13 @@ ok("courts C2 sous registre : pivots déjà tirés en C1 recyclés (variantes nu
 invisible(sortie(etape_tirage_das_longs())); invisible(sortie(etape_habillage_longs())); invisible(sortie(etape_finalisation()))
 reg2 <- lire_registre(DIR_REGISTRE())
 finaux2 <- lire_corpus_final("C2", branche = "long"); liv2 <- lire_corpus_final("C2")
+# ---- identité de la branche LONGS (chantier « type_unite côté courts ») : empreinte canonique de la branche longs de C2 (fixture figée,
+# seeds figés), FIGÉE AVANT le chantier — toute modification des longs (sélection, tirage, habillage, livrable) la ferait changer.
+digest_branche <- function(d){ d <- as.data.frame(d); d <- d[, sort(names(d)), drop = FALSE]; for(cc in names(d)){ v <- as.character(d[[cc]]); v[is.na(v)] <- ""; d[[cc]] <- v }
+  d <- d[do.call(order, c(d, list(method = "radix"))), , drop = FALSE]; substr(sha256_vec(paste(c(paste(names(d), collapse = "\t"), do.call(paste, c(d, sep = "\t"))), collapse = "\n")), 1, 16) }
+dig_longs_c2 <- digest_branche(finaux2); cat("   empreinte canonique de la branche longs C2 :", dig_longs_c2, "(", nrow(finaux2), "lignes,", ncol(finaux2), "colonnes )\n")
+ok("identité de la branche LONGS avant / après le chantier « type_unite côté courts » : empreinte canonique de la branche longs de C2 == valeur figée AVANT le chantier (a54029641743361a, identique avec et sans arrow)",
+   identical(dig_longs_c2, "a54029641743361a") && nrow(finaux2) == 54 && ncol(finaux2) == 36)
 ok("C2 : registre_C2 (deux branches) écrit automatiquement en fin de finalisation ; 3 campagnes (C1, C1b, C2) ; scénarios C2 == corpus C2 (longs ET courts) ; agrégats par branche",
    reg2$nb_campagnes == 3 && setequal(reg2$lignes$id_scenario[reg2$lignes$campagne == "C2"], unique(liv2$id_scenario)) && setequal(reg2$lignes$id_scenario[reg2$lignes$campagne == "C2" & reg2$lignes$branche == "long"], unique(finaux2$id_scenario)) &&
      reg2$par_campagne$nb_courts[reg2$par_campagne$campagne == "C2"] == dplyr::n_distinct(sc_c2$id_scenario) && reg2$par_campagne$nb_courts[reg2$par_campagne$campagne == "C1b"] == 0 && nrow(reg2$par_branche) == 2 &&
@@ -786,6 +810,10 @@ ok("nom stable, date dans le méta : finalisation relancée dans une session neu
      any(grepl("même campagne", log_f)) && !any(grepl("[0-9]{8}", list.files(DIR_EXPORT_FINAL))) && ml$date == as.character(Sys.Date()) && grepl(as.character(Sys.Date()), readLines(FICHIER_RAPPORT())[1]) &&
        setequal(lire_corpus_final("C2", branche = "long")$id_scenario, finaux2$id_scenario) })
 ok("courts de la campagne absents -> message (étape de campagne après la sélection ; tirable partagé, refs)", { m <- message_courts_absent(DIR_HABILLE_COURTS()); grepl("etape_tirage_courts", m) && grepl("magasin partagé", m) && grepl("etape_selection_longs", m) })
+ok("garde des magasins (§26) : méta des références ANTÉRIEUR au chantier type_unite (sans COLS_ADMIN_COURTS) -> etape_tirage_courts stoppe en nommant COLS_ADMIN_COURTS et FORCER_REFS ; méta restauré",
+   { f_m <- FICHIER_REFERENCES_META(); orig <- readLines(f_m); m <- yaml::read_yaml(f_m); m$COLS_ADMIN_COURTS <- NULL; yaml::write_yaml(m, f_m)
+     err <- tryCatch({ invisible(sortie(etape_tirage_courts())); NULL }, error = function(e) conditionMessage(e)); writeLines(orig, f_m)
+     !is.null(err) && grepl("COLS_ADMIN_COURTS : magasin =  ; courant = mode_entree,mode_sortie,mdp,type_unite", err) && grepl("FORCER_REFS <- TRUE", err) })
 ok("garde des magasins : clé des références en écart (SEUIL_REF_DAS) -> stop nommant la clé, le drapeau FORCER_REFS et la soupape CHEMINS_SURCHARGES",
    { surcharger(SURCHARGE_PROD, "CAMPAGNE <- 'C2'", "REGISTRE_ACTIF <- TRUE", "SEUIL_REF_DAS <- 21"); invisible(sortie(lancer("tirage.R")))
      err <- tryCatch({ invisible(sortie(etape_tirage_courts())); NULL }, error = function(e) conditionMessage(e))
@@ -858,6 +886,9 @@ ok("adoption C0 (forme dossier <population>/) : livrable scenarios_C0 (longs + c
      isTRUE(ml0$verification_registre$ok) && any(grepl("vérifications livrable / registre : long : .* \\(égaux\\) ; court : .* \\(égaux\\)", log_ad)) && ml0$volumes$court$scenarios == sum(c0$branche == "court") &&
      file.exists(FICHIER_RAPPORT("C0")) && readLines(FICHIER_RAPPORT("C0"))[1] == "rapport ancien" && all(!is.na(liv0$DPEC)) && all(!is.na(c0$DPEC)) && all(liv0$campagne == "C0") &&
      ml0$id_scenario_dupliques_courts_historiques > 0 && anyDuplicated(liv0$id_scenario[liv0$branche == "court"]) > 0 && grepl("convention v7.1.2", ml0$notes_familles$tracabilite) && any(grepl("adopté tel quel, hors contrôle d'unicité", log_ad)))
+ok("adoption C0 (§26) : courts historiques sans type_unite -> NA assumé, listé au méta (colonnes_na_par_branche$court), provenance par branche notée (règle aval par défaut) ; longs adoptés : type_unite du pivot ; AUCUNE re-fabrication",
+   all(is.na(liv0$type_unite[liv0$branche == "court"])) && all(!is.na(liv0$type_unite[liv0$branche == "long"])) && "type_unite" %in% unlist(ml0$colonnes_na_par_branche$court) && !"type_unite" %in% unlist(ml0$colonnes_na_par_branche$long) &&
+     grepl("campagnes adoptées", ml0$notes_familles$contexte_sejour) && !"type_unite" %in% names(hist_c))
 ok("adoption C0 : idempotente (mêmes sources -> réécriture identique, registre inchangé) ; autres sources -> stop « différent, rien n'est écrasé » ; autre campagne depuis la forme FICHIER (population reconstituée par cage) == même contenu longs",
    { o2 <- sortie(etape_adopter_campagne("C0", source_longs = src_dir)); liv0b <- lire_corpus_final("C0")
      err <- tryCatch({ invisible(sortie(etape_adopter_campagne("C0", source_longs = file.path(old, "exports", "scenarios_longs_tirage_v8_20260918.parquet")))); NULL }, error = function(e) conditionMessage(e))

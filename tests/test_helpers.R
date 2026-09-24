@@ -1096,4 +1096,24 @@ ok("notebooks : chunk tirage_courts de 02 après la sélection et avant l'habill
    { n2 <- noms_nb[["02_campagne.Rmd"]]; match("tirage_courts", n2) > match("selection", n2) && match("tirage_courts", n2) < match("habillage", n2) && !any(grepl("etape_adopter_campagne\\(", c(rmd[[1]], rmd[[2]]))) &&
        "adoption" %in% noms_nb[["03_outils_maintenance.Rmd"]] && !any(grepl("^etape_tirage_courts\\(", rmd[[1]])) && any(grepl("^```\\{r tirable_courts", rmd[[1]])) })
 
+# ---- chantier « type_unite côté courts, via l'habillage » (section 26) : tiré AVEC la tenue, pondéré, repli, zéro NA ; pivots et recette figés
+cat("\n# type_unite côté courts : colonne de l'habillage (pas un pivot), tirée avec la tenue\n")
+ok("doctrine : COLS_ADMIN_COURTS = COLS_ADMIN + type_unite ; type_unite HORS des pivots courts et de la recette id_courts_v1 (valeur en dur INCHANGÉE) ; clé du magasin 10_references (CLES_MAGASINS, NOMS_CONFIG_META) ; méta antérieur sans la clé -> écart nommant COLS_ADMIN_COURTS et FORCER_REFS ; NOTE_TYPE_UNITE documente les deux branches et les adoptées",
+   identical(COLS_ADMIN_COURTS, c(COLS_ADMIN, "type_unite")) && !"type_unite" %in% PIVOTS_COURTS && !"type_unite" %in% COLONNES_RECETTE_ID_COURTS && id_profil_courts_de(ligne_c) == "ke3839ff42c0f1ca" && RECETTE_ID_COURTS == "id_courts_v1" &&
+     "COLS_ADMIN_COURTS" %in% CLES_MAGASINS$references && "COLS_ADMIN_COURTS" %in% NOMS_CONFIG_META &&
+     { cfg <- valeurs_effectives_config(); m_old <- meta_magasin("references", cfg); m_old$COLS_ADMIN_COURTS <- NULL; v <- verifier_magasin("references", m_old, cfg); !v$ok && identical(v$differences, "COLS_ADMIN_COURTS") && grepl("FORCER_REFS <- TRUE", v$message) } &&
+     grepl("longs : pivot du profil", NOTE_TYPE_UNITE) && grepl("courts : tiré à l'habillage", NOTE_TYPE_UNITE) && grepl("campagnes adoptées", NOTE_TYPE_UNITE))
+v_tu <- tibble::tibble(mode_hospit = "HC", sexe = "1", cage = "[60-70[", ghm2 = "04M053", diag2 = "J449", duree = c(1L, 1L), mode_entree = c("8", "URGENCES"), mode_sortie = "8", mdp = "6", type_unite = c("HC", "UHCD"), n = c(90, 10))
+d_tu <- tibble::tibble(mode_hospit = "HC", sexe = "1", cage = "[60-70[", ghm2 = "04M053", diag2 = "J449", duree = 1L, variante = 1L, id_scenario = "kabc-001", diagnostic_associes = "I10")
+tirer_tu <- function(seed){ set.seed(seed); purrr::map(1:400, ~ habiller_admin(d_tu, v_tu, list(PIVOTS_COURTS), COLS_ADMIN_COURTS, 1L, etiquette = "courts", suffixer_id = TRUE)) |> purrr::list_rbind() }
+tir_tu <- tirer_tu(41)
+ok("habillage courts : type_unite tiré AVEC la tenue (UHCD toujours avec URGENCES, HC toujours avec 8 : jamais de mélange), proportions 90 / 10 sous seed (UHCD entre 4 % et 18 %), zéro NA (controle_habillage sur COLS_ADMIN_COURTS), repli_admin = 0, déterminisme",
+   { p <- mean(tir_tu$type_unite == "UHCD"); cat("   part UHCD tirée :", round(100 * p, 1), "%\n")
+     nrow(tir_tu) == 400 && all(tir_tu$type_unite %in% c("HC", "UHCD")) && all((tir_tu$type_unite == "UHCD") == (tir_tu$mode_entree == "URGENCES")) && p > 0.04 && p < 0.18 &&
+       controle_habillage(tir_tu, COLS_ADMIN_COURTS)$na_habillage == 0 && identical(controle_habillage(tir_tu, COLS_ADMIN_COURTS)$colonnes, COLS_ADMIN_COURTS) && all(tir_tu$repli_admin == 0) && identical(tirer_tu(41), tir_tu) })
+set.seed(42); h_rep <- habiller_admin(dplyr::mutate(d_tu, ghm2 = "05M093"), v_tu, list(PIVOTS_COURTS, c("mode_hospit", "sexe", "cage")), COLS_ADMIN_COURTS, 1L, etiquette = "courts")
+ok("habillage courts : au repli, type_unite suit la tenue (colonne apportée en bloc, repli_admin = 1, aucun NA) ; photographie sans type_unite -> stop « colonnes apportées absentes » (magasin à régénérer) ; habillage des longs inchangé (cols_apport = COLS_ADMIN + duree, sans type_unite)",
+   nrow(h_rep) == 1 && h_rep$repli_admin == 1 && !is.na(h_rep$type_unite) && ((h_rep$type_unite == "UHCD") == (h_rep$mode_entree == "URGENCES")) &&
+     grepl("colonnes apportées absentes.*type_unite", tryCatch(habiller_admin(d_tu, v_tu[, setdiff(names(v_tu), "type_unite")], list(PIVOTS_COURTS), COLS_ADMIN_COURTS, 1L), error = function(e) conditionMessage(e))) &&
+     identical(formals(habiller_admin)$cols_apport, quote(c(COLS_ADMIN, "duree"))) && !"type_unite" %in% names(v_adm))
 cat("\nTOUS LES TESTS SONT VERTS :", n_ok, "assertions\n")
