@@ -130,10 +130,10 @@ ok("type_unite côté courts (§26) : ref_v_admin_courts photographié AVEC type
      "type_unite" %in% names(vc) && !"type_unite" %in% names(va) && setequal(names(vc), c(PIVOTS_COURTS, COLS_ADMIN_COURTS, "n")) && all(!is.na(vc$type_unite)) && all(vc$duree %in% DUREE_COURTS) &&
        nrow(j) == nrow(att) && !any(is.na(j$n_obs)) && all(j$n_att == j$n_obs) && any(multi$k >= 2) && "UHCD" %in% vc$type_unite && sum(vc$n) == sum(pd$duree %in% DUREE_COURTS) &&
        identical(unlist(mr$COLS_ADMIN_COURTS), COLS_ADMIN_COURTS) && !"type_unite" %in% PIVOTS_COURTS })
-ok("statut des références au méta du magasin 10_references (Q88 actée, §26.7) : un statut par référence ; ref_substitution_imprecis exportable ; photographies v_admin (non seuillées) internes ; toutes les autres internes par défaut",
+ok("statut des références au méta du magasin 10_references (Q88, Q93 actées, §26.7) : un statut par référence ; ref_substitution_imprecis et ref_paires_chroniques exportables (7 internes / 2 exportables) ; photographies v_admin (non seuillées) internes ; toutes les autres internes par défaut",
    { mr <- yaml::read_yaml(FICHIER_REFERENCES_META()); st <- unlist(mr$statut)
-     setequal(names(st), setdiff(NOMS_REFS, "ref_pivots_courts")) && st[["ref_substitution_imprecis"]] == "exportable" && st[["ref_v_admin_courts"]] == "interne" && st[["ref_v_admin_longs"]] == "interne" &&
-       sum(st == "exportable") == 1 && all(st %in% c("exportable", "interne")) })
+     setequal(names(st), setdiff(NOMS_REFS, "ref_pivots_courts")) && st[["ref_substitution_imprecis"]] == "exportable" && st[["ref_paires_chroniques"]] == "exportable" && st[["ref_v_admin_courts"]] == "interne" && st[["ref_v_admin_longs"]] == "interne" &&
+       sum(st == "exportable") == 2 && sum(st == "interne") == 7 && all(st %in% c("exportable", "interne")) })
 ok("ref_comp_diabete : effectifs bruts (pas de pénalisation côté extraction)", { r <- arrow::read_parquet(file.path(DIR_REFERENCES, "ref_comp_diabete.parquet")); all(r$nb == round(r$nb)) && all(c("cage","diabete","comp","nb") %in% names(r)) })
 cat1 <- lire_cat(DIR_CATALOGUE_M)
 ok("catalogue seuil : poids > SEUIL_PIVOT, pas de colonne n, graine <= K sans diabète/I10",

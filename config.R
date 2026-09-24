@@ -176,7 +176,9 @@ REFS_COURTS <- c("ref_pivots_courts", "ref_v_admin_courts", "ref_das_chronique",
 # toute référence non explicitement marquée exportable (dont les photographies v_admin, NON seuillées : un seuillage casserait la
 # couverture de l'habillage ; c'est leur statut interne qui rend cela sûr). Le livrable lui-même est exportable. Le statut est
 # écrit au méta du magasin 10_references (champ statut, par référence) ; il ne change pas le contenu des fichiers.
-REFS_EXPORTABLES <- c("ref_substitution_imprecis")
+# Exportables : ref_substitution_imprecis (Q88) et ref_paires_chroniques (Q93 actée : agrégat seuillé par SEUIL_REF_PAIRES, usage
+# aval déclaré — mesure de vraisemblance des paires).
+REFS_EXPORTABLES <- c("ref_substitution_imprecis", "ref_paires_chroniques")
 statut_ref  <- function(nom) ifelse(nom %in% REFS_EXPORTABLES, "exportable", "interne")
 statuts_refs <- function(noms) as.list(stats::setNames(statut_ref(noms), noms))   # liste nommée prête pour le méta yaml
 

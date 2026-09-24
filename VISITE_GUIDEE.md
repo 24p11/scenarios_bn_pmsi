@@ -449,7 +449,7 @@ l'habillage) : c'est leur statut interne qui rend cela sûr. Le statut est
 | `ref_distribution_e660` | classes d'IMC pour répartir les E669 nus | interne |
 | `ref_pivots_courts` (`30_courts/`) | le tirable courts (pivots seuillés) | interne (défaut) |
 | `ref_v_admin_courts`, `ref_v_admin_longs` | photographies admin, NON seuillées | interne |
-| `ref_paires_chroniques` | référentiel de mesure | interne (défaut) |
+| `ref_paires_chroniques` | référentiel de mesure de vraisemblance des paires (agrégat seuillé par `SEUIL_REF_PAIRES`, usage aval déclaré — Q93 actée) | **exportable** |
 | `ref_substitution_imprecis` | référentiel de la substitution aval des codes « sans précision » | **exportable** |
 
 ### 5c. La sélection de campagne (quota_dp_fixe)

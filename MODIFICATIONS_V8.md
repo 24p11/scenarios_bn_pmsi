@@ -2244,6 +2244,9 @@ fichiers produits, aucune logique de calcul touchée.
 - **Q93** — `ref_paires_chroniques` est décrit dans VISITE_GUIDEE §5b comme « référentiel de mesure pour l'aval Python » ; par la
   règle de défaut il est « interne » (seul `ref_substitution_imprecis` est marqué exportable, conformément au brief). S'il doit
   circuler un jour, une ligne dans `REFS_EXPORTABLES` suffit — décision non prise ici.
+  **Actée (micro-lot Q93)** : `ref_paires_chroniques` rejoint `REFS_EXPORTABLES` (agrégat seuillé par `SEUIL_REF_PAIRES`, usage aval
+  déclaré : mesure de vraisemblance des paires) ; assertions de statut ajustées (démo : 7 internes / 2 exportables), tableau de la
+  visite guidée et ligne du notebook 01 mis à jour. Vérifications : helpers 386 / 383, SQLite 202 / 202, démo et notebooks ± arrow verts.
 
 Vérifications du micro-lot : helpers 386 (avec arrow) / 383 (sans), SQLite 202 / 202 (empreinte longs inchangée), démo et notebooks
 01 / 02 verts avec et sans arrow ; méta des références de la démo : 8 références « interne », `ref_substitution_imprecis` « exportable ».
