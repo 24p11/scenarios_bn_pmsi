@@ -1116,4 +1116,7 @@ ok("habillage courts : au repli, type_unite suit la tenue (colonne apportée en 
    nrow(h_rep) == 1 && h_rep$repli_admin == 1 && !is.na(h_rep$type_unite) && ((h_rep$type_unite == "UHCD") == (h_rep$mode_entree == "URGENCES")) &&
      grepl("colonnes apportées absentes.*type_unite", tryCatch(habiller_admin(d_tu, v_tu[, setdiff(names(v_tu), "type_unite")], list(PIVOTS_COURTS), COLS_ADMIN_COURTS, 1L), error = function(e) conditionMessage(e))) &&
      identical(formals(habiller_admin)$cols_apport, quote(c(COLS_ADMIN, "duree"))) && !"type_unite" %in% names(v_adm))
+ok("statut des références (Q88 actée) : ref_substitution_imprecis exportable ; v_admin_longs / v_admin_courts internes ; toute référence non marquée est interne par défaut ; REFS_EXPORTABLES inclus dans NOMS_REFS ; statuts_refs = liste nommée prête pour le méta",
+   statut_ref("ref_substitution_imprecis") == "exportable" && all(statut_ref(c("ref_v_admin_longs", "ref_v_admin_courts", "ref_pivots_courts", "ref_inconnue")) == "interne") && all(REFS_EXPORTABLES %in% NOMS_REFS) &&
+     sum(statut_ref(NOMS_REFS) == "exportable") == 1 && identical(names(statuts_refs(NOMS_REFS)), NOMS_REFS) && statuts_refs(NOMS_REFS)[["ref_substitution_imprecis"]] == "exportable" && is.list(statuts_refs(NOMS_REFS)))
 cat("\nTOUS LES TESTS SONT VERTS :", n_ok, "assertions\n")

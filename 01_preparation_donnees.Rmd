@@ -180,6 +180,9 @@ complétion) ; combien de maladies chroniques porte un patient de tel âge ; com
 complications du diabète ; les modes d'entrée et de sortie, les durées et, pour les séjours courts, le type d'unité
 (UHCD ou non, tel que l'extraction le retient : seuls les séjours entièrement en UHCD sont « UHCD ») observés — c'est
 « l'habillage administratif », tiré plus tard avec la tenue de chaque scénario.
+Statut : toutes ces tables sont **internes** (consommées par le pipeline sur la plateforme, jamais exportées ; les
+photographies admin ne sont pas seuillées, c'est ce statut qui le permet), sauf `ref_substitution_imprecis`,
+**exportable** (agrégat seuillé) ; le fichier compagnon du magasin le note table par table (champ `statut`).
 Neuf tables vont dans `10_references/`. La dixième, `ref_pivots_courts`, est **le catalogue des séjours courts**
 (0 à 2 nuits) : la liste de leurs **pivots** — un pivot est un profil de séjour court (mode d'hospitalisation,
 sexe, classe d'âge, GHM, diagnostic principal, durée) avec son effectif — rangée dans `30_courts/`.

@@ -844,7 +844,8 @@ etape_refs <- function(forcer = FORCER_REFS){
   }
   purger_cache_e669()  # P3.2 : au cas où ref_das_chronique a été calculée sans distribution_e660
   if(length(setdiff(fichiers, FICHIER_PIVOTS_COURTS())) > 0 || !file.exists(FICHIER_REFERENCES_META())){
-    yaml::write_yaml(meta_magasin("references", valeurs_effectives_config(), PROFIL_producteur = PROFIL, refs = as.list(setdiff(NOMS_REFS, "ref_pivots_courts"))), FICHIER_REFERENCES_META())
+    refs_mag <- setdiff(NOMS_REFS, "ref_pivots_courts")
+    yaml::write_yaml(meta_magasin("references", valeurs_effectives_config(), PROFIL_producteur = PROFIL, refs = as.list(refs_mag), statut = statuts_refs(refs_mag)), FICHIER_REFERENCES_META())   # statut par référence (Q88, §26.7)
     fichiers <- c(fichiers, FICHIER_REFERENCES_META())
   }
   if((FICHIER_PIVOTS_COURTS() %in% fichiers || !file.exists(FICHIER_COURTS_META())) && file.exists(FICHIER_PIVOTS_COURTS())){
@@ -2085,7 +2086,7 @@ etape_reorganiser <- function(dossier = file.path(PATH_RESULTS, "_a_reorganiser"
   f_cm_src <- rec$source[rec$destination == "20_catalogue/catalogue_longs_seuil_meta.yaml"]
   cfg_refs <- if(length(f_cm_src)){ cm <- yaml::read_yaml(file.path(dossier, f_cm_src[1])); modifyList(cfg, cm[intersect(CLES_MAGASINS$references, names(cm))]) } else cfg
   if(any(startsWith(rec$destination, "10_references/")) && !file.exists(FICHIER_REFERENCES_META())){
-    yaml::write_yaml(meta_magasin("references", cfg_refs, provenance = "reorganisation (clés reprises du méta du catalogue d'origine, sinon config)", refs = as.list(NOMS_REFS)), FICHIER_REFERENCES_META()); copies <- copies + 1L }
+    yaml::write_yaml(meta_magasin("references", cfg_refs, provenance = "reorganisation (clés reprises du méta du catalogue d'origine, sinon config)", refs = as.list(NOMS_REFS), statut = statuts_refs(NOMS_REFS)), FICHIER_REFERENCES_META()); copies <- copies + 1L }
   if(any(rec$destination == "30_courts/ref_pivots_courts.parquet") && !file.exists(FICHIER_COURTS_META())){
     yaml::write_yaml(meta_magasin("courts", cfg_refs, provenance = "reorganisation (clés = config courante)", n_pivots = nrow(arrow::read_parquet(FICHIER_PIVOTS_COURTS(), as_data_frame = FALSE)), fichier = basename(FICHIER_PIVOTS_COURTS()),
                                   note = "le TIRABLE courts (pivots = catalogue des courts) ; méta reconstruit à la réorganisation"), FICHIER_COURTS_META()); copies <- copies + 1L }

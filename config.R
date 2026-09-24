@@ -171,6 +171,14 @@ REFS_CHRONIQUES <- c("ref_das_chronique", "ref_distribution_e660", "ref_nb_chron
 # Refs construites sur ANS_COURTS (le tirable courts et ses refs de saturation : même périmètre, cohérence du magasin) ;
 # les autres restent sur AN_REF. ref_pivots_courts est écrit dans 30_courts/ (le tirable = catalogue des courts).
 REFS_COURTS <- c("ref_pivots_courts", "ref_v_admin_courts", "ref_das_chronique", "ref_distribution_e660", "ref_nb_chroniques")
+# STATUT des références (micro-lot « arbitrages Q86-Q92 », Q88 actée, journal §26.7) : « exportable » = agrégat seuillé pouvant
+# quitter la plateforme sécurisée ; « interne » = consommée par le pipeline SUR la plateforme, jamais exportée — le DÉFAUT de
+# toute référence non explicitement marquée exportable (dont les photographies v_admin, NON seuillées : un seuillage casserait la
+# couverture de l'habillage ; c'est leur statut interne qui rend cela sûr). Le livrable lui-même est exportable. Le statut est
+# écrit au méta du magasin 10_references (champ statut, par référence) ; il ne change pas le contenu des fichiers.
+REFS_EXPORTABLES <- c("ref_substitution_imprecis")
+statut_ref  <- function(nom) ifelse(nom %in% REFS_EXPORTABLES, "exportable", "interne")
+statuts_refs <- function(noms) as.list(stats::setNames(statut_ref(noms), noms))   # liste nommée prête pour le méta yaml
 
 ## ---- Bloc PROFIL ----
 if(PROFIL == "diagnostic"){

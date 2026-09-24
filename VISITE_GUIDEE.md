@@ -106,7 +106,7 @@ dans le livrable de la campagne et inscrit au registre (branche `court`).
 
 | Objet | Produit par | Ce que c'est | Consommé par |
 |---|---|---|---|
-| `prep_data_<an>` (table temporaire) | `etape_prep_data` | une ligne par séjour : unité prioritaire, DP, GHM, âge, indicateurs diabète / HTA, modes | refs, partiels, photographies admin |
+| `prep_data_<an>` (table temporaire) | `etape_prep_data` | une ligne par séjour : unité prioritaire, DP, GHM, âge, indicateurs diabète / HTA, modes. Doctrine UHCD (Q87 actée, décision inter-projets) : seuls les séjours ENTIÈREMENT en UHCD sont typés « UHCD » (le patient resté aux urgences) ; un multi-RUM passé par l'UHCD puis hospitalisé est typé par son unité d'hospitalisation (il aura un CRH de service) — c'est le critère de la règle de substitution aval | refs, partiels, photographies admin |
 | `00_partiels/catalogue_partiel_<etbs>_<an>.parquet` | `etape_partiels_longs` | les **comptes** par profil × graine d'UNE catégorie d'établissements × UNE année, codes bruts | catalogue |
 | `20_catalogue/catalogue_longs_seuil/` | `etape_catalogue` puis `etape_repartitionner_catalogue` | le catalogue des longs : **concaténation** des partiels du périmètre, puis **fusion** (ré-agrégation des comptes des mêmes profils entre années et catégories, conversion E669 avant, seuil de confidentialité après — voir §5a) ; parts par lettre du DP, typologie, `id_profil` | sélection, rétro-inscription |
 | `30_courts/ref_pivots_courts.parquet` | `etape_refs` | le catalogue des courts : les pivots (6 clés) et leur effectif, cumul de `ANS_COURTS`, seuil en base | tirage courts de chaque campagne |
@@ -431,6 +431,26 @@ Le tirable courts et ses refs de saturation (`ref_das_chronique`,
 `ref_nb_chroniques`, `v_admin_courts`) se construisent sur le cumul des années
 `ANS_COURTS` (défaut : l'année de référence) — même périmètre, cohérence du
 magasin.
+
+**Statut de chaque référence** (Q88 actée, journal §26.7) : « exportable » =
+agrégat seuillé pouvant quitter la plateforme sécurisée ; « interne » =
+consommée par le pipeline SUR la plateforme, jamais exportée — le défaut de
+toute référence non explicitement marquée exportable. Les photographies
+`v_admin` restent NON seuillées (un seuillage casserait la couverture de
+l'habillage) : c'est leur statut interne qui rend cela sûr. Le statut est
+écrit au méta du magasin `10_references/` (champ `statut`, par référence,
+`REFS_EXPORTABLES` dans `config.R`). Le livrable lui-même est exportable.
+
+| Référence | Rôle | Statut |
+|---|---|---|
+| `ref_das_aigu` | candidats de complétion des longs | interne |
+| `ref_das_chronique`, `ref_nb_chroniques` | saturation des courts (prévalence, nombre de chroniques) | interne |
+| `ref_comp_diabete` | complications du diabète | interne |
+| `ref_distribution_e660` | classes d'IMC pour répartir les E669 nus | interne |
+| `ref_pivots_courts` (`30_courts/`) | le tirable courts (pivots seuillés) | interne (défaut) |
+| `ref_v_admin_courts`, `ref_v_admin_longs` | photographies admin, NON seuillées | interne |
+| `ref_paires_chroniques` | référentiel de mesure | interne (défaut) |
+| `ref_substitution_imprecis` | référentiel de la substitution aval des codes « sans précision » | **exportable** |
 
 ### 5c. La sélection de campagne (quota_dp_fixe)
 Priorité de doctrine : **la représentativité des diagnostics passe avant

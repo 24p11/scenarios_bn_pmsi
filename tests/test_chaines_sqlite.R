@@ -130,6 +130,10 @@ ok("type_unite côté courts (§26) : ref_v_admin_courts photographié AVEC type
      "type_unite" %in% names(vc) && !"type_unite" %in% names(va) && setequal(names(vc), c(PIVOTS_COURTS, COLS_ADMIN_COURTS, "n")) && all(!is.na(vc$type_unite)) && all(vc$duree %in% DUREE_COURTS) &&
        nrow(j) == nrow(att) && !any(is.na(j$n_obs)) && all(j$n_att == j$n_obs) && any(multi$k >= 2) && "UHCD" %in% vc$type_unite && sum(vc$n) == sum(pd$duree %in% DUREE_COURTS) &&
        identical(unlist(mr$COLS_ADMIN_COURTS), COLS_ADMIN_COURTS) && !"type_unite" %in% PIVOTS_COURTS })
+ok("statut des références au méta du magasin 10_references (Q88 actée, §26.7) : un statut par référence ; ref_substitution_imprecis exportable ; photographies v_admin (non seuillées) internes ; toutes les autres internes par défaut",
+   { mr <- yaml::read_yaml(FICHIER_REFERENCES_META()); st <- unlist(mr$statut)
+     setequal(names(st), setdiff(NOMS_REFS, "ref_pivots_courts")) && st[["ref_substitution_imprecis"]] == "exportable" && st[["ref_v_admin_courts"]] == "interne" && st[["ref_v_admin_longs"]] == "interne" &&
+       sum(st == "exportable") == 1 && all(st %in% c("exportable", "interne")) })
 ok("ref_comp_diabete : effectifs bruts (pas de pénalisation côté extraction)", { r <- arrow::read_parquet(file.path(DIR_REFERENCES, "ref_comp_diabete.parquet")); all(r$nb == round(r$nb)) && all(c("cage","diabete","comp","nb") %in% names(r)) })
 cat1 <- lire_cat(DIR_CATALOGUE_M)
 ok("catalogue seuil : poids > SEUIL_PIVOT, pas de colonne n, graine <= K sans diabète/I10",
@@ -737,6 +741,9 @@ reg2 <- lire_registre(DIR_REGISTRE())
 finaux2 <- lire_corpus_final("C2", branche = "long"); liv2 <- lire_corpus_final("C2")
 # ---- identité de la branche LONGS (chantier « type_unite côté courts ») : empreinte canonique de la branche longs de C2 (fixture figée,
 # seeds figés), FIGÉE AVANT le chantier — toute modification des longs (sélection, tirage, habillage, livrable) la ferait changer.
+# INVARIANT SACRÉ (Q86 actée, CLAUDE.md §3, journal §26.7) : cette valeur, au même titre que les recettes id_v1 et id_courts_v1, ne se
+# modifie JAMAIS sans décision utilisateur explicite consignée au journal. Un chantier qui la fait légitimement changer le DIT et le
+# JUSTIFIE AVANT de proposer la nouvelle valeur — jamais l'inverse (on ne « constate » pas une nouvelle empreinte pour la recopier).
 digest_branche <- function(d){ d <- as.data.frame(d); d <- d[, sort(names(d)), drop = FALSE]; for(cc in names(d)){ v <- as.character(d[[cc]]); v[is.na(v)] <- ""; d[[cc]] <- v }
   d <- d[do.call(order, c(d, list(method = "radix"))), , drop = FALSE]; substr(sha256_vec(paste(c(paste(names(d), collapse = "\t"), do.call(paste, c(d, sep = "\t"))), collapse = "\n")), 1, 16) }
 dig_longs_c2 <- digest_branche(finaux2); cat("   empreinte canonique de la branche longs C2 :", dig_longs_c2, "(", nrow(finaux2), "lignes,", ncol(finaux2), "colonnes )\n")

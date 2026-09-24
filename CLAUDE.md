@@ -30,6 +30,11 @@ pourquoi) et `MODIFICATIONS_V8.md` (le journal : la référence exhaustive des d
 - Les recettes d'identifiants (`id_v1` pour les longs, `id_courts_v1` pour les courts) et leurs
   valeurs de test en dur ne se modifient JAMAIS sans décision utilisateur explicite, consignée au
   journal. Les changer invaliderait toute la comptabilité des campagnes (registre, recyclage).
+- L'**empreinte canonique de la branche longs** (valeur figée dans `tests/test_chaines_sqlite.R`,
+  campagne fixture C2 : `a54029641743361a`) est le troisième invariant, au même titre que les deux
+  recettes (Q86 actée, journal §26.7). Un chantier qui la fait légitimement changer le DIT et le
+  JUSTIFIE au journal AVANT de proposer la nouvelle valeur, jamais l'inverse : la nouvelle valeur
+  n'est jamais « constatée puis recopiée ».
 
 ## 4. Avant toute livraison : les quatre passes, la démo, les notebooks
 

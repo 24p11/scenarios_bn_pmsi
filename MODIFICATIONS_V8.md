@@ -2185,19 +2185,65 @@ porte désormais `COLS_ADMIN_COURTS` (campagnes nouvelles) ; `controle_habillage
   livrable : tout chantier futur qui touche légitimement les longs (ou le générateur de données fictives, ou une colonne du
   livrable) devra la re-figer explicitement, avec la décision consignée. C'est voulu (une identité qui ne casse jamais ne prouve
   rien) ; à confirmer comme discipline.
+  **Actée (§26.7)** : troisième invariant sacré (CLAUDE.md §3), justification AVANT toute nouvelle valeur.
+
 - **Q87** — Doctrine UHCD héritée de `prep_data` : seuls les séjours ENTIÈREMENT en UHCD (un seul RUM, UHCD) sont typés « UHCD » ;
   un séjour passé par l'UHCD puis hospitalisé est typé par son autre unité. La règle aval de substitution exempte donc les
   seuls séjours entièrement UHCD — à confirmer avec l'équipe aval que c'est bien l'intention.
+  **Actée (§26.7)** : doctrine confirmée comme critère de la règle de substitution aval (décision inter-projets).
+
 - **Q88** — La photographie des courts n'est pas seuillée (agrégat de comptes, jamais de grain séjour) ; l'ajout de `type_unite`
   éclate les combinaisons (plus de combinaisons à petit `n`). Elle ne quitte pas la plateforme (magasin partagé) ; le livrable
   n'en porte que des tirages. À confirmer qu'aucune règle de divulgation ne s'y applique.
+  **Actée (§26.7)** : pas de seuillage ; statut « interne » / « exportable » par référence, écrit au méta.
+
 - **Q89** — `FORCER_REFS` régénère les neuf références du magasin `10_references`, pas seulement la photographie des courts
   (une clé de magasin est globale) : quelques minutes de requêtes sur la plateforme, une fois. Une régénération ciblée par
   référence exigerait des clés par référence — non fait.
+  **Actée (§26.7)** : conservé (FORCER_REFS global).
+
 - **Q90** — « Listé au méta comme aujourd'hui » : le méta ne listait pas les colonnes NA par branche (seule la note générique
   « NA typés où une colonne ne s'applique pas ») ; `colonnes_na_par_branche` est ajouté aux métas de finalisation ET d'adoption
   (calcul sans copie sur les frames bruts). À confirmer.
+  **Actée (§26.7)** : conservé.
+
 - **Q91** — `habillage_courts$colonnes_controlees` et `na_habillage` ajoutés au méta du livrable (traçabilité du contrôle « zéro
   NA » étendu à `type_unite`) : petite extension au-delà du brief, à confirmer.
+  **Actée (§26.7)** : conservé.
+
 - **Q92** — Dans l'échantillon de revue d'une campagne ADOPTÉE, la colonne `type_unite` des courts reste vide (NA assumé) ; la
   grille de lecture de 02 le dit. Faut-il un marqueur explicite (« non renseigné : corpus historique ») plutôt qu'une case vide ?
+  **Actée (§26.7)** : conservé (case vide, la grille de lecture le dit).
+
+### 26.7 Micro-lot « arbitrages Q86-Q92 » (actées)
+
+Essentiellement documentaire ; un seul contenu nouveau (le statut des références, Q88). Aucun changement de contenu des
+fichiers produits, aucune logique de calcul touchée.
+
+- **Q86 actée — l'empreinte longs devient le troisième invariant sacré.** L'empreinte canonique de la branche longs (valeur figée
+  du test, `a54029641743361a`) rejoint `id_v1` et `id_courts_v1` dans la liste des intangibles de `CLAUDE.md` (§3) : elle ne se
+  modifie jamais sans décision utilisateur explicite consignée au journal ; un chantier qui la fait légitimement changer le dit et
+  le justifie AVANT de proposer la nouvelle valeur, jamais l'inverse. Commentaire du test mis à jour en ce sens.
+- **Q87 actée — doctrine UHCD confirmée pour l'aval (décision inter-projets).** « Seuls les séjours entièrement UHCD sont typés
+  UHCD » est confirmé comme critère de la règle de substitution aval : le patient resté aux urgences ; un multi-RUM passé par
+  l'UHCD puis hospitalisé aura un CRH de service et est typé par son unité d'hospitalisation. VISITE_GUIDEE.md (§3, ligne
+  `prep_data`) le mentionne d'une phrase.
+- **Q88 actée — pas de seuillage des `v_admin` ; statut des références.** Les photographies restent NON seuillées (le seuillage
+  casserait la couverture de l'habillage). Doctrine gravée : chaque référence a un STATUT — « exportable » (agrégat seuillé pouvant
+  quitter la plateforme sécurisée : `ref_substitution_imprecis` ; le livrable lui-même) ou « interne » (consommée par le pipeline
+  SUR la plateforme, jamais exportée : `ref_v_admin_longs`, `ref_v_admin_courts`, et par défaut toute référence non explicitement
+  marquée exportable). Mise en œuvre : `REFS_EXPORTABLES`, `statut_ref`, `statuts_refs` (config.R) ; champ `statut` par référence
+  au méta du magasin `10_references` (écrit par `etape_refs` et par la réorganisation ; hors clés de garde : un méta antérieur sans
+  le champ n'est pas en écart, le champ apparaît à la prochaine régénération) ; tableau des références avec statut dans
+  VISITE_GUIDEE.md §5b ; une ligne dans `01_preparation_donnees.Rmd` (prose du chunk `references`). Tests : helpers (statut par
+  défaut, exportables ⊂ `NOMS_REFS`, liste nommée) ; SQLite (méta : un statut par référence, valeurs attendues).
+- **Q89 actée — conservé.** `FORCER_REFS` reste global (les neuf références régénérées) ; pas de clé par référence.
+- **Q90 actée — conservé.** `colonnes_na_par_branche` confirmé aux métas de finalisation et d'adoption.
+- **Q91 actée — conservé.** `habillage_courts$colonnes_controlees` et `na_habillage` confirmés au méta du livrable.
+- **Q92 actée — conservé.** Case vide en revue pour les courts d'une campagne adoptée (NA assumé), la grille de lecture de 02 le dit.
+- **Q93** — `ref_paires_chroniques` est décrit dans VISITE_GUIDEE §5b comme « référentiel de mesure pour l'aval Python » ; par la
+  règle de défaut il est « interne » (seul `ref_substitution_imprecis` est marqué exportable, conformément au brief). S'il doit
+  circuler un jour, une ligne dans `REFS_EXPORTABLES` suffit — décision non prise ici.
+
+Vérifications du micro-lot : helpers 386 (avec arrow) / 383 (sans), SQLite 202 / 202 (empreinte longs inchangée), démo et notebooks
+01 / 02 verts avec et sans arrow ; méta des références de la démo : 8 références « interne », `ref_substitution_imprecis` « exportable ».
